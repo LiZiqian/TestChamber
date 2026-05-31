@@ -1,0 +1,18 @@
+﻿__pycache__/
+*.pyc
+
+# Runtime database and generated data
+data/testchamber.sqlite
+data/samples/
+
+# Runtime backups
+backups/*.json
+backups/*.sqlite
+backups/*.db
+backups/*.bak
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
