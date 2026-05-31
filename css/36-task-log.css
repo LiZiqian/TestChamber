@@ -105,3 +105,8 @@
 .task-log-meta { color: var(--muted); font-size: 11px; margin-top: 2px }
 .task-log-text b.log-result-pass { color: #15803d; font-weight: 900 }
 .task-log-text b.log-result-fail { color: #b91c1c; font-weight: 900 }
+
+.log-line {
+  border-left: 3px solid var(--primary); padding: 8px 10px;
+  margin: 8px 0; background: #f8fafc; border-radius: 8px; font-size: 12px;
+}

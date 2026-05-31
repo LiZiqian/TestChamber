@@ -437,3 +437,117 @@
   font-weight: 800;
   text-align: center;
 }
+
+.project-hero { background: linear-gradient(135deg, #eff6ff, #ffffff); border: 1px solid #dbeafe }
+.workspace-grid { display: grid; grid-template-columns: 1fr; gap: 16px }
+.section-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.workspace-section { position: relative; border-width: 1px }
+.project-hero + .workspace-section { margin-top: 22px }
+.workspace-section .section-body { max-height: 680px; overflow: auto; padding-right: 4px }
+.workspace-section.is-collapsed .section-body { display: none }
+.section-green.workspace-section .section-body { max-height: none; overflow: visible; padding-right: 0 }
+.section-purple { background: #fff; border-color: var(--border) }
+.section-blue { background: #fff; border-color: var(--border) }
+.section-green { background: #fff; border-color: var(--border) }
+.section-plain { background: #fff }
+
+.sku-editor { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: #f8fafc }
+.sku-row { display: grid; grid-template-columns: 42px 1fr 40px; gap: 8px; align-items: center; margin: 8px 0 }
+.sku-row .idx { font-size: 12px; color: var(--muted); font-weight: 700; text-align: center }
+
+.home-shell {
+  min-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 42px;
+  padding: 34px 24px 64px;
+}
+.home-title {
+  margin: 0;
+  text-align: center;
+  font-size: 44px;
+  line-height: 1.15;
+  letter-spacing: 0;
+  font-weight: 950;
+  color: #0f172a;
+  text-shadow: 0 1px 0 #fff, 0 12px 28px rgba(37, 99, 235, .12);
+}
+.home-title span {
+  color: var(--primary);
+  font-style: italic;
+}
+.home-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 260px);
+  gap: 28px;
+  justify-content: center;
+}
+.home-entry-card {
+  min-height: 190px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, .08);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #0f172a;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.home-entry-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--primary);
+  box-shadow: 0 24px 52px rgba(37, 99, 235, .15);
+}
+.home-entry-icon {
+  width: 48px;
+  height: 48px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 12px;
+  background: #eff6ff;
+  font-size: 26px;
+}
+.home-entry-name {
+  font-size: 22px;
+  font-weight: 900;
+}
+.home-entry-meta {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.home-slogan {
+  margin: 52px 0 0;
+  color: #94a3b8;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-align: center;
+}
+.workspace-section .table-wrap td:first-child { vertical-align: middle }
+
+/* —— 项目人员/位置工具栏统一对齐 —— */
+.project-members-toolbar > input {
+  flex: 0 1 240px;
+  min-width: 180px;
+  max-width: 280px;
+}
+.project-members-toolbar > .path {
+  margin-right: auto;
+}
+
+/* —— 阶段卡片操作按钮：保证不被压缩变形 —— */
+.stage-summary-actions .btn,
+.stage-summary-actions .row-action-btn {
+  flex: 0 0 auto;
+}
