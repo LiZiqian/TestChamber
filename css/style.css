@@ -2,28 +2,7 @@
    数字治理平台 v5.3 样式表
    ======================================== */
 
-:root {
-  --bg: #f5f6fa;
-  --card: #fff;
-  --text: #1f2937;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --primary: #2563eb;
-  --primary2: #2563eb;
-  --primary-bg: #eff6ff;
-  --primary-border: #dbeafe;
-  --danger: #dc2626;
-  --pass: #16a34a;
-  --warn: #f59e0b;
-  --purple: #b02be4;
-  --purple-bg: #f5e8ff;
-  --purple-border: #e8c7ff;
-  --purple-text: var(--purple);
-  --gray: #6b7280;
-  --shadow: 0 8px 24px rgba(15, 23, 42, .06);
-  --radius: 12px;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
-}
+@import '00-vars.css';
 
 * { box-sizing: border-box }
 
