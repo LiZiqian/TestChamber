@@ -1,3 +1,7 @@
+/* ========================================
+   全局布局 — body / sidebar / topbar / content / bottom
+   ======================================== */
+
 * { box-sizing: border-box }
 
 body {

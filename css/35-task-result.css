@@ -1,3 +1,7 @@
+/* ========================================
+   结果录入 — 样机去向、问题记录、照片上传
+   ======================================== */
+
 .task-result-sample-list {
   display: grid;
   gap: 10px;
@@ -722,7 +726,6 @@
   .task-pool-hint { width: 100%; margin-left: 0 }
 }
 
-/*
 /* 任务结果弹窗中的挂账人行 */
 .task-result-account-row {
   display: flex;

@@ -1,3 +1,7 @@
+/* ========================================
+   基础组件 — button / input / select / table / badge / card / modal / toast
+   ======================================== */
+
 /* ---- Cards & Layout ---- */
 .card {
   background: var(--card); border: 1px solid var(--border);
@@ -301,3 +305,99 @@ tr:hover td { background: #fcfcfd }
   line-height: 1.45;
 }
 .toast.show { display: block; animation: fadeIn .18s ease }
+
+/* ---- V7 UI 一致性补丁 ---- */
+/* ---- V7 UI refinements ---- */
+@media (max-width: 900px) {
+  .modal-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .modal-header-hint {
+    max-width: 100%;
+    text-align: left;
+    padding-top: 0;
+  }
+}
+.task-op-row .btn { min-width: 46px }
+
+/* ================================================================
+   V7 UI 一致性补丁（2026-05-27）
+   目标：约束模态框内输入框/选择框/日期框的最大宽度，避免出现"内容很短
+   输入框却横铺到底"的情况；统一表单行/筛选条/按钮组的间距与对齐。
+   注意：所有规则都使用 :not([style*="..."]) 守门，保证不覆盖已经显式
+   设置过宽度的字段（如样机表单中已有的 max-width 输入）。
+   ================================================================ */
+
+/* —— 模态框中默认 input 宽度上限 —— */
+.modal-body .form-group > input[type="text"]:not([style*="max-width"]):not([style*="width"]):not([class*="task-result"]),
+.modal-body .form-group > input:not([type]):not([style*="max-width"]):not([style*="width"]):not([class*="task-result"]),
+.modal-body .form-group > input[type="email"]:not([style*="max-width"]):not([style*="width"]),
+.modal-body .form-group > input[type="search"]:not([style*="max-width"]):not([style*="width"]),
+.modal-body .form-group > input[type="tel"]:not([style*="max-width"]):not([style*="width"]) {
+  max-width: 440px;
+}
+.modal-body .form-group > input[type="date"]:not([style*="max-width"]):not([style*="width"]),
+.modal-body .form-group > input[type="number"]:not([style*="max-width"]):not([style*="width"]) {
+  max-width: 200px;
+}
+.modal-body .form-group > select:not([style*="max-width"]):not([style*="width"]):not([class*="task-result"]) {
+  max-width: 340px;
+}
+.modal-body .form-group > textarea:not([style*="max-width"]):not([style*="width"]) {
+  max-width: 100%;
+  min-height: 64px;
+}
+
+/* —— form-row 中的每列填充剩余宽度，但内部 input 仍占满列宽 —— */
+.modal-body .form-row > .form-group > input,
+.modal-body .form-row > .form-group > select {
+  max-width: 100%;
+  width: 100%;
+}
+
+/* —— form-row 中的两列保留视觉一致：两列等宽 —— */
+.modal-body .form-row {
+  align-items: start;
+}
+.modal-body .form-row > .form-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+/* —— 在卡片中独立放置的搜索框，限制宽度避免横铺 —— */
+.card > input[placeholder*="搜索"]:not([style*="max-width"]):not([style*="width"]) {
+  max-width: 320px;
+}
+
+/* —— 普通卡片（非模态）内的日期/数字输入宽度限制 —— */
+.card input[type="date"]:not([style*="max-width"]):not([style*="width"]) {
+  max-width: 180px;
+}
+.card input[type="number"]:not([style*="max-width"]):not([style*="width"]) {
+  max-width: 140px;
+}
+
+/* —— 模态框底部按钮统一最小宽度，避免"确认"被压成两字短按钮 —— */
+.modal-footer .btn:not([class*="modal-extra"]) {
+  min-width: 84px;
+  justify-content: center;
+}
+.modal-footer .modal-extra-action {
+  margin-right: auto;
+}
+
+/* —— 表单错误提示位置规范 —— */
+.form-group .field-error,
+.form-row .field-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #dc2626;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+/* —— 样机池筛选条避免输入框横铺到全宽 —— */
+.card[style*="display:flex"] > input:not([style*="max-width"]) {
+  max-width: 320px;
+}

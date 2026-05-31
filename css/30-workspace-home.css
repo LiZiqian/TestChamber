@@ -1,3 +1,7 @@
+/* ========================================
+   项目工作台主页 — KPI、阶段卡片、项目人员/位置
+   ======================================== */
+
 /* ---- KPI ---- */
 .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px }
 .kpi .card { margin: 0 }

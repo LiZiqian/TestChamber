@@ -1,3 +1,7 @@
+/* ========================================
+   样机档案池 — 样机卡片、详情弹窗、照片管理、测试履历、销毁
+   ======================================== */
+
 /* ---- Sample Cards ---- */
 .sample-card { position: relative; cursor: pointer; transition: .18s ease; min-height: 110px }
 

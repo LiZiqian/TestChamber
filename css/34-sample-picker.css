@@ -1,3 +1,7 @@
+/* ========================================
+   样机选择器 — dispatch-sample-* 选择行、分配/变更弹窗
+   ======================================== */
+
 /* ---- Dispatch Sample Picker ---- */
 .dispatch-sample-select {
   border: 1px solid var(--border); border-radius: 12px;
@@ -113,7 +117,6 @@
 }
 .dispatch-match-count { font-size: 11px; color: var(--muted); min-width: 44px; text-align: right }
 
-/*
 /* ---- 分配样机 & 临时变更弹窗加高 ---- */
 .assign-sample-modal.modal,
 .temp-change-modal.modal {
@@ -180,7 +183,7 @@
   border-radius: 999px; background: #fff; border: 1px solid currentColor;
 }
 
-/*
+/* 临时变更 input 高度规则（已弃用）
 .temp-change-plan-row input {
   height: var(--temp-change-field-height) !important;
   min-height: var(--temp-change-field-height) !important;
@@ -191,6 +194,7 @@
   line-height: 20px !important;
   border-radius: 9px !important;
 }
+*/
 
 /* 重点：专门压住全局 textarea min-height:64px */
 .temp-change-modal .modal-body .temp-change-header-row .form-group > textarea#tempReason,
