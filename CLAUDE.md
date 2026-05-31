@@ -6,8 +6,8 @@
 
 | 维度 | 说明 |
 |------|------|
-| 应用名 | 数字治理平台 V6.1 内网协同版 |
-| 目录版本 | V7（目录迭代版本，应用版本号仍为 6.1-intranet） |
+| 应用名 | 数字治理平台 V7 内网协同版 |
+| 目录版本 | V7 |
 | 用途 | 终端硬件测试样机的全生命周期管理：项目→阶段→任务→样机分配→测试执行→结果录入→样机流转 |
 | 部署 | 内网单机，Python stdlib HTTP Server，端口 9398 |
 | 浏览器 | 现代 Chrome/Edge（需 DecompressionStream for XLSX） |
@@ -19,7 +19,19 @@ TestChamberV7/
 ├── server.py              # 后端：HTTP API + SQLite (1704行)
 ├── index.html             # SPA 外壳 (74行)
 ├── css/
-│   └── style.css          # 全局样式，无预处理器 (4344行)
+│   ├── style.css          # CSS 总入口，统一 @import 各模块文件
+│   ├── 00-vars.css        # CSS 变量：颜色、字体、圆角、阴影
+│   ├── 01-layout.css      # 全局布局：body/sidebar/topbar/content/bottom
+│   ├── 02-components.css  # 基础组件：button/input/table/badge/card/modal/toast
+│   ├── 20-samples.css     # 样机档案池
+│   ├── 30-workspace-home.css  # 工作台主页、阶段卡片、人员/位置
+│   ├── 31-stage-strategy.css  # 阶段配置、BOM、测试策略表
+│   ├── 32-task-flow.css       # 任务管理工作台表格
+│   ├── 33-task-config-modal.css # 任务配置弹窗
+│   ├── 34-sample-picker.css   # 样机选择器
+│   ├── 35-task-result.css     # 结果录入、样机去向、问题记录
+│   ├── 36-task-log.css        # 任务日志
+│   └── 90-responsive.css      # 响应式补丁
 ├── js/
 │   ├── utils.js           # 纯工具函数：CSV/XLSX/日期/人员 (468行)
 │   ├── app.js             # 核心框架：init/render/save/modal/data (1243行)
@@ -79,7 +91,7 @@ utils.js → app.js → projects.js → workspace.js → samples.js → app.init
 | GET | `/css/*`, `/js/*`, `/templates/*` | 静态文件 |
 
 ### 关键设计
-1. **外置存储**：项目和样机已从 JSON blob 迁移到 SQLite 表（启动时自动迁移 V6→V6.1）
+1. **外置存储**：项目和样机已从 JSON blob 迁移到 SQLite 表（保留历史 V6 系列数据自动迁移能力）
 2. **DB_LOCK (threading.Lock)**：所有写操作串行化
 3. **乐观并发**：PUT 携带 revision + baseData，冲突时在服务端做三向合并
 4. **Backup 节流**：普通保存 5min/50rev 才写 backup；照片上传/删除 1s 即可
@@ -192,7 +204,7 @@ utils.js → app.js → projects.js → workspace.js → samples.js → app.init
 1. **workspace.js 过大** (3594行) — 应在重构中拆分为：stage-config.js, task-flow.js, task-lifecycle.js, case-dropdown.js
 2. **全局变量污染** — 所有状态在 app.data/app.view 中，无模块隔离
 3. **无前端测试** — 纯手动测试
-4. **CSS 4344行** — 无组织，大量 `!important` patch 堆叠，建议拆分或引入 CSS 变量/层级管理
+4. **CSS 已模块化** — 4344行拆分为 13 个文件，但部分模块仍偏大（20-samples 919行、35-task-result 766行），且大量 `!important` patch 堆叠，建议后续引入 CSS 变量层级管理
 5. **内存全量加载** — 样机数量大时可能影响性能
 6. **照片无缩略图** — 原图直接展示在列表/网格中
 7. **日志字段混杂** — sampleLibrary.logs 和 sample.logs 双写，字段命名不统一
