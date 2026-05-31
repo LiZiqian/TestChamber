@@ -126,6 +126,7 @@ Object.assign(app, {
           if (typeof t.archived === "undefined") t.archived = false;
           if (t.status === "完成") t.status = "正常完成";
           if (t.status === "已完成") { t.status = t.completionType || "正常完成"; t.completed = true; }
+          t.status = this.taskFlowStatus(t);
           const progress = t.progressId ? s.progress.find(x => x.id === t.progressId) : null;
           if (progress) {
             if (!t.strategyId && progress.strategyId) t.strategyId = progress.strategyId;
@@ -395,13 +396,17 @@ Object.assign(app, {
   },
 
   isTaskCompleted(task) {
-    return !!(task?.completed || ["正常完成", "异常完成", "异常终止"].includes(task?.status));
+    if (!task) return false;
+    if (task.archived) return true;
+    const flow = this.taskFlowStatus(task);
+    return flow === "正常完成" || flow === "异常终止";
   },
 
   isTaskExecuted(task) {
     if (!task) return false;
-    if (task.completed || ["正常完成", "异常完成", "异常终止"].includes(task.status)) return true;
-    return ["进行中", "阻塞", "阻塞中"].includes(task.status);
+    const flow = this.taskFlowStatus(task);
+    if (flow === "正常完成" || flow === "异常终止") return true;
+    return flow === "进行中" || flow === "阻塞中";
   },
 
   isSampleUsedByAnotherOpenTask(sampleId, excludeTaskId = "") {

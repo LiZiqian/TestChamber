@@ -15,8 +15,8 @@
 
 Object.assign(app, {
 
-  // 与 server.py FINISHED_TASK_STATUSES 对齐
-  _auditFinishedStatuses: ["正常完成", "异常终止", "已完成", "已归档", "完成", "终止"],
+  // 与 taskFlowStatus() 返回的标准完成状态对齐
+  _auditFinishedStatuses: ["正常完成", "异常终止"],
 
   _auditIsTaskActive(task) {
     if (!task) return false;

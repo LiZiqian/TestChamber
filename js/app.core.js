@@ -35,7 +35,7 @@ const app = {
 
   constants: {
     sampleStatuses: ["测试中", "闲置", "在位等待", "已退库", "取走分析"],
-    taskStatuses: ["待下发", "待执行", "进行中", "通过", "失败", "阻塞", "正常完成", "异常完成"],
+    taskStatuses: ["待下发", "进行中", "阻塞中", "正常完成", "异常终止"],
     modules: {
       home: "首页",
       projects: "项目管理",

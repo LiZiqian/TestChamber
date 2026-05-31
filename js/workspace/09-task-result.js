@@ -348,7 +348,7 @@ Object.assign(app, {
   validateTaskResultPayload(payload, finishTask = false) {
     if (!payload.result) return "请选择 PASS / FAIL。";
     if (!payload.user) return "请选择操作人。请先在项目人员配置中新增人员。";
-    if (finishTask && payload.finishType === "异常完成" && payload.result !== "Fail") {
+    if (finishTask && payload.finishType === "异常终止" && payload.result !== "Fail") {
       return "没有完成预定计划时，结果必须选择 Fail。";
     }
     const missingLocation = payload.samples.find(x => !x.destLocation);
@@ -417,7 +417,7 @@ Object.assign(app, {
       ? allProblems.slice(0, maxProblemItems).concat(`等 ${allProblems.length} 项`)
       : allProblems;
     const finishText = finishTask
-      ? `；${payload.finishType === "异常完成" ? "未完成计划，异常结束" : "完成计划，正常结束"}`
+      ? `；${payload.finishType === "异常终止" ? "未完成计划，异常结束" : "完成计划，正常结束"}`
       : "";
     const prefix = `测试结果：${payload.result}（${ratio}）`;
     const suffix = truncatedProblems.length ? `；新增失效：${truncatedProblems.join("；")}` : "";
@@ -485,7 +485,7 @@ Object.assign(app, {
   applyTaskResult(project, stage, task, payload, finishTask = false) {
     const from = task.status;
     const now = Utils.now();
-    const result = finishTask && payload.finishType === "异常完成" ? "Fail" : payload.result;
+    const result = finishTask && payload.finishType === "异常终止" ? "Fail" : payload.result;
     const reason = this.taskResultAutoReason({ ...payload, result }, finishTask, { projectId: project.id, stageId: stage.id, testItem: task.testItem });
     task.latestResult = result;
     task.resultDate = payload.resultDate;
@@ -561,8 +561,7 @@ Object.assign(app, {
     });
 
     if (finishTask) {
-      const completionType = payload.finishType === "异常完成" ? "异常完成" : "正常完成";
-      const completionLabel = completionType === "异常完成" ? "异常终止" : completionType;
+      const completionType = payload.finishType;
       task.status = completionType;
       task.completed = true;
       task.completionType = completionType;
@@ -578,8 +577,8 @@ Object.assign(app, {
         user: payload.user,
         reason,
         fromStatus: from,
-        toStatus: completionLabel,
-        detail: `结果：${result}；结束方式：${completionLabel}`
+        toStatus: completionType,
+        detail: `结果：${result}；结束方式：${completionType}`
       });
     } else {
       this.addTaskLog(task, "上传结果", {
@@ -685,7 +684,7 @@ Object.assign(app, {
             ${addOnly
               ? `<div class="form-group"><label>结果日期</label><input type="date" id="taskResultDate" value="${Utils.today()}"><input type="hidden" id="taskFinishType" value="正常完成"></div>`
               : `<div class="form-group"><label>结果日期</label><input type="date" id="taskResultDate" value="${Utils.esc(resultDate)}"></div>
-                <div class="form-group"><label>结束任务方式</label><select id="taskFinishType" class="hint-select"><option value="正常完成" ${finishType === "正常完成" ? "selected" : ""}>完成计划，正常结束</option><option value="异常完成" ${finishType === "异常完成" ? "selected" : ""}>未完成计划，异常结束</option></select></div>`}
+                <div class="form-group"><label>结束任务方式</label><select id="taskFinishType" class="hint-select"><option value="正常完成" ${finishType === "正常完成" ? "selected" : ""}>完成计划，正常结束</option><option value="异常终止" ${finishType === "异常终止" ? "selected" : ""}>未完成计划，异常结束</option></select></div>`}
           </div>
         </section>
         <section class="task-result-scroll-panel">
@@ -724,7 +723,7 @@ Object.assign(app, {
     }
   },
 
-  // 完成任务（正常完成/异常完成）
+  // 完成任务（正常完成/异常终止）
   completeTask(projectId, stageId, taskId) {
     this.uploadResult(projectId, stageId, taskId);
   },

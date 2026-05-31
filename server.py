@@ -1348,8 +1348,8 @@ def get_state() -> tuple[dict, int, str]:
             return compose_state(conn)
 
 
-# 任务"已完成/不占用"状态集合——这些状态的任务不再占用样机
-FINISHED_TASK_STATUSES = {"正常完成", "异常终止", "已完成", "已归档", "完成", "终止"}
+# 任务"已完成/不占用"状态集合（与前端 taskFlowStatus() 返回的完成状态对齐）
+FINISHED_TASK_STATUSES = {"正常完成", "异常终止"}
 
 
 def detect_sample_occupancy_conflicts(data: dict) -> list[dict]:

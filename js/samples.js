@@ -316,7 +316,7 @@ Object.assign(app, {
       task.sampleIds = [];
       task.status = "异常终止";
       task.completed = true;
-      task.completionType = "异常完成";
+      task.completionType = "异常终止";
       task.completedAt = now;
       task.endDate = today;
       task.resultDate = today;
@@ -438,7 +438,7 @@ Object.assign(app, {
       task.sampleIds = [];
       task.status = "异常终止";
       task.completed = true;
-      task.completionType = "异常完成";
+      task.completionType = "异常终止";
       task.completedAt = now;
       task.endDate = today;
       task.resultDate = today;
