@@ -1,18 +1,21 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 
 # Runtime database and generated data
-data/testchamber.sqlite
-data/samples/
+data/
 
 # Runtime backups
-backups/*.json
-backups/*.sqlite
-backups/*.db
-backups/*.bak
+backups/
 
 # OS/editor noise
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# AI assistant settings (not for distribution)
+.claude/
+
+# Catch stray database files
+*.sqlite
+*.db

@@ -12,13 +12,20 @@
 |------|------|------|
 | server.py | 1,704 | Python HTTP API + SQLite（本轮不涉及） |
 | index.html | 74 | SPA 外壳，`<script>` 顺序加载 5 个 JS，末尾 `app.init()` |
-| css/style.css | 4,344 | 全局样式，单文件，含多层 `!important` patch |
+| css/style.css | 16 | CSS 总入口，@import 13 模块文件 |
 | js/utils.js | 468 | 纯工具函数（CSV/XLSX/日期/人员格式/HTML转义） |
-| js/app.js | 1,243 | 核心框架：`init`/`normalize`/`render`/`save`/`showModal`/数据访问 |
+| js/app.core.js | 106 | 核心入口：app 对象定义 + init() |
+| js/app.server.js | 178 | 服务器通信：save/reload + syncAfterDirectMutation |
+| js/app.data.js | 413 | 数据工具：normalize/查找/状态变更 + eachSample |
+| js/app.render.js | 197 | 渲染引擎：render/nav/breadcrumb/侧栏 |
+| js/app.filters.js | 55 | 筛选器：进度/任务流 |
+| js/app.modal.js | 203 | 弹窗系统：modal/confirm/校验 |
+| js/app.logs.js | 181 | 日志系统：任务日志/样机引用 |
 | js/projects.js | 220 | 项目管理 CRUD + 删除影响分析 |
-| js/workspace.js | 3,594 | 项目工作台：阶段/BOM/策略/任务全生命周期（前端最大模块） |
+| js/workspace/01-shared.js ~ 10-dropdown-issue.js | 3,722 | 项目工作台 10 模块（阶段/策略/任务/样机选择/结果/日志） |
 | js/samples.js | 1,405 | 样机档案池：CRUD/照片/问题表/导入导出/销毁 |
-| **总计** | **~13,052** | |
+| js/debug/auditConsistency.js | 191 | 只读一致性审计脚本 |
+| **总计** | **~13,776** | |
 
 ### 1.2 当前架构问题
 

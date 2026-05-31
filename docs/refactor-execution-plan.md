@@ -202,11 +202,19 @@ git commit -m "chore: snapshot before modularization refactor"
 ## Phase 2 — workspace.js 拆分
 
 ### 总目标
-将 `js/workspace.js`（3,594行）拆分为 10 个子模块，放入 `js/workspace/` 目录。
+将 `js/workspace.js`（3,594行）拆分为 10 个子模块（✅ 已完成）。
 
-### 允许改动范围
-- `js/workspace.js` — 原有函数逐块移动到目标文件
-- `js/workspace/*.js` — 新建
+### 拆分结果
+- `js/workspace/01-shared.js` — 共享工具
+- `js/workspace/02-home.js` — 工作台主页
+- `js/workspace/10-dropdown-issue.js` — 用例下拉+问题单
+- `js/workspace/03-strategy.js` — 阶段策略
+- `js/workspace/04-stage.js` — 阶段 CRUD
+- `js/workspace/05-task-table.js` — 任务表格
+- `js/workspace/06-sample-picker.js` — 样机选择器
+- `js/workspace/07-task-config.js` — 任务配置弹窗
+- `js/workspace/08-task-actions.js` — 任务操作
+- `js/workspace/09-task-result.js` — 结果录入
 - `index.html` — `<script>` 加载顺序更新
 
 ### 不允许改动
@@ -217,7 +225,7 @@ git commit -m "chore: snapshot before modularization refactor"
 - 不修改 server.py
 
 ### 每轮完成标准
-- [ ] `git diff --stat` 只包含 js/workspace/ 目录 + js/workspace.js（删除）+ index.html
+- [x] `git diff --stat` 只包含 js/workspace/ 目录 + js/workspace.js（删除）+ index.html（✅ 已完成）
 - [ ] 页面可正常加载，无控制台 JS 报错（特别注意 `app.xxx is not a function`）
 - [ ] 所有页面功能正常（人工验收）
 
@@ -304,10 +312,17 @@ git commit -m "chore: snapshot before modularization refactor"
 ## Phase 4 — app.js 拆分
 
 ### 总目标
-将 `js/app.js`（1,243行）拆分为 5 个子模块，放入 `js/` 根目录。
+将 `js/app.js`（1,243行）拆分为 7 个子模块（✅ 已完成）。
 
-### 允许改动范围
-- `js/app.js` — 原有函数逐块移动到目标文件
+### 拆分结果
+- `js/app.core.js` — 核心入口
+- `js/app.server.js` — 服务器通信
+- `js/app.data.js` — 数据工具
+- `js/app.render.js` — 渲染引擎
+- `js/app.filters.js` — 筛选器
+- `js/app.modal.js` — 弹窗系统
+- `js/app.logs.js` — 日志系统
+- `index.html` — `<script>` 加载顺序更新
 - `js/app.*.js` — 新建
 - `index.html` — `<script>` 加载顺序更新
 

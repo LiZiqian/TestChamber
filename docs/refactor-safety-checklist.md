@@ -184,7 +184,7 @@ git reset --hard <initial-snapshot-commit>
 
 ```bash
 # === 检查所有 JS 文件语法（需 Node.js） ===
-for f in js/utils.js js/app.js js/projects.js js/workspace.js js/samples.js; do
+for f in js/utils.js js/app.core.js js/app.server.js js/app.data.js js/app.render.js js/app.filters.js js/app.modal.js js/app.logs.js js/projects.js js/workspace/*.js js/samples.js js/debug/auditConsistency.js; do
   echo "Checking $f..."
   node -c "$f" || echo "FAILED: $f"
 done
@@ -282,9 +282,9 @@ done
 
 ### JS 拆分模板
 ```
-1. Read source: js/workspace.js
+1. Read source: js/workspace/*.js（原始 workspace.js 拆分已完成，现为 10 模块）
 2. 定位本轮目标函数（函数名清单）
-3. 创建目标文件（如 js/workspace/workspace.home.js）
+3. 创建目标文件（如 js/workspace/11-new-module.js）
 4. 将 "Object.assign(app, {" 写入目标文件开头
 5. 复制目标函数到目标文件
 6. 将 "});" 写入目标文件末尾
