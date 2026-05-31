@@ -71,11 +71,12 @@ TestChamberV7/
 ```
 utils.js → app.core.js → app.server.js → app.data.js → app.render.js
 → app.filters.js → app.modal.js → app.logs.js
-→ projects.js → samples.js
+→ projects.js
 → workspace/01-shared.js → 02-home.js → 10-dropdown-issue.js
 → 03-strategy.js → 04-stage.js → 05-task-table.js
 → 06-sample-picker.js → 07-task-config.js → 08-task-actions.js
-→ 09-task-result.js → app.init()
+→ 09-task-result.js
+→ samples.js → app.init()
 ```
 
 所有模块通过 `Object.assign(app, {...})` 混入 `app` 全局对象。无模块系统，无打包工具。

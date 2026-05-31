@@ -205,7 +205,7 @@ Object.assign(app, {
             <label>取走人${destination === '取走分析' ? '<span class="req-star">*</span>' : ''}</label>
             ${this.projectMemberSelectHtml(`taskResultTaker_${idx}`, receiver, takerPlaceholder, isTakerDisabled)}
           </div>
-          <div class="form-group">
+          <div class="form-group task-result-account-group">
             <label>挂账人</label>
             ${this.projectMemberSelectHtml(`taskResultAccountOwner_${idx}`, accountOwner, "请选择挂账人")}
           </div>

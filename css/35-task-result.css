@@ -101,10 +101,23 @@
   cursor: not-allowed;
   background: #f1f5f9;
 }
+/* 挂账人与「样机去向/去向位置/取走人」保持视觉距离 */
+.task-result-modal .task-result-route-grid .task-result-account-group {
+  padding-left: 14px;
+  border-left: 1px dashed var(--primary-border);
+}
 @media (max-width: 900px) {
   .task-result-modal .task-result-route-grid {
     grid-column: 1 / -1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* 窄屏改为上分隔线 + 上间距，取消左分隔 */
+  .task-result-modal .task-result-route-grid .task-result-account-group {
+    padding-left: 0;
+    border-left: none;
+    padding-top: 10px;
+    border-top: 1px dashed var(--primary-border);
+    grid-column: 1 / -1;
   }
 }
 @media (max-width: 500px) {
@@ -522,8 +535,8 @@
   min-width: 0;
 }
 .task-sample-row:hover {
-  border-color: var(--primary);
-  background: var(--primary-bg);
+  border-color: var(--border);
+  background: #f8fafc;
 }
 .task-sample-row.is-removed {
   opacity: 0.78;

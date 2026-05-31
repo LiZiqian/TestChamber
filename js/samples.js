@@ -68,7 +68,7 @@ Object.assign(app, {
         </div>
       </div>
       <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <input style="max-width:280px" placeholder="样机详情 / 失效 / 履历搜索" value="${Utils.esc(this.view.sampleKeyword)}" oninput="app.view.sampleKeyword=this.value" onkeydown="if(event.key==='Enter'){app.view.sampleKeyword=this.value;app.renderSamples()}">
+        <input style="max-width:280px" placeholder="样机详情 / 失效 / 履历搜索（回车搜索）" value="${Utils.esc(this.view.sampleKeyword)}" oninput="app.view.sampleKeyword=this.value" onkeydown="if(event.key==='Enter'){app.view.sampleKeyword=this.value;app.renderSamples()}">
         <select style="max-width:170px" onchange="app.view.sampleStatusFilter=this.value;app.renderSamples()">
           <option value="">全部状态</option>
           ${this.constants.sampleStatuses.map(x => `<option ${this.view.sampleStatusFilter === x ? 'selected' : ''}>${x}</option>`).join("")}
