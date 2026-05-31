@@ -1,0 +1,61 @@
+/* ---- Cards & Layout ---- */
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 18px; margin-bottom: 16px;
+}
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px }
+.sample-category-grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: stretch;
+  overflow-x: auto;
+}
+.grid-small { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px }
+.project-grid { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)) }
+
+/* ---- Buttons ---- */
+.btn {
+  border: 0; background: var(--primary); color: #fff;
+  border-radius: 9px; padding: 8px 13px; font-size: 13px; cursor: pointer;
+  font-weight: 600;
+}
+.btn:hover { filter: brightness(.96) }
+.btn:disabled { opacity: .45; cursor: not-allowed; filter: none }
+.btn-sm { padding: 5px 9px; font-size: 12px }
+.btn-outline { background: #fff; color: #1f2937; border: 1px solid var(--border) }
+.btn-danger { background: var(--danger) }
+.btn-pass { background: var(--pass) }
+.btn-warn { background: var(--warn); color: #111827 }
+.btn-purple { background: var(--purple) }
+
+/* ---- Badges ---- */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 999px; font-size: 12px;
+  font-weight: 700; white-space: nowrap; min-width: 68px; justify-content: center;
+}
+.s-闲置 { background: #dcfce7; color: #166534 }
+.s-在位等待, .s-已分配 { background: var(--purple-bg); color: var(--purple) }
+.s-进入测试任务, .s-测试中, .s-Testing, .s-进行中 { background: #fef3c7; color: #92400e }
+.s-Pass, .s-通过, .s-OK { background: #dcfce7; color: #166534 }
+.s-Fail, .s-失败, .s-故障 { background: #fee2e2; color: #991b1b }
+.s-已退库, .s-取走分析, .s-已借出, .s-已归还, .s-借出, .s-待维修, .s-阻塞, .s-变更退出, .s-未设置 { background: #e5e7eb; color: #374151 }
+.s-报废 { background: #111827; color: #fff }
+.s-已完成, .s-正常完成 { background: #d1d5db; color: #111827; border: 1px solid #9ca3af }
+.s-异常完成 { background: #fecaca; color: #991b1b; border: 1px solid #f87171 }
+
+/* ---- Progress Bar ---- */
+.progress-bar-wrap {
+  height: 8px; background: #e5e7eb; border-radius: 10px; overflow: hidden; margin-top: 6px;
+}
+.progress-bar-fill { height: 100%; border-radius: 10px; transition: width .3s ease }
+
+/* ---- Required ---- */
+.required::after, .req::after { content: " *"; color: #dc2626; font-weight: 900 }
+.req-star { color: #dc2626; font-weight: 900; margin-left: 2px }
+.danger-field-label { color: #dc2626 !important }
+
+/* ---- Misc ---- */
+.path { font-size: 12px; color: var(--muted) }
+.empty { padding: 42px; text-align: center; color: var(--muted) }
+.anchor-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px }
