@@ -309,8 +309,9 @@ Object.assign(app, {
     if (isFault && problemDescription) {
       this.addSampleProblem(s, problemDescription, { ...ctx, problemSource: ctx.problemSource || "测试任务" });
     }
-    if (ctx.destLocation !== undefined) {
-      s.location = String(ctx.destLocation || "").trim();
+    // 仅当传入了非空去向位置时才覆盖样机当前位置，避免保存草稿/释放等空值清空原位置
+    if (ctx.destLocation !== undefined && String(ctx.destLocation).trim()) {
+      s.location = String(ctx.destLocation).trim();
     }
     const dest = ctx.destination || newStatus;
     if (dest === "取走分析") {
@@ -400,12 +401,6 @@ Object.assign(app, {
   isSampleUsedByAnotherOpenTask(sampleId, excludeTaskId = "") {
     const usages = this.activeTaskUsagesForSample(sampleId, excludeTaskId);
     return usages.length > 0;
-  },
-
-  sampleDisplayCode(sample) {
-    if (!sample) return "-";
-    const parts = [sample.sampleNo, sample.sn, sample.imei, sample.boardSn].filter(Boolean);
-    return parts[0] || "-";
   }
 
 });

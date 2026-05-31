@@ -493,6 +493,8 @@ Object.assign(app, {
     const reason = this.taskResultAutoReason({ ...payload, result }, finishTask, { projectId: project.id, stageId: stage.id, testItem: task.testItem });
     task.latestResult = result;
     task.resultDate = payload.resultDate;
+    // 任务已结束（追加结果模式）：只补录问题表/故障/图片，不再改写样机当前状态/去向/持有人/位置
+    const lockSampleStatus = !finishTask && this.isTaskCompleted(task);
 
     payload.samples.forEach(item => {
       const found = this.findSample(item.sid);
@@ -516,6 +518,7 @@ Object.assign(app, {
           photos: item.photos || []
         });
       }
+      if (lockSampleStatus) return;
       const photoIds = (item.photos || []).map(photo => photo.id).filter(Boolean);
       this.changeSampleStatus(item.sid, status, {
         user: payload.user,

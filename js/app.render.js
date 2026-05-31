@@ -180,16 +180,6 @@ Object.assign(app, {
     document.getElementById("content").innerHTML = `<div class="card empty">${Utils.esc(msg)}</div>`;
   },
 
-  openSampleReadonly(sampleId) {
-    this.view.selectedSampleId = sampleId;
-    this.view.module = "samples";
-    this.render();
-    setTimeout(() => {
-      const el = document.querySelector(`.sample-card[data-sample-id="${sampleId}"]`);
-      el?.click?.();
-    }, 50);
-  },
-
   // ---- 任务操作菜单统一管理 ----
   closeTaskOpMenus(exceptEl = null) {
     document.querySelectorAll(".task-op-menu.open, .task-more-menu.open").forEach(menu => {
