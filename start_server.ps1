@@ -2,7 +2,7 @@
 Set-Location -LiteralPath $PSScriptRoot
 
 Write-Host "============================================"
-Write-Host "TestChamber V6.1 Intranet Server"
+Write-Host "TestChamber V7 Intranet Server"
 Write-Host "Current folder: $PWD"
 Write-Host "Port: 9398"
 Write-Host "============================================"

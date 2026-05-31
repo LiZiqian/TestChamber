@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 
-REM TestChamber V6.1 Intranet Server Starter
+REM TestChamber V7 Intranet Server Starter
 REM Fixed port: 9398
 REM Prefer Miniforge/Conda Python, then Windows Python Launcher, then PATH.
 
@@ -35,7 +35,7 @@ if not defined PYTHON_CMD (
 )
 
 echo ============================================
-echo TestChamber V6.1 Intranet Server
+echo TestChamber V7 Intranet Server
 echo Current folder:
 echo %CD%
 echo Python:

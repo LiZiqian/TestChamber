@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-数字治理平台 V6.1 内网协同版服务器
+数字治理平台 V7 内网协同版服务器
 
-V6.1 的核心变化：
+V7 的核心变化：
 - 网页代码仍保存在项目根目录、js、css、templates 中。
 - 业务数据统一放在 data/ 下。
 - 样机库从大 JSON 中外置到 SQLite 表。
@@ -32,8 +32,8 @@ from pathlib import Path
 from urllib.parse import quote, unquote, unquote_to_bytes, urlparse
 
 
-APP_VERSION = "6.1-intranet"
-SERVER_VERSION = "TestChamberServer/6.1"
+APP_VERSION = "V7"
+SERVER_VERSION = "TestChamberServer/V7"
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
 SAMPLE_DATA_DIR = DATA_DIR / "samples"
@@ -178,8 +178,8 @@ MAX_BACKUPS_KEEP = 10       # 全局最多保留的 backup 数量
 _last_backup_time: float = 0.0       # 上次成功写入 backup 的时间戳（time.time()）
 _last_backup_revision: int = 0       # 上次成功写入 backup 时的 revision
 
-# 文件名解析正则：testchamber_v61_rev{revision}_{YYYYMMDD}_{HHMMSS}.json
-_BACKUP_FILE_PATTERN = re.compile(r"testchamber_v61_rev\d+_(\d{8})_(\d{6})\.json")
+# 文件名解析正则：testchamber_v7_rev{revision}_{YYYYMMDD}_{HHMMSS}.json
+_BACKUP_FILE_PATTERN = re.compile(r"testchamber_v7_rev\d+_(\d{8})_(\d{6})\.json")
 
 
 def _should_backup(action: str, revision: int, *, is_important: bool = False) -> bool:
@@ -198,7 +198,7 @@ def _should_backup(action: str, revision: int, *, is_important: bool = False) ->
 
 def write_backup(data: dict, revision: int) -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = BACKUP_DIR / f"testchamber_v61_rev{revision}_{ts}.json"
+    path = BACKUP_DIR / f"testchamber_v7_rev{revision}_{ts}.json"
     path.write_text(json_dumps(data, pretty=True), encoding="utf-8")
     # 写入成功后才更新节流状态
     global _last_backup_time, _last_backup_revision
@@ -223,10 +223,10 @@ def _resolve_sort_ts(path: Path) -> float:
 
 
 def prune_backups() -> None:
-    """清理 testchamber_v61_rev*.json 备份。
+    """清理 testchamber_v7_rev*.json 备份。
     
     规则：
-    1. 只处理文件名匹配 testchamber_v61_rev*.json 的文件。
+    1. 只处理文件名匹配 testchamber_v7_rev*.json 的文件。
        不删除 .gitkeep、非匹配文件、SQLite 数据库等。
     2. 按小时分组，优先从文件名解析时间，解析失败则 fallback 使用文件 mtime。
        同一小时内保留最新 BACKUPS_PER_HOUR_KEEP 个，删除其余。
@@ -235,7 +235,7 @@ def prune_backups() -> None:
     """
     # 收集所有匹配的 backup 文件，每条记录：(hour_bucket, sort_ts, path)
     entries: list[tuple[str, float, Path]] = []
-    for p in BACKUP_DIR.glob("testchamber_v61_rev*.json"):
+    for p in BACKUP_DIR.glob("testchamber_v7_rev*.json"):
         sort_ts = _resolve_sort_ts(p)
         m = _BACKUP_FILE_PATTERN.match(p.name)
         if m:
@@ -262,7 +262,7 @@ def prune_backups() -> None:
 
     # 第二步：全局数量限制，只保留最新 MAX_BACKUPS_KEEP 个
     remaining = sorted(
-        BACKUP_DIR.glob("testchamber_v61_rev*.json"),
+        BACKUP_DIR.glob("testchamber_v7_rev*.json"),
         key=_resolve_sort_ts,
         reverse=True,
     )
@@ -1675,7 +1675,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="数字治理平台 V6.1 内网协同版服务器")
+    parser = argparse.ArgumentParser(description="数字治理平台 V7 内网协同版服务器")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址，默认 0.0.0.0")
     parser.add_argument("--port", type=int, default=9398, help="监听端口，默认 9398")
     args = parser.parse_args()
@@ -1684,7 +1684,7 @@ def main() -> None:
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print("=" * 70)
-    print("数字治理平台 V6.1 内网协同版服务器已启动")
+    print("数字治理平台 V7 内网协同版服务器已启动")
     print(f"根目录: {ROOT_DIR}")
     print(f"数据库: {DB_PATH}")
     print(f"样机文件目录: {SAMPLE_DATA_DIR}")

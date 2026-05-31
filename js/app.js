@@ -1,9 +1,9 @@
 /* ========================================
-   数字治理平台 v6.1 - 核心框架
+   数字治理平台 V7 - 核心框架
    ======================================== */
 
 const app = {
-  version: "6.1-intranet",
+  version: "V7",
   data: null,
   serverRevision: 0,
   serverUpdatedAt: null,
@@ -628,7 +628,7 @@ const app = {
     const sampleCount = this.allSamples().length;
     document.getElementById("content").innerHTML = `
       <section class="home-shell">
-        <h1 class="home-title">终端硬件测试数字治理平台 <span>V6.1</span></h1>
+        <h1 class="home-title">终端硬件测试数字治理平台 <span>V7</span></h1>
         <div class="home-entry-grid">
           <button type="button" class="home-entry-card project-entry" onclick="app.go('projects')">
             <span class="home-entry-icon">📁</span>
