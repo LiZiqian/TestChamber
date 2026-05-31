@@ -103,18 +103,5 @@ const app = {
       });
     }
   },
-  // ---- 任务操作菜单统一管理 ----
-  closeTaskOpMenus(exceptEl = null) {
-    document.querySelectorAll(".task-op-menu.open, .task-more-menu.open").forEach(menu => {
-      if (exceptEl && menu === exceptEl) return;
-      menu.classList.remove("open");
-    });
-  },
-
-  handleTaskOpMenuClick(menu) {
-    const wasOpen = menu.classList.contains("open");
-    this.closeTaskOpMenus();
-    if (!wasOpen) menu.classList.add("open");
-  },
 
 };
