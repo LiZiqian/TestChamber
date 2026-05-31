@@ -211,9 +211,9 @@ Object.assign(app, {
       ? `\n\n该阶段含 ${taskCount} 个任务及其测试履历/日志，删除后不可恢复。`
       : "";
     this.showConfirm(`确认删除阶段「${stage.name}」？${extraWarn}`, () => {
-      // 删除前收集该阶段任务占用的样机，删除后逐一回收（仅当不再被其它未完成任务占用时置闲置）
+      // 只释放未完成任务占用的样机；已完成任务的样机状态不变。
       const affectedSampleIds = new Set();
-      (stage.tasks || []).forEach(t => (t.sampleIds || []).forEach(id => affectedSampleIds.add(id)));
+      activeTasks.forEach(t => (t.sampleIds || []).forEach(id => affectedSampleIds.add(id)));
       p.stages = p.stages.filter(s => s.id !== id);
       this.view.selectedStageId = p.stages[0]?.id || null;
       affectedSampleIds.forEach(id => {
