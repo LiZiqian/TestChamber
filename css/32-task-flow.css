@@ -1,0 +1,579 @@
+/* ---- Task Flow ---- */
+.task-flow-summary {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px; margin: 8px 0 10px;
+}
+.task-flow-stat {
+  background: rgba(255, 255, 255, .72); border: 1px solid var(--border);
+  border-radius: 9px; padding: 7px 9px;
+  min-height: 54px;
+}
+.task-flow-stat b { font-size: 20px; line-height: 1.1; color: #1f2937; font-weight: 800 }
+.task-flow-stat span { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.2; font-weight: 600 }
+.task-flow-stat.stat-total { background: #eff6ff; border-color: var(--primary-border) }
+.task-flow-stat.stat-total b,
+.task-flow-stat.stat-total span { color: var(--primary) }
+.task-flow-stat.stat-pending { background: var(--purple-bg); border-color: var(--purple-border) }
+.task-flow-stat.stat-pending b,
+.task-flow-stat.stat-pending span { color: var(--purple-text) }
+.task-flow-stat.stat-running { background: #dcfce7; border-color: #bbf7d0 }
+.task-flow-stat.stat-running b,
+.task-flow-stat.stat-running span { color: #15803d }
+.task-flow-stat.stat-blocked { background: #fef3c7; border-color: #fde68a }
+.task-flow-stat.stat-blocked b,
+.task-flow-stat.stat-blocked span { color: #92400e }
+.task-flow-stat.stat-bad { background: #fee2e2; border-color: #fecaca }
+.task-flow-stat.stat-bad b,
+.task-flow-stat.stat-bad span { color: #b91c1c }
+.task-flow-stat.stat-done { background: #166534; border-color: #14532d }
+.task-flow-stat.stat-done b,
+.task-flow-stat.stat-done span { color: #fff }
+.task-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+  margin: 8px 0 12px;
+}
+.task-filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 1 180px;
+  min-width: 150px;
+  max-width: 200px;
+}
+.task-filter-item label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.task-filter-item select,
+.task-filter-item input {
+  height: 36px;
+  font-size: 12px;
+  padding: 6px 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.task-filter-item input::placeholder {
+  font-size: 12px;
+}
+.task-filter-actions {
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 0;
+}
+.task-filter-actions .btn {
+  height: 36px;
+  white-space: nowrap;
+}
+.task-flow-table { overflow-x: auto; overflow-y: visible }
+.task-flow-table table { width: 100%; min-width: 1260px; table-layout: fixed }
+.task-flow-table th,
+.task-flow-table td { vertical-align: middle; border-right: 1px solid #eef2f7 }
+.task-flow-table th:last-child,
+.task-flow-table td:last-child { border-right: 0 }
+.task-flow-table th { border-right-color: #e2e8f0 }
+.task-flow-table th:nth-child(1) { width: 80px; text-align: center }
+.task-flow-table th:nth-child(2) { width: 100px; text-align: center }
+.task-flow-table th:nth-child(3) { width: 80px; text-align: center }
+.task-flow-table th:nth-child(4) { width: 140px; text-align: center  }
+.task-flow-table th:nth-child(5) { width: 80px; text-align: center }
+.task-flow-table th:nth-child(6) { width: 260px; text-align: center  }
+.task-flow-table th:nth-child(7) { width: 200px; text-align: center  }
+.task-flow-table th:nth-child(8) { width: 80px; text-align: center }
+.task-flow-table td:nth-child(8) { text-align: center }
+
+/* 方案(SKU)列加粗 */
+.task-flow-table .task-sku-cell { font-weight: 600 }
+/* 类别/用例列加粗 */
+.task-flow-table .task-type-cat,
+.task-flow-table .task-type-item { font-weight: 600 }
+/* 执行人列不加粗 */
+.task-flow-table .task-executor-name,
+.task-flow-table .task-executor-id { font-weight: 400 }
+/* 样机数量加粗 */
+.task-flow-table .task-sample-count { font-weight: 600 }
+/* 问题单标签灰化 */
+.task-flow-table .task-issue-record-label { color: var(--muted); font-weight: 400 }
+.task-flow-table .issue-value { color: var(--text); font-weight: 400 }
+.task-flow-table .task-issue-repeat-no { color: #dc2626; font-weight: 700 }
+.task-flow-table .task-issue-record-cell b { font-weight: 600; color: var(--text) }
+.task-flow-table th:nth-child(9) { width: 240px; text-align: center  }
+.task-flow-table td { font-size: 12px; font-weight: 400 }
+.task-flow-table .compact-cell { white-space: normal; line-height: 1.45; word-break: break-word }
+.task-flow-table .op-cell { min-width: 150px; max-width: 260px;  text-align: left; }
+.task-flow-table .task-issue-cell {
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.task-flow-table .task-issue-cell b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+/* —— 任务测试结果列：失效比例 + 失效样机问题清单 —— */
+.task-result-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.5;
+}
+.task-result-summary-ratio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 700;
+  color: #4b5563;
+}
+.task-result-ratio {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: 0;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+.task-result-ratio.is-pass {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+.task-result-ratio.is-fail {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+.task-result-ratio-sep {
+  color: var(--muted);
+  font-weight: 400;
+}
+.task-result-ratio-removed {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: 0;
+  background: #f8fafc;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+}
+.task-result-ratio-removed.is-fail {
+  color: #b45309;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.task-result-fail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.task-result-fail-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  word-break: break-word;
+}
+.task-result-fail-line .sample-log-link {
+  font-weight: 400;
+  color: var(--primary);
+}
+.task-result-tag-removed {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  margin-left: 2px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  line-height: 1.4;
+}
+.task-time-cell span { display: block; line-height: 1.5; color: #606266; font-size: 12px; font-weight: 400; white-space: normal }
+.task-sample-summary { display: flex; align-items: center; gap: 6px; white-space: nowrap }
+.task-sample-summary b { font-size: 17px; color: #0f172a }
+.task-sample-summary span { color: var(--muted); font-size: 12px }
+.task-sample-summary .btn {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.badge.status-pending { background: var(--purple-bg); color: var(--purple-text); border: 1px solid var(--purple-border) }
+.badge.status-running { background: #dcfce7; color: #15803d }
+.badge.status-blocked { background: #fef3c7; color: #92400e }
+.badge.status-done { background: #166534; color: #fff }
+.badge.status-bad { background: #fee2e2; color: #b91c1c }
+/* —— 任务表格新布局：类别/用例两行、执行人姓名/工号两行、样机数量/查看两行 —— */
+.task-type-cell { display: flex; flex-direction: column; gap: 2px; line-height: 1.5 }
+.task-type-cat { font-size: 12px; color: var(--primary); font-weight: 600 }
+.task-type-item { font-size: 13px; color: #1f2937; font-weight: 600; line-height: 1.5; word-break: break-word }
+
+.task-executor-cell { display: flex; flex-direction: column; gap: 1px; line-height: 1.5 }
+.task-executor-name { font-size: 13px; color: #1f2937; font-weight: 600 }
+.task-executor-id { font-size: 12px; color: #6b7280; font-weight: 400 }
+
+.task-sample-cell { display: flex; flex-direction: column; gap: 4px; align-items: center; width: 100%; line-height: 1.5 }
+.task-sample-count { font-size: 13px; color: #1f2937; font-weight: 600; line-height: 1.5 }
+.task-sample-count-num { font-weight: 600 }
+.task-sample-cell .btn { font-size: 12px; padding: 3px 7px }
+
+/* —— 操作按钮列紧凑换行 —— */
+.task-op-group { display: flex; flex-direction: column; gap: 4px; align-items: flex-start }
+.task-op-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center }
+.task-op-row .btn { min-width: auto; text-align: center; padding-left: 7px; padding-right: 7px; font-size: 12px; font-weight: 600; white-space: nowrap }
+.task-op-row.secondary .btn { min-width: auto }
+
+/* —— 新操作列：横向一行 + 下拉菜单 —— */
+.task-op-cell-new .task-op-group-new {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.task-op-cell-new .btn { white-space: nowrap }
+/* 配置/更多下拉菜单容器 */
+.task-op-menu {
+  position: relative;
+  display: inline-flex;
+}
+.task-op-menu .task-op-menu-items {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 180;
+  min-width: 120px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .18);
+  padding: 4px;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-op-menu.open .task-op-menu-items {
+  display: flex;
+}
+.task-op-menu .task-op-menu-items .btn {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.task-op-more { min-width: 36px }
+
+/* —— 任务配置弹窗 —— */
+/* ========================================
+   问题单列 (Issue Record Column)
+   ======================================== */
+
+/* 问题单单元格 */
+.task-issue-cell {
+  min-width: 140px;
+  max-width: 200px;
+  vertical-align: top;
+  padding: 6px 8px;
+}
+
+/* 问题单显示内容 */
+.task-issue-display {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.task-issue-display .issue-dts { color: var(--primary); font-weight: 600; }
+.task-issue-display .issue-flag-yes { color: var(--danger); font-weight: 700; }
+.task-issue-display .issue-flag-no { color: var(--pass); }
+.task-issue-display .issue-note { color: var(--muted); font-size: 11px; }
+
+/* 问题单编辑按钮 */
+.task-issue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.task-issue-btn:hover {
+  background: #eff6ff;
+  color: var(--primary);
+  border-color: var(--primary2);
+}
+.task-issue-btn.has-data {
+  background: #fefce8;
+  color: #92400e;
+  border-color: #fbbf24;
+}
+.task-issue-btn.has-issue {
+  background: #fef2f2;
+  color: var(--danger);
+  border-color: #fca5a5;
+}
+
+/* 问题单弹窗内容 */
+.issue-record-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0;
+}
+.issue-record-form .form-group label {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+  display: block;
+}
+.issue-record-form .issue-radio-group {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-top: 4px;
+}
+.issue-record-form .issue-radio-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  cursor: pointer;
+  font-size: 14px;
+}
+.issue-record-form .issue-radio-group input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* ========================================
+   取走分析 - 挂账人/持有人字段
+   ======================================== */
+/* ========================================
+   问题单列 - 内联编辑 textarea
+   ======================================== */
+.task-issue-record-cell {
+  vertical-align: top;
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.task-issue-record-line {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+.task-issue-record-label {
+  color: #606266;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: normal;
+}
+.task-issue-record-empty {
+  color: var(--muted);
+  cursor: pointer;
+}
+.task-issue-repeat-no {
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 700;
+}
+.task-issue-record-textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 3px 5px;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+  background: #fafbfc;
+  transition: border-color .15s, box-shadow .15s;
+}
+.task-issue-record-textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(37,99,235,.12);
+  outline: none;
+  background: #fff;
+}
+
+/* ========================================
+   任务操作列 - 更多菜单
+   ======================================== */
+/* ========================================
+   任务操作列 - 更多菜单
+   ======================================== */
+.task-op-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+.task-op-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+.task-more-menu {
+  position: relative;
+  display: inline-block;
+}
+.task-more-trigger {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 34px;
+  letter-spacing: 1px;
+}
+.task-more-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  min-width: 132px;
+  z-index: 2000;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, .18);
+}
+.task-more-menu.open .task-more-panel {
+  display: block;
+}
+.task-more-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+  display: block;
+}
+.task-more-item:hover {
+  background: #f3f4f6;
+}
+.task-more-item.danger {
+  background: #dc2626;
+  color: #fff;
+}
+.task-more-item.danger:hover {
+  background: #b91c1c;
+}
+
+/* ========================================
+   启动/重启按钮 - 绿色系
+   ======================================== */
+/* ========================================
+   启动/重启按钮 - 绿色系
+   ======================================== */
+.task-flow-table .btn-start:not(:disabled) {
+  background: #2f9e44;
+  border-color: #2f9e44;
+  color: #fff;
+}
+.task-flow-table .btn-start:not(:disabled):hover {
+  background: #237a35;
+  border-color: #237a35;
+  color: #fff;
+}
+.task-flow-table .btn-start:disabled {
+  background: #d8f3dc;
+  border-color: #d8f3dc;
+  color: #5f8f66;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+/* ========================================
+   禁用启动按钮 - 自定义 tooltip
+   ======================================== */
+.task-start-disabled-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.task-start-disabled-tip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: #111827;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 6px 8px;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .18);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3000;
+  transition: opacity .12s ease;
+  transition-delay: 0s;
+}
+.task-start-disabled-tip:hover::after {
+  opacity: 1;
+  transition-delay: .2s;
+}
+
+/* 确保操作列表格容器不裁剪 tooltip */
+.task-flow-table td.task-op-cell-new {
+  overflow: visible;
+}
+.task-flow-table .table-wrap {
+  overflow: visible;
+}
+
+.task-flow-table .task-flow-buffer-row td {
+  height: 130px;
+  padding: 0;
+  border-right: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+/* —— 临时变更：顶部控件高度统一 —— */
