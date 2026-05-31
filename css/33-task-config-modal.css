@@ -1,0 +1,461 @@
+.task-config-modal.modal {
+  width: min(1080px, 96vw);
+  height: min(920px, 92vh);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.task-config-modal .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+}
+.task-config-modal .modal-footer {
+  flex: 0 0 auto;
+}
+.task-config-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+}
+.task-config-titlebar > span:first-child {
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--text);
+}
+.task-config-title-context {
+  margin-left: auto;
+  max-width: 760px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.task-config-shell {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+  align-items: stretch;
+}
+.task-config-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.task-config-nav-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 14px 10px;
+  cursor: pointer;
+  transition: .15s ease;
+  text-align: center;
+}
+.task-config-nav-card:hover {
+  border-color: var(--primary-border);
+  background: var(--primary-bg);
+}
+.task-config-nav-card.active {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+  color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, .08);
+}
+.task-config-nav-card b {
+  display: block;
+  font-size: 14px;
+  font-weight: 900;
+  margin-bottom: 0;
+}
+.task-config-main {
+  min-width: 0;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 16px;
+}
+.task-config-panel { display: none; }
+.task-config-panel.active { display: block; min-height: 0; }
+@media (max-width: 900px) {
+  .task-config-shell { grid-template-columns: 1fr; }
+  .task-config-nav { flex-direction: row; }
+  .task-config-nav-card { flex: 1; }
+  .task-config-main { min-height: 0; }
+}
+
+/* 样机配置页：右侧内容仍然由样机池区域承担滚动 */
+#tcPanelSample.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.task-sample-config-group {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.task-sample-config-group > label {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.sample-limit-hidden {
+  display: none !important;
+}
+
+/* 关键：整个样机池列表成为唯一主滚动容器 */
+.task-config-modal .dispatch-sample-select {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  padding: 8px 8px 72px;
+  display: block;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+/* 每个样机池自然上下排列 */
+.task-config-modal .dispatch-sample-group {
+  display: block;
+  flex: 0 0 auto;
+  margin: 8px 0 14px;
+  overflow: visible;
+}
+
+/* 标题行正常显示，不 sticky，避免多个池展开后互相盖住 */
+.task-config-modal .dispatch-sample-head {
+  position: relative;
+  top: auto;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dispatch-sample-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.dispatch-sample-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.dispatch-selected-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.dispatch-selected-count.has-selected {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+  color: var(--primary);
+}
+.task-config-modal .dispatch-sample-tools {
+  flex: 0 0 auto;
+}
+/* 折叠时隐藏 */
+.task-config-modal .dispatch-sample-body {
+  display: none;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+
+/* 展开后不再单独滚动，而是把高度交给外层 dispatch-sample-select 滚动 */
+.task-config-modal .dispatch-sample-body.open {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  align-items: start;
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+  padding: 8px 10px 20px;
+}
+
+/* 最后一个池子底部留白，避免被 footer 遮住 */
+.task-config-modal .dispatch-sample-group:last-child {
+  margin-bottom: 88px;
+}
+
+/* =====================================================================
+   PATCH 2026-05-31: 任务配置 → 样机配置滚动修复
+   目标：全部样机池展开后，右侧样机池总区域可滚轮浏览；底部按钮不遮挡内容。
+   关键结构：workspace.js 中 #tcPanelSample 内已增加 .dispatch-sample-select.task-config-sample-scroll 包裹层。
+   ===================================================================== */
+.task-config-modal.modal {
+  height: min(920px, 92vh) !important;
+  max-height: 92vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.task-config-modal .modal-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+}
+
+.task-config-modal .modal-footer {
+  flex: 0 0 auto !important;
+}
+
+.task-config-modal .task-config-shell {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.task-config-modal .task-config-main {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.task-config-modal #tcPanelSample.active {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.task-config-modal #tcPanelSample .task-sample-config-group {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  margin-bottom: 0 !important;
+  overflow: hidden !important;
+}
+
+.task-config-modal #tcPanelSample .task-sample-config-group > label {
+  flex: 0 0 auto !important;
+  margin-bottom: 8px !important;
+}
+
+/* 唯一主滚动容器：全部 LZQ / XXX / YYY 样机池都在这里滚动 */
+.task-config-modal #tcPanelSample .dispatch-sample-select.task-config-sample-scroll {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  display: block !important;
+  padding: 8px 8px 110px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  background: #f8fafc !important;
+  scrollbar-gutter: stable !important;
+  overscroll-behavior: contain !important;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-group {
+  display: block !important;
+  flex: 0 0 auto !important;
+  min-height: auto !important;
+  margin: 8px 0 16px !important;
+  overflow: visible !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+  background: #fff !important;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-head {
+  position: relative !important;
+  top: auto !important;
+  z-index: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-body {
+  display: none !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-body.open {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 6px !important;
+  align-items: start !important;
+  align-content: start !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 8px 10px 20px !important;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-group:last-child {
+  margin-bottom: 96px !important;
+}
+
+
+/* =====================================================================
+   PATCH 2026-05-31: 样机配置滚动增强 v2
+   目标：外层滚动用于浏览多个样机池；单个样机池展开后也有最大高度，样机过多时池内滚动。
+   ===================================================================== */
+
+/* 外层：负责浏览 LZQ / XXX / YYY 等多个样机池 */
+.task-config-modal #tcPanelSample .dispatch-sample-select.task-config-sample-scroll {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 8px 8px 112px !important;
+  display: block !important;
+  scrollbar-gutter: stable !important;
+  overscroll-behavior: contain !important;
+}
+
+/* 每个样机池自然上下排列，不再无限参与 flex 拉伸 */
+.task-config-modal #tcPanelSample .dispatch-sample-group {
+  display: block !important;
+  flex: 0 0 auto !important;
+  min-height: auto !important;
+  margin: 8px 0 16px !important;
+  overflow: visible !important;
+}
+
+/* 折叠状态 */
+.task-config-modal #tcPanelSample .dispatch-sample-body {
+  display: none !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+}
+
+/* 展开状态：单个样机池设置最大高度；样机过多时池内滚动 */
+.task-config-modal #tcPanelSample .dispatch-sample-body.open {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 6px !important;
+  align-items: start !important;
+  align-content: start !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: clamp(320px, 42vh, 520px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 8px 10px 28px !important;
+  scrollbar-gutter: stable !important;
+  overscroll-behavior: auto !important;
+}
+
+/* 底部留白，避免最后一个池子被 footer 遮住 */
+.task-config-modal #tcPanelSample .dispatch-sample-group:last-child {
+  margin-bottom: 96px !important;
+}
+
+/* =====================================================================
+   PATCH 2026-05-31: 任务配置 → 样机配置顶部全局样机数提示
+   目标：在“选择样机 *”右侧显示当前任务总选择数 / 任务要求数，例如 3/20。
+   ===================================================================== */
+.task-config-modal #tcPanelSample .task-sample-label-row.task-sample-label-row-compact {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  flex: 0 0 auto !important;
+  margin-bottom: 8px !important;
+}
+
+.task-config-modal #tcPanelSample .task-sample-label-row.task-sample-label-row-compact > label {
+  flex: 0 0 auto !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+}
+
+.task-config-modal #tcPanelSample .sample-limit-hint.sample-limit-global {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 90px !important;
+  height: 32px !important;
+  margin: 0 !important;
+  padding: 0 18px !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 999px !important;
+  background: #fff !important;
+  color: #334155 !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.task-config-modal #tcPanelSample .sample-limit-hint.sample-limit-global.warn {
+  border-color: #fbbf24 !important;
+  background: #fffbeb !important;
+  color: #92400e !important;
+}
+
+.task-config-modal #tcPanelSample .sample-limit-hint.sample-limit-global.bad {
+  border-color: #fca5a5 !important;
+  background: #fef2f2 !important;
+  color: #991b1b !important;
+}
+
+.task-config-modal #tcPanelSample .sample-limit-hint.sample-limit-global .sample-limit-count {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+}
