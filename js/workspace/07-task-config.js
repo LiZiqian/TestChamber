@@ -305,7 +305,7 @@ Object.assign(app, {
       if (titleEl) {
         titleEl.innerHTML = `<div class="task-config-titlebar">
           <span>任务配置</span>
-          <span class="task-config-title-context">计划任务：${Utils.esc(this.taskConfigDisplayName(stage, progress, t))}</span>
+          <span class="task-config-title-context">计划任务：${Utils.esc(this.taskConfigDisplayName(s, progress, t))}</span>
         </div>`;
       }
     }, 0);
