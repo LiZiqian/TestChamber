@@ -104,7 +104,7 @@ Object.assign(app, {
       <div class="path">主板SN：${Utils.esc(s.boardSn || "NA")}</div>
       <div class="path">阶段：${Utils.esc(s.sourceStageName || "-")} · ${Utils.esc(s.sourceSkuName || "-")}</div>
       ${s.tag ? `<div class="path">标签：${Utils.esc(s.tag)}</div>` : ''}
-      <div class="path">问题：${((s.problemRecords || []).map(r => r.description || r).filter(Boolean).join(" / ") || "-")}</div>
+      <div class="path">问题：${Utils.esc((s.problemRecords || []).map(r => r.description || r).filter(Boolean).join(" / ") || "-")}</div>
       <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.destroySample('${s.id}')" title="档案销毁">🗑</button>
     </div>`;
   },
