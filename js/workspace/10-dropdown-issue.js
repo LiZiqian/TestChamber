@@ -142,12 +142,19 @@ Object.assign(app, {
     this.save();
   },
 
-  taskIssueRecordHtml(task) {
+  taskIssueRecordHtml(task, project = null, stage = null) {
     const r = task?.issueRecord || {};
     const hasDts = !!r.dtsNo;
     const hasIssue = r.isIssue === "是" || r.isIssue === "否";
+    // 空态点击录入：优先使用调用方传入的 project/stage 上下文，回退到 task 自带字段，避免缺失 projectId/stageId 时弹窗静默失败
+    const pid = project?.id || task?.projectId || "";
+    const sid = stage?.id || task?.stageId || "";
+    const tid = task?.id || "";
+    if (!tid) {
+      return `<span class="path">-</span>`;
+    }
     if (!hasDts && !hasIssue) {
-      return `<span class="path task-issue-record-empty" onclick="app.openTaskIssueRecordModal('${task?.projectId || ""}','${task?.stageId || ""}','${task?.id || ""}')">点击录入</span>`;
+      return `<span class="path task-issue-record-empty" onclick="app.openTaskIssueRecordModal('${pid}','${sid}','${tid}')">点击录入</span>`;
     }
     const taskId = task?.id || "";
     const noteVal = Utils.esc(r.issueNote || "");

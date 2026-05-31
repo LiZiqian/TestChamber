@@ -82,6 +82,21 @@ Object.assign(app, {
         })
       });
       const obj = await res.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+      if (res.status === 409 && obj.error_code === "SAMPLE_OCCUPANCY_CONFLICT") {
+        // C1：样机占用冲突——服务器拒绝保存，不能静默 reload（会丢弃本地编辑）
+        this.updateServerStatus("样机占用冲突");
+        this._saveQueued = false;
+        this._queuedRemark = "";
+        const conflicts = Array.isArray(obj.conflicts) ? obj.conflicts : [];
+        const detail = conflicts.slice(0, 5).map(c => {
+          const sample = this.findSample?.(c.sampleId);
+          const sampleName = sample?.sample?.sampleNo || sample?.sample?.sn || c.sampleId;
+          const items = (c.tasks || []).map(t => t.testItem || "未命名任务").join("、");
+          return `· 样机 ${sampleName}：被「${items}」同时占用`;
+        }).join("\n");
+        alert(`保存被拒绝：样机占用冲突。\n\n同一样机不能被多个未完成任务同时占用：\n${detail}\n\n请先释放或结束其中一个任务的样机后再保存。`);
+        return false;
+      }
       if (res.status === 409) {
         this.updateServerStatus("保存冲突");
         if (silent && retryOnConflict && obj.server_revision) {

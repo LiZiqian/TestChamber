@@ -169,7 +169,7 @@ Object.assign(app, {
                 <td class="task-time-cell">${timeHtml}</td>
                 <td>${sampleHtml}</td>
                 <td class="task-issue-cell">${t ? this.taskIssueSummaryHtml(project, stage, t) : "-"}</td>
-                <td class="task-issue-record-cell" onclick="${taskId ? `app.openTaskIssueRecordModal('${project.id}','${stage.id}','${taskId}')` : ''}" style="${taskId ? 'cursor:pointer' : ''}">${t ? this.taskIssueRecordHtml(t) : '<span class="path">-</span>'}</td>
+                <td class="task-issue-record-cell" onclick="${taskId ? `app.openTaskIssueRecordModal('${project.id}','${stage.id}','${taskId}')` : ''}" style="${taskId ? 'cursor:pointer' : ''}">${t ? this.taskIssueRecordHtml(t, project, stage) : '<span class="path">-</span>'}</td>
                 <td><span class="badge ${this.taskStatusBadgeClass(flowStatus)}">${Utils.esc(flowStatus)}</span></td>
                 <td class="op-cell task-op-cell-new">${actionsHtml}</td>
               </tr>`;

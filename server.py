@@ -1348,6 +1348,55 @@ def get_state() -> tuple[dict, int, str]:
             return compose_state(conn)
 
 
+# 任务"已完成/不占用"状态集合——这些状态的任务不再占用样机
+FINISHED_TASK_STATUSES = {"正常完成", "异常终止", "已完成", "已归档", "完成", "终止"}
+
+
+def detect_sample_occupancy_conflicts(data: dict) -> list[dict]:
+    """C1：检测同一样机被多个未完成任务占用的冲突。
+
+    未完成任务定义：未被标记 archived/completed，且 status 不在 FINISHED_TASK_STATUSES，
+    且 sampleIds 非空。返回冲突列表，每项含 sampleId 与占用它的任务列表。
+    无冲突返回空列表。
+    """
+    if not isinstance(data, dict):
+        return []
+    occupancy: dict[str, list[dict]] = defaultdict(list)
+    for project in data.get("projects", []) or []:
+        if not isinstance(project, dict):
+            continue
+        for stage in project.get("stages", []) or []:
+            if not isinstance(stage, dict):
+                continue
+            for task in stage.get("tasks", []) or []:
+                if not isinstance(task, dict):
+                    continue
+                if task.get("archived") or task.get("completed"):
+                    continue
+                status = str(task.get("status") or "").strip()
+                if status in FINISHED_TASK_STATUSES:
+                    continue
+                sample_ids = task.get("sampleIds") or []
+                if not isinstance(sample_ids, list):
+                    continue
+                for sid in sample_ids:
+                    sid = str(sid)
+                    if not sid:
+                        continue
+                    occupancy[sid].append({
+                        "taskId": str(task.get("id") or ""),
+                        "projectId": str(project.get("id") or ""),
+                        "stageId": str(stage.get("id") or ""),
+                        "testItem": str(task.get("testItem") or ""),
+                        "status": status,
+                    })
+    conflicts = []
+    for sid, tasks in occupancy.items():
+        if len(tasks) > 1:
+            conflicts.append({"sampleId": sid, "tasks": tasks})
+    return conflicts
+
+
 def save_state(
     new_data: dict,
     expected_revision: int | None,
@@ -1372,6 +1421,17 @@ def save_state(
                 return False, {
                     "status": 409,
                     "error": "revision 冲突，服务器数据已被其他客户端更新",
+                    "server_revision": current_revision,
+                }
+
+            # C1：并发样机占用校验——同一样机不能被多个未完成任务同时占用
+            conflict = detect_sample_occupancy_conflicts(new_data)
+            if conflict:
+                return False, {
+                    "status": 409,
+                    "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
+                    "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
+                    "conflicts": conflict,
                     "server_revision": current_revision,
                 }
 

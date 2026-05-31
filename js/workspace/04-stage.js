@@ -195,9 +195,34 @@ Object.assign(app, {
   deleteStage(id) {
     const p = this.currentProject();
     if (!p) return;
-    this.showConfirm("确认删除该阶段？", () => {
+    const stage = (p.stages || []).find(s => s.id === id);
+    if (!stage) return;
+    // 安全机制：阶段下存在「进行中/未完成」任务且占用样机时，禁止直接删除，避免样机占用状态丢失
+    const tasks = (stage.tasks || []).filter(t => !t.archived);
+    const activeTasks = tasks.filter(t => !this.isTaskCompleted(t));
+    const occupyingTasks = activeTasks.filter(t => (t.sampleIds || []).length > 0);
+    if (occupyingTasks.length) {
+      const names = occupyingTasks.map(t => t.testItem || "未命名任务").slice(0, 5).join("、");
+      alert(`无法删除阶段「${stage.name}」：该阶段存在 ${occupyingTasks.length} 个未完成且占用样机的任务（${names}${occupyingTasks.length > 5 ? " 等" : ""}）。\n\n请先结束或释放这些任务的样机后再删除阶段。`);
+      return;
+    }
+    const taskCount = tasks.length;
+    const extraWarn = taskCount
+      ? `\n\n该阶段含 ${taskCount} 个任务及其测试履历/日志，删除后不可恢复。`
+      : "";
+    this.showConfirm(`确认删除阶段「${stage.name}」？${extraWarn}`, () => {
+      // 删除前收集该阶段任务占用的样机，删除后逐一回收（仅当不再被其它未完成任务占用时置闲置）
+      const affectedSampleIds = new Set();
+      (stage.tasks || []).forEach(t => (t.sampleIds || []).forEach(id => affectedSampleIds.add(id)));
       p.stages = p.stages.filter(s => s.id !== id);
       this.view.selectedStageId = p.stages[0]?.id || null;
+      affectedSampleIds.forEach(id => {
+        if (typeof this.isSampleUsedByAnotherOpenTask === "function"
+            && !this.isSampleUsedByAnotherOpenTask(id, null)
+            && typeof this.changeSampleStatus === "function") {
+          this.changeSampleStatus(id, "闲置", { user: "管理员", source: "删除阶段", reason: `删除阶段「${stage.name}」回收样机` });
+        }
+      });
       this.save(); this.render();
     }, { title: "删除阶段", okText: "删除", okClass: "btn btn-danger" });
   },

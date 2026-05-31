@@ -5,16 +5,41 @@
 
 Object.assign(app, {
 
+  /**
+   * 解析任务对应的 progress：
+   * 1) 优先返回阶段策略池中仍存在的 progress（保持与最新策略联动）；
+   * 2) 若策略池中已删除（任务创建后独立执行），用任务自身快照字段合成只读 pseudo-progress，
+   *    保证「配置/分配/计划」等入口不会因为找不到 progress 而静默失效。
+   * 返回 { progress, fromSnapshot }
+   */
+  resolveTaskProgress(stage, task, progressId = "") {
+    const live = (stage?.progress || []).find(x => x.id === (progressId || task?.progressId));
+    if (live) return { progress: live, fromSnapshot: false };
+    if (!task) return { progress: null, fromSnapshot: false };
+    const pseudo = {
+      id: task.progressId || `snapshot_${task.id}`,
+      strategyId: task.strategyId || "",
+      category: task.category || "",
+      testItem: task.testItem || "",
+      skuIndex: task.skuIndex || 1,
+      sampleSize: task.requiredSampleCount || "",
+      _snapshot: true
+    };
+    return { progress: pseudo, fromSnapshot: true };
+  },
+
   createTaskFromProgress(stage, progress, seed = {}) {
     if (!stage || !progress) return null;
     if (!Array.isArray(stage.tasks)) stage.tasks = [];
+    const skuIndex = progress.skuIndex || 1;
     const task = {
       id: Utils.id("task_"),
       progressId: progress.id,
       strategyId: progress.strategyId || "",
       category: progress.category || "",
       testItem: progress.testItem || "",
-      skuIndex: progress.skuIndex || 1,
+      skuIndex,
+      skuName: (stage.skuNames || [])[skuIndex - 1] || `SKU${skuIndex}`,
       owner: seed.owner || "",
       planStartDate: seed.planStartDate || "",
       planEndDate: seed.planEndDate || "",
@@ -152,8 +177,8 @@ Object.assign(app, {
   assignPlanTaskSamples(projectId, stageId, progressId, taskId = "") {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
-    const progress = s?.progress.find(x => x.id === progressId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
+    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以分配或重新分配样机。"); return; }
     const selectedIds = t?.sampleIds || [];
@@ -195,8 +220,8 @@ Object.assign(app, {
   setPlanTaskSchedule(projectId, stageId, progressId, taskId = "") {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
-    const progress = s?.progress.find(x => x.id === progressId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
+    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以修改计划时间。"); return; }
     const planStartDate = t?.planStartDate || t?.planDate || "";
@@ -264,8 +289,8 @@ Object.assign(app, {
   openTaskConfigPanel(projectId, stageId, progressId, taskId = "", initialTab = "plan") {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
-    const progress = s?.progress.find(x => x.id === progressId);
     const t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
+    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以修改配置。"); return; }
     const html = this.taskConfigPanelHtml(p, s, progress, t, initialTab);
@@ -372,8 +397,8 @@ Object.assign(app, {
   saveTaskPlanConfig(projectId, stageId, progressId, taskId) {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
-    const progress = s?.progress.find(x => x.id === progressId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
+    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     const owner = document.getElementById("tcPlanOwner")?.value.trim() || "";
     const start = document.getElementById("tcPlanStartDate")?.value || "";
@@ -409,8 +434,8 @@ Object.assign(app, {
   saveTaskSampleConfig(projectId, stageId, progressId, taskId) {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
-    const progress = s?.progress.find(x => x.id === progressId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
+    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     const operator = t?.owner || "管理员";
     const sampleIds = this.getSelectedTaskSampleIds("tcSamplePick");
@@ -443,8 +468,8 @@ Object.assign(app, {
   saveTaskConfigAll(projectId, stageId, progressId, taskId) {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
-    const progress = s?.progress.find(x => x.id === progressId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
+    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     // 读取 plan 字段
     const owner = document.getElementById("tcPlanOwner")?.value.trim() || "";
