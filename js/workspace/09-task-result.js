@@ -265,6 +265,7 @@ Object.assign(app, {
       btn.disabled = true;
       btn.innerText = "上传中...";
       try {
+        if (!(await this.prepareBeforeDirectMutation("上传任务结果图片前同步"))) return;
         const form = new FormData();
         files.forEach(file => form.append("photos", file, file.name));
         form.append("revision", String(this.serverRevision || 0));
@@ -273,10 +274,6 @@ Object.assign(app, {
         const res = await fetch(`/api/samples/${encodeURIComponent(sampleId)}/photos`, { method: "POST", body: form });
         const obj = await res.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
         if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
-        found.sample.photos = Array.isArray(obj.photos) ? obj.photos : (found.sample.photos || []);
-        found.sample.updatedAt = Utils.now();
-        if (obj.revision) this.serverRevision = obj.revision;
-        if (obj.updated_at) this.serverUpdatedAt = obj.updated_at;
         const uploaded = (obj.uploaded || []).map(photo => ({
           id: photo.id,
           name: photo.name || "结果图片",
@@ -285,9 +282,8 @@ Object.assign(app, {
           type: photo.type || "",
           size: photo.size || 0
         })).filter(photo => photo.id);
+        await this.syncAfterDirectMutation({ render: false, statusText: "已保存" });
         this.setTaskResultRowPhotos(row, [...this.taskResultRowPhotos(row), ...uploaded]);
-        this._baseData = this.cloneData(this.data);
-        this.updateServerStatus("已保存");
         Utils.toast(`已上传 ${uploaded.length || files.length} 张结果图片。`);
       } catch (e) {
         alert("结果图片上传失败：" + (e.message || e));

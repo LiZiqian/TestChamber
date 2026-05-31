@@ -131,6 +131,47 @@ Object.assign(app, {
         setTimeout(() => this.save({ silent: true, remark: queuedRemark, retryOnConflict: false }), 0);
       }
     }
-  }
+  },
+
+  // ---- 直接变更辅助（照片上传/删除等绕过 save() 的接口） ----
+
+  hasLocalUnsavedChanges() {
+    return JSON.stringify(this.data || {}) !== JSON.stringify(this._baseData || {});
+  },
+
+  async prepareBeforeDirectMutation(remark = "直接变更前同步") {
+    // 1. 清掉待执行的 debounce 保存
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    // 2. 等待当前正在进行的保存完成（最多等 3 秒）
+    if (this._saveInFlight) {
+      let waited = 0;
+      while (this._saveInFlight && waited < 3000) {
+        await new Promise(r => setTimeout(r, 100));
+        waited += 100;
+      }
+      if (this._saveInFlight) {
+        alert("正在保存中，请稍后重试。");
+        return false;
+      }
+    }
+    // 3. 如果本地有未保存编辑，先保存再继续
+    if (this.hasLocalUnsavedChanges()) {
+      const saved = await this.save({ silent: false, remark });
+      if (!saved) return false;
+    }
+    return true;
+  },
+
+  async syncAfterDirectMutation({ render = false, statusText = "已保存" } = {}) {
+    try {
+      await this.reloadFromServer({ render });
+    } catch (e) {
+      console.error("syncAfterDirectMutation 刷新失败：", e);
+    }
+    this.updateServerStatus(statusText);
+  },
 
 });
