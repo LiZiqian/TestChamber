@@ -145,7 +145,7 @@ Object.assign(app, {
         this._normalizedChanged = true;
       }
     }));
-    this.allSamples().forEach(s => {
+    this.eachSample(s => {
       if (!Array.isArray(s.logs)) s.logs = [];
       if (!s.status) s.status = "闲置";
       const statusMap = {
@@ -224,6 +224,12 @@ Object.assign(app, {
   },
   allSamples() {
     return this.data.sampleLibrary.categories.flatMap(c => (c.samples || []).map(s => ({ ...s, categoryName: c.name })));
+  },
+  /** 遍历所有样机的真实引用（可安全写入）。仅 normalize / reconcile 等修复逻辑使用。 */
+  eachSample(fn) {
+    this.data.sampleLibrary.categories.forEach(c => {
+      (c.samples || []).forEach(s => fn(s, c));
+    });
   },
   findSample(sampleId) {
     for (const c of this.data.sampleLibrary.categories) {
@@ -366,7 +372,7 @@ Object.assign(app, {
 
   reconcileSampleTaskOccupancy() {
     if (!this.data?.sampleLibrary?.categories) return;
-    this.allSamples().forEach(sample => {
+    this.eachSample(sample => {
       const activeUsages = this.activeTaskUsagesForSample(sample.id);
       if (activeUsages.length) return;
       if (sample.currentTaskId || ["测试中", "在位等待"].includes(sample.status)) {
