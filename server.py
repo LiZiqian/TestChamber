@@ -1566,6 +1566,29 @@ class Handler(BaseHTTPRequestHandler):
             return sample_id, photo_id
         return None
 
+    # ---- 静态文件白名单 ----
+    ALLOWED_STATIC_PREFIXES = ("/js/", "/css/", "/templates/")
+    FORBIDDEN_SEGMENT_PREFIXES = ("data", "backups", ".git", ".claude", "docs")
+    FORBIDDEN_EXTENSIONS = {".sqlite", ".db", ".py", ".bat", ".ps1", ".md", ".json", ".log", ".zip"}
+
+    @staticmethod
+    def _is_public_static_path(path: str) -> bool:
+        """只允许前端运行必需资源被访问。"""
+        # 1. 路径白名单前缀
+        if not any(path.startswith(p) for p in Handler.ALLOWED_STATIC_PREFIXES):
+            return False
+        # 2. 拒绝路径片段以 "." 开头（隐藏文件/目录 + 路径穿越 ".."）
+        parts = path.lstrip("/").split("/")
+        if any(p.startswith(".") for p in parts):
+            return False
+        # 3. 拒绝敏感顶级目录名
+        if parts and parts[0] in Handler.FORBIDDEN_SEGMENT_PREFIXES:
+            return False
+        # 4. 拒绝危险后缀
+        if Path(path).suffix.lower() in Handler.FORBIDDEN_EXTENSIONS:
+            return False
+        return True
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
@@ -1615,8 +1638,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_bytes(INDEX_PATH.read_bytes(), "text/html; charset=utf-8")
             return
 
+        # 静态文件服务 — 白名单模式，禁止访问敏感路径
+        if not self._is_public_static_path(path):
+            self._send_json({"ok": False, "error": "禁止访问"}, 403)
+            return
+
         rel = path.lstrip("/")
         target = (ROOT_DIR / rel).resolve()
+        # 路径穿越兜底检查（即使白名单通过也要防）
         if ROOT_DIR not in target.parents and target != ROOT_DIR:
             self._send_json({"ok": False, "error": "非法路径"}, 403)
             return
