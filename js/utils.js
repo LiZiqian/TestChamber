@@ -104,7 +104,7 @@ const Utils = {
 
   /** 解析测试用例CSV */
   parseTestCaseCsv(text) {
-    const lines = String(text || "").replace(/^\ufeff/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const lines = String(text || "").replace(/^﻿/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     const rows = [];
     lines.forEach((line, idx) => {
       const cols = Utils.parseCsvLine(line);
@@ -120,7 +120,7 @@ const Utils = {
 
   /** 解析项目人员CSV：每行必须使用 "姓名/工号" */
   parseProjectMembersCsv(text) {
-    const lines = String(text || "").replace(/^\ufeff/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const lines = String(text || "").replace(/^﻿/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     if (!lines.length) return { error: "CSV文件没有可读取的数据", rows: [] };
 
     const rows = [];
@@ -185,22 +185,26 @@ const Utils = {
     return raw;
   },
 
-  /** 解析姓名/工号字段: 格式为 "姓名/工号" */
+  /** 解析姓名/工号字段: 格式为 "姓名/工号"
+   *  返回 { name, employeeNo, raw, nameOk, noOk, ok, msg }
+   *  msg 为非空时即具体的校验失败原因，全局统一使用。 */
   parsePersonField(v) {
     const raw = String(v ?? "").replace(/／/g, "/").trim();
-    if (!raw) return { name: "", employeeNo: "", raw: "", nameOk: false, noOk: false, ok: false };
+    if (!raw) return { name: "", employeeNo: "", raw: "", nameOk: false, noOk: false, ok: false, msg: "" };
     const parts = raw.split("/");
     if (parts.length !== 2) {
       const fallback = Utils.personIdentityFromText(raw);
-      return { name: fallback.name || "", employeeNo: fallback.employeeNo || "", raw, nameOk: false, noOk: false, ok: false };
+      return { name: fallback.name || "", employeeNo: fallback.employeeNo || "", raw, nameOk: false, noOk: false, ok: false, msg: "人员格式必须为「姓名/工号」" };
     }
     const name = String(parts[0] || "").trim();
     const employeeNo = Utils.normalizeDigits(parts[1] || "");
     // 姓名校验：只能包含中文汉字和英文字母
-    const nameOk = /^[\u4e00-\u9fa5A-Za-z ]+$/.test(name) && name.length > 0;
+    if (!name) return { name: "", employeeNo, raw, nameOk: false, noOk: /^[A-Za-z0-9]+$/.test(employeeNo) && employeeNo.length > 0, ok: false, msg: "姓名不能为空" };
+    if (!/^[一-龥A-Za-z ]+$/.test(name)) return { name, employeeNo, raw, nameOk: false, noOk: /^[A-Za-z0-9]+$/.test(employeeNo) && employeeNo.length > 0, ok: false, msg: "姓名只能包含汉字或字母" };
     // 工号校验：只能包含数字或数字和英文字母的组合，不能有汉字
-    const noOk = /^[A-Za-z0-9]+$/.test(employeeNo) && employeeNo.length > 0;
-    return { name, employeeNo, raw, nameOk, noOk, ok: nameOk && noOk };
+    if (!employeeNo) return { name, employeeNo, raw, nameOk: true, noOk: false, ok: false, msg: "工号不能为空，人员必须按「姓名/工号」填写" };
+    if (!/^[A-Za-z0-9]+$/.test(employeeNo)) return { name, employeeNo, raw, nameOk: true, noOk: false, ok: false, msg: "工号只能包含字母或数字" };
+    return { name, employeeNo, raw, nameOk: true, noOk: true, ok: true, msg: "" };
   },
 
   normalizeImportHeader(v) {
@@ -307,7 +311,7 @@ const Utils = {
 
   /** 解析样机导入CSV */
   parseSampleImportCsv(text) {
-    const lines = String(text || "").replace(/^\ufeff/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const lines = String(text || "").replace(/^﻿/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     const matrix = lines.map(line => Utils.parseCsvLine(line));
     return Utils.parseSampleImportMatrix(matrix, "CSV文件");
   },
@@ -463,6 +467,6 @@ const Utils = {
   /** 下载CSV */
   downloadCsv(rows, filename) {
     const csv = rows.map(r => r.map(v => Utils.csvEscape(v)).join(",")).join("\n");
-    Utils.downloadText("\ufeff" + csv, filename, "text/csv;charset=utf-8");
+    Utils.downloadText("﻿" + csv, filename, "text/csv;charset=utf-8");
   }
 };

@@ -26,7 +26,7 @@ Object.assign(app, {
     const sampleIds = this.getSelectedTaskSampleIds(inputName);
     const required = this.getProgressRequiredSampleCount(s, progress);
     const isGlobalCompact = hint.classList.contains('sample-limit-global');
-    hint.classList.remove('warn', 'bad');
+    hint.classList.remove('warn', 'bad', 'full');
     if (required === null) {
       hint.classList.add('bad');
       if (isGlobalCompact) {
@@ -40,8 +40,9 @@ Object.assign(app, {
     const countText = `${sampleIds.length}/${required}`;
     if (sampleIds.length === required) {
       if (isGlobalCompact) {
-        hint.title = `样机已满足：需 ${required} 台，已选 ${sampleIds.length} 台。`;
-        hint.innerHTML = `<span class="sample-limit-count">${countText}</span>`;
+        hint.classList.add('full');
+        hint.title = `样机已选满：需 ${required} 台，已选 ${sampleIds.length} 台。未勾选的样机已禁用。`;
+        hint.innerHTML = `<span class="sample-limit-count">${countText} 已选满</span>`;
       } else {
         hint.innerHTML = `样机已满足：需 ${required} 台，已选 ${sampleIds.length} 台。<span class="sample-limit-count">OK</span>`;
       }
@@ -69,9 +70,22 @@ Object.assign(app, {
     const progress = s?.progress?.find(x => x.id === document.getElementById(progressSelectId)?.value);
     const required = this.getProgressRequiredSampleCount(s, progress);
     let sampleIds = this.getSelectedTaskSampleIds(inputName);
-    if (required !== null && checkboxEl?.checked && sampleIds.length > required) {
+    // 超出时静默取消勾选（不再弹 alert）
+    if (required !== null && sampleIds.length > required && checkboxEl?.checked) {
       checkboxEl.checked = false;
-      alert(`该测试项要求 ${required} 台样机。`);
+      sampleIds = this.getSelectedTaskSampleIds(inputName);
+    }
+    // 选满后禁用所有未勾选项；未满时恢复
+    const allCheckboxes = [...document.querySelectorAll(`input[name='${inputName}']`)];
+    if (required !== null) {
+      if (sampleIds.length >= required) {
+        allCheckboxes.forEach(cb => { if (!cb.checked) cb.disabled = true; });
+      } else {
+        allCheckboxes.forEach(cb => {
+          const row = cb.closest('.dispatch-sample-row');
+          if (row && !row.classList.contains('is-disabled')) cb.disabled = false;
+        });
+      }
     }
     this.updateTaskSampleLimitUI(progressSelectId, inputName, hintId);
   },

@@ -17,6 +17,28 @@
 .grid-small { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px }
 .project-grid { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)) }
 
+/* ---- Add Card (统一新增入口卡片) ---- */
+.add-card {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  min-height: 150px;
+  border: 2px dashed var(--border) !important;
+  background: var(--card); cursor: pointer;
+  transition: border-color .2s, background .2s, box-shadow .2s;
+}
+.add-card:hover {
+  border-color: var(--primary) !important;
+  background: #f8fafc;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .08);
+}
+.add-card-plus {
+  font-size: 36px; line-height: 1; color: var(--primary);
+  margin-bottom: 8px; font-weight: 300;
+}
+.add-card-label {
+  font-size: 14px; font-weight: 700; color: var(--primary);
+}
+
 /* ---- Buttons ---- */
 .btn {
   border: 0; background: var(--primary); color: #fff;
@@ -109,6 +131,13 @@ label { display: block; font-size: 12px; color: #4b5563; margin-bottom: 5px; fon
 .form-row-three { grid-template-columns: repeat(3, minmax(0, 1fr)) }
 .sample-id-row { grid-template-columns: repeat(3, minmax(0, 1fr)) }
 .form-group { margin-bottom: 12px }
+.form-hint {
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 400;
+}
 
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff }
@@ -132,7 +161,13 @@ tr:hover td { background: #fcfcfd }
   background: #fff; border-radius: 18px; padding: 20px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, .22);
 }
-.modal-sm { width: min(480px, 90vw) }
+.modal-sm { width: min(420px, 90vw) }
+.modal-sm .modal-header { padding: 14px 20px 6px }
+.modal-sm .modal-header h3 { font-size: 17px }
+.modal-sm .modal-body { padding: 12px 20px }
+.modal-sm .modal-footer { padding: 10px 20px 14px }
+.modal-sm .form-group { margin-bottom: 6px }
+.modal-sm .modal-field-title { font-size: 13px; margin-bottom: 5px }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px }
 .modal-title { font-size: 18px; font-weight: 900 }
 .close { background: #f1f5f9; color: #111827; border: 1px solid var(--border) }

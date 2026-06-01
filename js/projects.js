@@ -20,8 +20,9 @@ Object.assign(app, {
             <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.deleteProject('${p.id}')" title="删除项目">🗑</button>
           </div>
         `).join("")}
-        <div class="card" style="display:flex;align-items:center;justify-content:center;min-height:150px">
-          <button class="btn" onclick="app.addProject()">+ 新建项目</button>
+        <div class="card add-card" onclick="app.addProject()">
+          <div class="add-card-plus">+</div>
+          <div class="add-card-label">新建项目</div>
         </div>
       </div>
     `;
@@ -37,23 +38,38 @@ Object.assign(app, {
 
   addProject() {
     this.showModal("新建项目", `
-      <div class="form-row">
-        <div class="form-group"><label>项目名称</label><input id="pName"></div>
-        <div class="form-group"><label>项目编号</label><input id="pCode"></div>
+      <div style="display:flex;flex-direction:column;gap:20px">
+        <div class="form-row" style="gap:16px">
+          <div class="form-group" style="margin-bottom:0"><label>项目名称</label><input id="pName" placeholder="请输入项目名称"></div>
+          <div class="form-group" style="margin-bottom:0"><label>项目编号</label><input id="pCode" placeholder="请输入项目编号"></div>
+        </div>
+        <div class="form-group" style="margin-bottom:0"><label>负责人</label><input id="pOwner" placeholder="姓名/工号"></div>
       </div>
-      <div class="form-group"><label>负责人</label><input id="pOwner"></div>
     `, () => {
       this.clearFieldValidationMarks();
       const nameEl = document.getElementById("pName");
       const name = nameEl.value.trim();
       if (!name) { this.markFieldInvalid(nameEl, "项目名称不能为空"); return true; }
       if (this.projectNameExists(name)) { this.markFieldInvalid(nameEl, `项目名称"${name}"已存在，不能重复创建。`); return true; }
+      const ownerEl = document.getElementById("pOwner");
+      const ownerRaw = ownerEl.value.trim();
+      let ownerText = "";
+      let ownerParsed = null;
+      if (ownerRaw) {
+        ownerParsed = Utils.parsePersonField(ownerRaw);
+        if (!ownerParsed.ok) { this.markFieldInvalid(ownerEl, ownerParsed.msg); return true; }
+        ownerText = Utils.personText(ownerParsed.name, ownerParsed.employeeNo);
+      }
       const p = {
         id: Utils.id("proj_"), name,
         code: document.getElementById("pCode").value.trim(),
-        owner: document.getElementById("pOwner").value.trim(),
-        createdAt: Utils.now(), stages: []
+        owner: ownerText,
+        createdAt: Utils.now(), stages: [], members: []
       };
+      // 项目负责人自动加入人员配置
+      if (ownerParsed && ownerParsed.ok) {
+        p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, active: true });
+      }
       this.data.projects.push(p);
       this.view.selectedProjectId = p.id;
       this.view.selectedStageId = null;
@@ -75,9 +91,26 @@ Object.assign(app, {
       const name = nameEl.value.trim();
       if (!name) { this.markFieldInvalid(nameEl, "项目名称不能为空"); return true; }
       if (this.projectNameExists(name, p.id)) { this.markFieldInvalid(nameEl, `项目名称"${name}"已存在，不能重复命名。`); return true; }
+      const ownerEl = document.getElementById("pOwner");
+      const ownerRaw = ownerEl.value.trim();
+      let ownerText = "";
+      let ownerParsed = null;
+      if (ownerRaw) {
+        ownerParsed = Utils.parsePersonField(ownerRaw);
+        if (!ownerParsed.ok) { this.markFieldInvalid(ownerEl, ownerParsed.msg); return true; }
+        ownerText = Utils.personText(ownerParsed.name, ownerParsed.employeeNo);
+      }
       p.name = name;
       p.code = document.getElementById("pCode").value.trim();
-      p.owner = document.getElementById("pOwner").value.trim();
+      p.owner = ownerText;
+      // 项目负责人自动加入人员配置（如尚未在名单中）
+      if (ownerParsed && ownerParsed.ok) {
+        if (!Array.isArray(p.members)) p.members = [];
+        const key = Utils.memberIdentityKey(ownerParsed.name, ownerParsed.employeeNo);
+        if (!p.members.some(m => Utils.memberIdentityKey(m.name, m.employeeNo) === key)) {
+          p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, active: true });
+        }
+      }
       this.save();
       this.render();
     }, "确认", { className: "modal-sm" });

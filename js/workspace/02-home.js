@@ -93,9 +93,9 @@ Object.assign(app, {
       </div>`;
     }).join("");
     const addStageCard = `
-      <div class="stage-summary-add-card" onclick="app.addStage()" title="新增阶段">
-        <span class="row-action-btn row-add-btn"></span>
-        <span>新增阶段</span>
+      <div class="card add-card" onclick="app.addStage()" title="新增阶段">
+        <div class="add-card-plus">+</div>
+        <div class="add-card-label">新增阶段</div>
       </div>`;
 
     document.getElementById("content").innerHTML = `
@@ -134,10 +134,10 @@ Object.assign(app, {
         const stat = this.memberWorkStats(project, m);
         const identity = Utils.personText(m.name, m.employeeNo);
         return `
-          <div class="project-member-card">
+          <div class="project-member-card" ondblclick="app.editProjectMember('${m.id}')">
             <div class="project-member-identity">${Utils.esc(identity || "-")}</div>
             <div class="project-member-stat">${stat.tasks} 项 / ${stat.hours.toFixed(1)}h · 挂账 ${stat.ownedSamples} 台</div>
-            <button class="btn btn-sm btn-outline" onclick="app.removeProjectMember('${m.id}')">移出</button>
+            <span class="project-member-remove" onclick="event.stopPropagation();app.removeProjectMember('${m.id}')" title="移出人员">🗑</span>
           </div>`;
       }).join("");
 
@@ -155,10 +155,10 @@ Object.assign(app, {
         <div class="project-members-body">
           <div class="project-members-grid">
             ${rows}
-            <button type="button" class="project-member-add-card" onclick="app.addProjectMember()">
-              <span class="row-action-btn row-add-btn"></span>
-              <span>新增人员</span>
-            </button>
+            <div class="card add-card" onclick="app.addProjectMember()">
+              <div class="add-card-plus">+</div>
+              <div class="add-card-label">新增人员</div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -169,9 +169,9 @@ Object.assign(app, {
     const collapsed = this.isCollapsed('locations');
     const locations = project.locations.filter(Boolean);
     const cards = locations.map((loc, idx) => `
-      <div class="project-location-card">
+      <div class="project-location-card" ondblclick="app.editProjectLocation(${idx})">
         <b>${Utils.esc(loc)}</b>
-        <button class="btn btn-sm btn-outline" onclick="app.removeProjectLocation(${idx})">删除</button>
+        <span class="project-location-remove" onclick="event.stopPropagation();app.removeProjectLocation(${idx})" title="删除位置">🗑</span>
       </div>`).join("");
     return `
       <div class="project-config-section project-locations-section ${collapsed ? 'is-collapsed' : ''}">
@@ -183,10 +183,10 @@ Object.assign(app, {
         <div class="project-locations-body">
           <div class="project-locations-grid">
             ${cards || ''}
-            <button type="button" class="project-member-add-card" onclick="app.addProjectLocation()">
-              <span class="row-action-btn row-add-btn"></span>
-              <span>新增位置</span>
-            </button>
+            <div class="card add-card" onclick="app.addProjectLocation()">
+              <div class="add-card-plus">+</div>
+              <div class="add-card-label">新增位置</div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -206,9 +206,27 @@ Object.assign(app, {
       if (p.locations.some(x => String(x).trim() === name)) { this.markFieldInvalid(el, "该位置已存在。"); return true; }
       p.locations.push(name);
       this.save(); this.render();
-    });
+    }, "确认", { className: "modal-sm" });
   },
 
+  editProjectLocation(index) {
+    const p = this.currentProject();
+    if (!p || !Array.isArray(p.locations) || !p.locations[index]) return;
+    const currentName = p.locations[index];
+    this.showModal("编辑项目位置", `
+      <div class="form-group"><label class="req modal-field-title">位置名称</label><input id="projectLocationName" value="${Utils.esc(currentName)}" placeholder="如：溪村-D8-B1F-A08 / 武汉-A3-1F-03R"></div>
+    `, () => {
+      this.clearFieldValidationMarks();
+      const el = document.getElementById("projectLocationName");
+      const name = el.value.trim();
+      if (!name) { this.markFieldInvalid(el, "位置名称不能为空"); return true; }
+      if (name !== currentName && p.locations.some((x, i) => i !== index && String(x).trim() === name)) {
+        this.markFieldInvalid(el, "该位置已存在。"); return true;
+      }
+      p.locations[index] = name;
+      this.save(); this.render();
+    }, "确认", { className: "modal-sm" });
+  },
   removeProjectLocation(index) {
     const p = this.currentProject();
     if (!p || !Array.isArray(p.locations) || !p.locations[index]) return;
@@ -228,15 +246,7 @@ Object.assign(app, {
   validateProjectMember(name, employeeNo = "") {
     const text = String(employeeNo || "").trim() ? Utils.personText(name, employeeNo) : String(name || "").trim();
     const parsed = Utils.parsePersonField(text);
-    const cleanName = parsed.name;
-    const cleanNo = parsed.employeeNo;
-    if (!parsed.raw) return { ok: false, msg: "人员格式必须为「姓名/工号」。" };
-    if (!cleanName) return { ok: false, msg: "姓名不能为空" };
-    if (!/^[一-龥A-Za-z ]+$/.test(cleanName)) return { ok: false, msg: "姓名只能包含汉字或字母" };
-    if (!cleanNo) return { ok: false, msg: "工号不能为空，人员必须按「姓名/工号」填写。" };
-    if (!/^[A-Za-z0-9]+$/.test(cleanNo)) return { ok: false, msg: "工号只能包含字母或数字" };
-    if (!parsed.ok) return { ok: false, msg: "人员格式必须为「姓名/工号」，两个字段都必须存在。" };
-    return { ok: true, name: cleanName, employeeNo: cleanNo };
+    return { ok: parsed.ok, name: parsed.name, employeeNo: parsed.employeeNo, msg: parsed.msg };
   },
   findProjectMemberByIdentity(project, name, employeeNo) {
     const key = Utils.memberIdentityKey(name, employeeNo);
@@ -278,7 +288,34 @@ Object.assign(app, {
         p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, active: true });
       }
       this.save(); this.render();
-    });
+    }, "确认", { className: "modal-sm" });
+  },
+  editProjectMember(memberId) {
+    const p = this.currentProject();
+    const m = p?.members?.find(x => x.id === memberId);
+    if (!m) return;
+    const currentIdentity = Utils.personText(m.name, m.employeeNo);
+    this.showModal("编辑项目人员", `
+      <div class="form-group"><label class="req modal-field-title">人员</label><input id="memberText" value="${Utils.esc(currentIdentity)}" placeholder="姓名/工号，如：张三/00609513"></div>
+      <div class="form-hint">人员必须按「姓名/工号」填写，姓名和工号都不能为空。</div>
+    `, () => {
+      this.clearFieldValidationMarks();
+      const memberEl = document.getElementById("memberText");
+      const check = this.validateProjectMember(memberEl.value);
+      if (!check.ok) { this.markFieldInvalid(memberEl, check.msg); return true; }
+      if (this.hasProjectMemberNameConflict(p, check.name, check.employeeNo, m.id)) {
+        this.markFieldInvalid(memberEl, "项目中已存在同名人员。请为同名人员填写不同工号以区分。");
+        return true;
+      }
+      const existingOther = this.findProjectMemberByIdentity(p, check.name, check.employeeNo);
+      if (existingOther && existingOther.id !== m.id && existingOther.active !== false) {
+        this.markFieldInvalid(memberEl, "该人员已在项目人员名单中，不能重复。");
+        return true;
+      }
+      m.name = check.name;
+      m.employeeNo = check.employeeNo;
+      this.save(); this.render();
+    }, "确认", { className: "modal-sm" });
   },
   downloadProjectMembersTemplate() {
     Utils.downloadCsv([

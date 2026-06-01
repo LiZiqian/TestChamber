@@ -8,6 +8,9 @@ Object.assign(app, {
   render() {
     this.renderNav();
     this.renderHeader();
+    // 全局页脚默认隐藏，各页面按需开启
+    const ft = document.getElementById("pageFooter");
+    if (ft) ft.style.display = "none";
     const fn = {
       home: this.renderHome,
       projects: this.renderProjects,
@@ -65,25 +68,69 @@ Object.assign(app, {
   },
 
   renderNav() {
-    const groups = [
-      {
-        title: "", items: [
-          { id: "home", icon: "🏠", label: "首页" },
-          { id: "projects", icon: "📁", label: "项目管理" },
-          { id: "samples", icon: "📦", label: "样机档案池" },
-          { id: "devices", icon: "🔬", label: "测试设备仓库" }
-        ]
-      }
-    ];
+    const projects = this.data?.projects || [];
+    const pools = this.data?.sampleLibrary?.categories || [];
+    // 默认展开（首次加载 _navExpanded 为 undefined 时）
+    if (!this.view._navExpanded) this.view._navExpanded = { projects: true, samples: true };
+    const expanded = this.view._navExpanded;
     const isActive = (id) => {
       if (id === "projects" && this.view.module === "projectWorkspace") return true;
       return this.view.module === id;
     };
-    document.getElementById("nav").innerHTML = groups.map(g => `
-      <div class="nav-title">${g.title}</div>
-      ${g.items.map(item => `<div class="nav-item ${isActive(item.id) ? 'active' : ''}" title="${Utils.esc(item.label)}" onclick="app.go('${item.id}')"><span class="nav-icon">${item.icon}</span><span class="nav-label">${Utils.esc(item.label)}</span></div>`).join("")}
-    `).join("");
+
+    const items = [
+      { id: "home", icon: "🏠", label: "首页" },
+      { id: "projects", icon: "📁", label: "项目管理", sub: projects.map(p => ({
+          id: `proj_${p.id}`, label: p.name,
+          active: (this.view.module === "projectWorkspace" && this.view.selectedProjectId === p.id)
+        })) },
+      { id: "samples", icon: "📦", label: "样机档案池", sub: pools.map(c => ({
+          id: `cat_${c.id}`, label: c.name,
+          active: (this.view.module === "samples" && this.view.selectedCategoryId === c.id)
+        })) },
+      { id: "devices", icon: "🔬", label: "测试设备仓库" }
+    ];
+
+    document.getElementById("nav").innerHTML = items.map(item => {
+      const hasSub = item.sub && item.sub.length > 0;
+      const isExpanded = expanded[item.id] === true;
+      const subHtml = hasSub ? `
+        <div class="nav-sub ${isExpanded ? 'open' : ''}">
+          ${item.sub.map(s => `<div class="nav-sub-item ${s.active ? 'active' : ''}" title="${Utils.esc(s.label)}" onclick="event.stopPropagation();app._navGoSub('${s.id}')">${Utils.esc(s.label)}</div>`).join("")}
+        </div>` : "";
+      const toggleBtn = hasSub ? `<span class="nav-toggle ${isExpanded ? 'expanded' : ''}" title="${isExpanded ? '折叠' : '展开'}子目录" onclick="event.stopPropagation();app._navToggle('${item.id}')"></span>` : "";
+      return `
+        <div class="nav-item ${isActive(item.id) ? 'active' : ''} ${hasSub ? 'has-sub' : ''}" title="${Utils.esc(item.label)}">
+          <span class="nav-item-main" onclick="app.go('${item.id}')"><span class="nav-icon">${item.icon}</span><span class="nav-label">${Utils.esc(item.label)}</span></span>
+          ${toggleBtn}
+        </div>
+        ${subHtml}`;
+    }).join("");
     this.applySidebarState();
+  },
+
+  _navToggle(id) {
+    if (!this.view._navExpanded) this.view._navExpanded = {};
+    this.view._navExpanded[id] = !this.view._navExpanded[id];
+    this.save({ silent: true });
+    this.renderNav();
+  },
+
+  _navGoSub(subId) {
+    const sep = subId.indexOf("_");
+    const type = subId.slice(0, sep);
+    const id = subId.slice(sep + 1);
+    if (type === "proj") {
+      this.view.selectedProjectId = id;
+      const p = this.currentProject();
+      this.view.selectedStageId = p?.stages?.[0]?.id || null;
+      this.view.module = "projectWorkspace";
+    } else if (type === "cat") {
+      this.view.selectedCategoryId = id;
+      this.view.module = "samples";
+    }
+    this.save();
+    this.render();
   },
 
   renderHeader() {

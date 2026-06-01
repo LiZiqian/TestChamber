@@ -367,13 +367,13 @@ Object.assign(app, {
         </div>`;
     return `
       <div class="form-group">
-        <label class="req">执行人<span class="req-star">*</span></label>
+        <label>执行人</label>
         ${this.projectMemberSelectHtml("tcPlanOwner", t?.owner || progress.owner || "", "请选择执行人")}
         ${memberMissingHint}
       </div>
       <div class="form-row">
-        <div class="form-group"><label class="req">计划开始时间<span class="req-star">*</span></label><input type="date" id="tcPlanStartDate" value="${Utils.esc(planStartDate)}"></div>
-        <div class="form-group"><label class="req">计划终止时间<span class="req-star">*</span></label><input type="date" id="tcPlanEndDate" value="${Utils.esc(planEndDate)}"></div>
+        <div class="form-group"><label>计划开始时间</label><input type="date" id="tcPlanStartDate" value="${Utils.esc(planStartDate)}"></div>
+        <div class="form-group"><label>计划终止时间</label><input type="date" id="tcPlanEndDate" value="${Utils.esc(planEndDate)}"></div>
       </div>
 `;
   },
@@ -386,7 +386,7 @@ Object.assign(app, {
       <input type="hidden" id="tcSampleProgress" value="${Utils.esc(progress.id)}">
       <div class="form-group task-sample-config-group">
         <div class="task-sample-label-row task-sample-label-row-compact">
-          <label class="req">选择样机 <span class="req-star">*</span></label>
+          <label>任务样机数：</label>
           <div id="tcSampleLimitHint" class="sample-limit-hint sample-limit-global" title="当前已选 / 任务要求样机数"></div>
         </div>
         <div class="dispatch-sample-select task-config-sample-scroll">${sampleCards}</div>
@@ -470,7 +470,7 @@ Object.assign(app, {
     const s = p?.stages.find(x => x.id === stageId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
-    if (!p || !s || !progress) return;
+    if (!p || !s || !progress) return true;
     // 读取 plan 字段
     const owner = document.getElementById("tcPlanOwner")?.value.trim() || "";
     const start = document.getElementById("tcPlanStartDate")?.value || "";
@@ -480,15 +480,22 @@ Object.assign(app, {
     const check = this.validateTaskSampleSelection(progress, sampleIds, "样机分配");
     // 验证 plan
     this.clearFieldValidationMarks();
-    if (!owner) { this.markFieldInvalid(document.getElementById("tcPlanOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return; }
+    if (!owner) { this.markFieldInvalid(document.getElementById("tcPlanOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return true; }
     if (!start || !end) {
       if (!start) this.markFieldInvalid(document.getElementById("tcPlanStartDate"), "必须填写计划开始时间");
       if (!end) this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "必须填写计划终止时间");
-      return;
+      return true;
     }
-    if (start > end) { this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "计划终止时间不能早于计划开始时间"); return; }
-    // 验证 sample
-    if (!check.ok) { alert(check.msg); return; }
+    if (start > end) { this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "计划终止时间不能早于计划开始时间"); return true; }
+    // 验证 sample — 文字提示 + 自动切到样机 Tab，不弹 alert，不标红计数胶囊
+    if (!check.ok) {
+      const labelRow = document.querySelector(".task-sample-label-row-compact");
+      const exist = labelRow?.parentElement?.querySelector(".field-error");
+      if (exist) exist.remove();
+      if (labelRow) labelRow.insertAdjacentHTML("afterend", `<div class="field-error">${Utils.esc(check.msg)}</div>`);
+      this.switchTaskConfigTab("sample");
+      return true;
+    }
     // 变更检测（合并 payload）
     if (t && !this.isTaskChangePayloadChanged(t, { owner, planStartDate: start, planEndDate: end, sampleIds })) {
       Utils.toast("未检测到变更");

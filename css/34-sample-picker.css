@@ -19,8 +19,8 @@
 .dispatch-sample-body.open { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; align-items: start }
 .dispatch-sample-row {
   display: flex; gap: 10px; align-items: flex-start;
-  border: 1px solid var(--border); padding: 8px 10px;
-  border-radius: 8px; margin: 0; color: var(--text);
+  border: 1px solid var(--border); padding: 8px 12px;
+  border-radius: 9px; margin: 0; color: var(--text);
   background: #fff; font-size: 12px;
 }
 .dispatch-sample-row:hover { border-color: var(--primary) }
@@ -32,7 +32,7 @@
   gap: 3px;
 }
 .dispatch-sample-id {
-  font-weight: 700;
+  font-weight: 800;
   color: var(--primary);
   cursor: pointer;
   font-size: 13px;
@@ -69,15 +69,15 @@
   align-self: center;
 }
 .dispatch-sample-row.is-disabled {
-  opacity: .56;
+  opacity: .50;
   background: #f8fafc;
   cursor: not-allowed;
 }
 .dispatch-sample-row.is-disabled:hover { border-color: var(--border) }
 .dispatch-sample-row.is-disabled input { cursor: not-allowed }
 .dispatch-search-input {
-  width: 120px;
-  height: 30px;
+  width: 132px;
+  height: 28px;
   padding: 4px 8px;
   font-size: 12px;
   border: 1px solid var(--border);
@@ -97,14 +97,14 @@
   outline: none;
 }
 .dispatch-search-btn {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: #fff;
   color: #334155;
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;

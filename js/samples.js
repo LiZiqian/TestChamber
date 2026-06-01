@@ -12,25 +12,28 @@ Object.assign(app, {
 
     if (!cat) {
       const categoryCards = this.data.sampleLibrary.categories.map(c => `
-          <div class="card sample-card" style="padding-bottom:28px" onclick="app.openCategory('${c.id}')">
-            <h3 style="margin:0 0 8px">样机池：${Utils.esc(c.name)}<button type="button" class="sample-card-edit-btn" style="vertical-align:baseline;margin-left:4px" onclick="event.stopPropagation();app.editSampleCategory('${c.id}')" title="编辑样机池">✎</button></h3>
-            <div class="path">备注说明：${Utils.esc(c.description || "无")}</div>
+          <div class="card sample-card" onclick="app.openCategory('${c.id}')">
+            <div class="sample-pool-card-header">
+              <span class="sample-pool-card-name">${Utils.esc(c.name)}</span>
+              <button type="button" class="sample-card-edit-btn" onclick="event.stopPropagation();app.editSampleCategory('${c.id}')" title="编辑样机池">✎</button>
+            </div>
+            ${c.description ? `<div class="sample-pool-card-desc">${Utils.esc(c.description)}</div>` : ""}
             ${this.sampleCategoryStatsHtml(c)}
             <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.deleteSampleCategory('${c.id}')" title="档案销毁">🗑</button>
           </div>`).join("");
       content.innerHTML = `
         <div class="grid sample-category-grid">${categoryCards}
-          <button type="button" class="sample-category-add-card" onclick="app.addSampleCategory()">
-            <span class="sample-category-add-main">
-              <span class="row-action-btn row-add-btn"></span>
-              <span>新增样机池</span>
-            </span>
-            <span class="sample-category-add-help">
-              <span>1. 可创建一个样机档案池，每个样机池相互独立；</span>
-              <span>2. 样机池里的样机可被项目管理选中作为测试样机</span>
-            </span>
-          </button>
+          <div class="card add-card" onclick="app.addSampleCategory()">
+            <div class="add-card-plus">+</div>
+            <div class="add-card-label">新增样机池</div>
+          </div>
         </div>`;
+        // 页脚说明
+        const ft = document.getElementById("pageFooter");
+        if (ft) {
+          ft.style.display = "";
+          ft.innerHTML = `<p class="page-footer-text">📦 可创建多个样机池 &nbsp;&nbsp;|&nbsp;&nbsp; 每个 SN / IMEI / 主板SN 只能存在于一个样机池内 &nbsp;&nbsp;|&nbsp;&nbsp; 项目管理中的测试任务可自由地在多个样机池内选取</p>`;
+        }
       return;
     }
 
@@ -53,6 +56,10 @@ Object.assign(app, {
       && (!this.view.sampleOwnerFilter || (s.owner || "").includes(this.view.sampleOwnerFilter))
       && (!this.view.sampleBorrowerFilter || (s.borrower || "").includes(this.view.sampleBorrowerFilter))
     );
+
+    // 进入样机池内部时隐藏页脚
+    const ft2 = document.getElementById("pageFooter");
+    if (ft2) ft2.style.display = "none";
 
     content.innerHTML = `
       <div class="card sample-pool-head">
@@ -85,10 +92,10 @@ Object.assign(app, {
         <span class="path">显示 ${samples.length} / ${(cat.samples || []).length} 台</span>
       </div>
       <div class="grid-small sample-pool-grid">
-        <button type="button" class="sample-add-card" onclick="app.addSample('${cat.id}')">
-          <span class="row-action-btn row-add-btn"></span>
-          <span>新增样机</span>
-        </button>
+        <div class="card add-card" onclick="app.addSample('${cat.id}')">
+          <div class="add-card-plus">+</div>
+          <div class="add-card-label">新增样机</div>
+        </div>
         ${samples.length ? samples.map(s => this.sampleCardHtml(s)).join("") : `<div class="empty sample-empty-hint">暂无样机</div>`}
       </div>`;
   },
@@ -123,35 +130,22 @@ Object.assign(app, {
   sampleCategoryStatsHtml(category) {
     const samples = category.samples || [];
     const count = status => samples.filter(s => this.sampleEffectiveStatus(s) === status).length;
-    const items = this.constants.sampleStatuses.map(status => ({
-        label: status,
-        value: count(status),
-        cls: this.sampleStatusStatClass(status)
-      }));
-    const faultCount = samples.filter(s => this.sampleHasProblem(s)).length;
-    items.push({ label: "故障", value: faultCount, cls: "stat-bad" });
-
-    // 第一行：测试中、闲置、在位等待
-    const row1 = items.filter(item => ["测试中", "闲置", "在位等待"].includes(item.label));
-    // 第二行：故障、取走分析、已退库
-    const row2Order = ["故障", "取走分析", "已退库"];
-    const row2 = row2Order.map(label => items.find(item => item.label === label)).filter(Boolean);
+    const chipClass = {
+      "测试中": "testing", "闲置": "idle", "在位等待": "waiting",
+      "已退库": "retired", "取走分析": "analysis"
+    };
+    const chips = this.constants.sampleStatuses
+      .filter(s => count(s) > 0)
+      .map(s => `<span class="sample-pool-chip ${chipClass[s] || ''}"><b>${count(s)}</b> ${Utils.esc(s)}</span>`);
+    const faultN = samples.filter(s => this.sampleHasProblem(s)).length;
+    if (faultN > 0) chips.push(`<span class="sample-pool-chip fault"><b>${faultN}</b> 故障</span>`);
 
     return `
-      <div class="sample-category-total">
+      <div class="sample-pool-card-total">
         <b>${samples.length}</b>
-        <span>总数</span>
+        <span>台样机</span>
       </div>
-      <div class="sample-category-stats">${row1.map(item => `
-        <div class="sample-category-stat ${item.cls}">
-          <b>${item.value}</b>
-          <span>${Utils.esc(item.label)}</span>
-        </div>`).join("")}</div>
-      <div class="sample-category-stats sample-category-stats-row2">${row2.map(item => `
-        <div class="sample-category-stat ${item.cls}">
-          <b>${item.value}</b>
-          <span>${Utils.esc(item.label)}</span>
-        </div>`).join("")}</div>`;
+      ${chips.length ? `<div class="sample-pool-card-chips">${chips.join("")}</div>` : ""}`;
   },
 
   sampleStatusStatClass(status) {
@@ -584,27 +578,29 @@ Object.assign(app, {
 
   addSample(catId) {
     this.showModal("新增样机", `
-      <div class="form-row sample-id-row">
-        <div class="form-group"><label>SN</label><input id="sampleSn" placeholder="请输入SN号"></div>
-        <div class="form-group"><label>IMEI</label><input id="sampleImei" placeholder="请输入IMEI号"></div>
-        <div class="form-group"><label>主板SN</label><input id="sampleBoardSn" placeholder="请输入主板SN"></div>
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="form-row sample-id-row" style="gap:14px">
+          <div class="form-group" style="margin-bottom:0"><label>SN</label><input id="sampleSn" placeholder="请输入SN号"></div>
+          <div class="form-group" style="margin-bottom:0"><label>IMEI</label><input id="sampleImei" placeholder="请输入IMEI号"></div>
+          <div class="form-group" style="margin-bottom:0"><label>主板SN</label><input id="sampleBoardSn" placeholder="请输入主板SN"></div>
+        </div>
+        <div class="form-row form-row-three" style="gap:14px">
+          <div class="form-group" style="margin-bottom:0"><label>阶段</label><input id="sampleStage" placeholder="如 V3-1"></div>
+          <div class="form-group" style="margin-bottom:0"><label>方案（制式/配置/型号/SKU）</label><input id="sampleConfig" placeholder="如 VXN-XX 或 SKU2"></div>
+          <div class="form-group" style="margin-bottom:0"><label>方案编号</label><input id="sampleSchemeNo" placeholder="如 B1 或 1"></div>
+        </div>
+        <div class="form-row" style="gap:14px">
+          <div class="form-group" style="margin-bottom:0"><label>样机状态</label><select id="sampleStatus">${this.constants.sampleStatuses.map(x => `<option ${x === "闲置" ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+          <div class="form-group" style="margin-bottom:0"><label>位置</label>${this.sampleLocationInputHtml("sampleLocation", "")}</div>
+        </div>
+        <div class="form-row" style="gap:14px">
+          <div class="form-group" style="margin-bottom:0"><label>挂账人</label>${this.samplePersonInputHtml("sampleOwner", "", "姓名/工号")}</div>
+          <div class="form-group" style="margin-bottom:0"><label>持有人/取走人</label>${this.samplePersonInputHtml("sampleBorrower", "", "姓名/工号")}</div>
+        </div>
+        <div class="form-group" style="margin-bottom:0"><label>其他备注信息</label><textarea id="sampleNotes" rows="1" style="min-height:38px;height:38px"></textarea></div>
+        <div class="sample-info-divider" style="margin:4px 0"></div>
+        <div class="form-group" style="margin-bottom:0"><label>样机问题表</label>${this.sampleProblemsHtml("sampleInitialResults", [])}</div>
       </div>
-      <div class="form-row form-row-three">
-        <div class="form-group"><label>阶段</label><input id="sampleStage" placeholder="如 V3-1"></div>
-        <div class="form-group"><label>方案（制式/配置/型号/SKU）</label><input id="sampleConfig" placeholder="如 VXN-XX 或 SKU2"></div>
-        <div class="form-group"><label>方案编号</label><input id="sampleSchemeNo" placeholder="如 B1 或 1"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>样机状态</label><select id="sampleStatus">${this.constants.sampleStatuses.map(x => `<option ${x === "闲置" ? "selected" : ""}>${x}</option>`).join("")}</select></div>
-        <div class="form-group"><label>位置</label>${this.sampleLocationInputHtml("sampleLocation", "")}</div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>挂账人</label>${this.samplePersonInputHtml("sampleOwner", "", "任意填写，如：张三/wx001")}</div>
-        <div class="form-group"><label>持有人/取走人</label>${this.samplePersonInputHtml("sampleBorrower", "", "任意填写，如：张三/wx001")}</div>
-      </div>
-      <div class="form-group"><label>其他备注信息</label><textarea id="sampleNotes" rows="2"></textarea></div>
-      <div class="sample-info-divider"></div>
-      <div class="form-group"><label>样机问题表</label>${this.sampleProblemsHtml("sampleInitialResults", [])}</div>
     `, () => {
       this.clearFieldValidationMarks();
       const category = this.data.sampleLibrary.categories.find(x => x.id === catId);
@@ -624,12 +620,36 @@ Object.assign(app, {
       const initialResults = problemRecords.map(x => x.description);
       const location = document.getElementById("sampleLocation").value.trim();
 
-      if (!Array.isArray(category.samples)) category.samples = [];
-      const duplicate = this.findDuplicateSampleInCategory(category, { sn, imei, boardSn });
-      if (duplicate) {
-        this.markFieldInvalid(document.getElementById("sampleSn"), `该样机池中已存在相同 SN/IMEI/主板SN 的样机：${this.sampleDisplayCode(duplicate)}`);
-        return true;
+      // 人员字段校验（复用全局 parsePersonField）
+      const ownerEl = document.getElementById("sampleOwner");
+      const borrowerEl = document.getElementById("sampleBorrower");
+      const ownerRaw = ownerEl.value.trim();
+      const borrowerRaw = borrowerEl?.value.trim() || "";
+      let ownerText = "", borrowerText = "";
+      if (ownerRaw) {
+        const parsed = Utils.parsePersonField(ownerRaw);
+        if (!parsed.ok) { this.markFieldInvalid(ownerEl, parsed.msg); return true; }
+        ownerText = Utils.personText(parsed.name, parsed.employeeNo);
       }
+      if (borrowerRaw) {
+        const parsed = Utils.parsePersonField(borrowerRaw);
+        if (!parsed.ok) { this.markFieldInvalid(borrowerEl, parsed.msg); return true; }
+        borrowerText = Utils.personText(parsed.name, parsed.employeeNo);
+      }
+
+      if (!Array.isArray(category.samples)) category.samples = [];
+
+      // 自校验：同一台样机的 SN/IMEI/主板SN 互不相同
+      const selfDup = this.validateSampleSelfDuplicate(sn, imei, boardSn, "sample");
+      if (selfDup) { this.markFieldInvalid(document.getElementById(selfDup.field), selfDup.msg); return true; }
+
+      // 池内查重
+      const inCat = this._checkInCategoryDuplicate(category, sn, imei, boardSn, "", "sample");
+      if (inCat) { this.markFieldInvalid(document.getElementById(inCat.fieldId), inCat.msg); return true; }
+
+      // 跨池查重
+      const global = this._checkGlobalDuplicate(sn, imei, boardSn, catId, "", "sample");
+      if (global) { this.markFieldInvalid(document.getElementById(global.fieldId), global.msg); return true; }
       category.samples.push(this.newSample(catId, sn || imei || boardSn, sn, imei, {
         stage,
         boardSn,
@@ -640,8 +660,8 @@ Object.assign(app, {
         problemRecords,
         status: document.getElementById("sampleStatus").value,
         location,
-        owner: document.getElementById("sampleOwner").value.trim(),
-        borrower: document.getElementById("sampleBorrower")?.value.trim() || "",
+        owner: ownerText,
+        borrower: borrowerText,
         notes: document.getElementById("sampleNotes").value.trim(),
         sourceType: "manual"
       }));
@@ -671,12 +691,15 @@ Object.assign(app, {
         if (!category) return;
         if (!Array.isArray(category.samples)) category.samples = [];
 
-        let imported = 0, skippedDup = 0;
+        let imported = 0, skippedDup = 0, skippedGlobal = 0;
         result.rows.forEach((row, idx) => {
           // 用 IMEI 或 SN 作为样机编号
           const sampleNo = row.sn || row.imei || row.boardSn || this.nextSampleNo(category, row.stage || "CSV", idx);
           const duplicate = this.findDuplicateSampleInCategory(category, row);
           if (duplicate) { skippedDup++; return; }
+          // 跨池唯一性检查
+          const globalDup = this.findDuplicateSampleGlobally(row, catId);
+          if (globalDup) { skippedGlobal++; return; }
           const location = String(row.location || "").trim();
           const initialResults = Utils.parseSampleIssueText(row.initialResult);
           const normalizedStatus = row.status === "已借出" || row.status === "借出" ? "取走分析" : row.status;
@@ -707,7 +730,8 @@ Object.assign(app, {
         const warn = result.invalidPersonCount
           ? `；其中 ${result.invalidPersonCount} 条挂账人字段格式不合法，已按空处理`
           : "";
-        Utils.toast(`已从模板导入 ${imported} 台样机${skippedDup ? `，跳过 ${skippedDup} 条重复样机` : ""}${warn}。`);
+        const globalWarn = skippedGlobal ? `，跳过 ${skippedGlobal} 条因跨池标识冲突` : "";
+        Utils.toast(`已从模板导入 ${imported} 台样机${skippedDup ? `，跳过 ${skippedDup} 条重复样机` : ""}${globalWarn}${warn}。`);
       };
       if (/\.xlsx$/i.test(file.name)) r.readAsArrayBuffer(file);
       else r.readAsText(file, "utf-8");
@@ -737,6 +761,84 @@ Object.assign(app, {
       const existing = this.sampleIdentifierSet(sample);
       return [...incoming].some(id => existing.has(id));
     }) || null;
+  },
+
+  /** 跨所有样机池查找 SN/IMEI/主板SN 重复的样机（每个标识只能在全局存在一份） */
+  findDuplicateSampleGlobally(row = {}, excludeCategoryId = "", excludeSampleId = "") {
+    const incoming = this.sampleIdentifierSet(row);
+    if (!incoming.size) return null;
+    for (const cat of (this.data.sampleLibrary.categories || [])) {
+      if (cat.id === excludeCategoryId) continue;
+      for (const sample of (cat.samples || [])) {
+        if (excludeSampleId && sample.id === excludeSampleId) continue;
+        const existing = this.sampleIdentifierSet(sample);
+        const conflict = [...incoming].find(id => existing.has(id));
+        if (conflict) return { category: cat, sample, conflictId: conflict };
+      }
+    }
+    return null;
+  },
+
+  /** 根据标识值定位到对应输入框 ID（内部用，不依赖 truthy 检查空串） */
+  _fieldIdByIdentifier(identValue, sn, imei, boardSn, idPrefix) {
+    const v = String(identValue || "").toLowerCase();
+    if (v && String(sn || "").toLowerCase() === v) return `${idPrefix}Sn`;
+    if (v && String(imei || "").toLowerCase() === v) return `${idPrefix}Imei`;
+    if (v && String(boardSn || "").toLowerCase() === v) return `${idPrefix}BoardSn`;
+    return `${idPrefix}Sn`;
+  },
+
+  /** 标识值对应的中文标签 */
+  _labelByIdentifier(identValue, sn, imei, boardSn) {
+    const v = String(identValue || "").toLowerCase();
+    if (v && String(sn || "").toLowerCase() === v) return "SN";
+    if (v && String(imei || "").toLowerCase() === v) return "IMEI";
+    if (v && String(boardSn || "").toLowerCase() === v) return "主板SN";
+    return "标识";
+  },
+
+  /** 同一台样机不允许 SN=IMEI 或 SN=主板SN 或 IMEI=主板SN（均非空时） */
+  validateSampleSelfDuplicate(sn, imei, boardSn, idPrefix) {
+    const a = String(sn || "").trim(), b = String(imei || "").trim(), c = String(boardSn || "").trim();
+    if (a && b && a.toLowerCase() === b.toLowerCase())
+      return { field: `${idPrefix}Imei`, msg: `IMEI 不能与 SN 相同，每台样机的各个身份标识必须互不相同。` };
+    if (a && c && a.toLowerCase() === c.toLowerCase())
+      return { field: `${idPrefix}BoardSn`, msg: `主板SN 不能与 SN 相同，每台样机的各个身份标识必须互不相同。` };
+    if (b && c && b.toLowerCase() === c.toLowerCase())
+      return { field: `${idPrefix}BoardSn`, msg: `主板SN 不能与 IMEI 相同，每台样机的各个身份标识必须互不相同。` };
+    return null;
+  },
+
+  /** 冲突值在已有样机中对应哪个标识类型（用于提示"与对方的 SN/IMEI/主板SN 相同"） */
+  _existingLabelForConflict(conflictVal, existingSample) {
+    return this._labelByIdentifier(conflictVal, existingSample.sn, existingSample.imei, existingSample.boardSn);
+  },
+
+  /** 池内重复：返回 { fieldId, msg } */
+  _checkInCategoryDuplicate(category, sn, imei, boardSn, excludeSampleId, idPrefix) {
+    const dupSample = this.findDuplicateSampleInCategory(category, { sn, imei, boardSn }, excludeSampleId);
+    if (!dupSample) return null;
+    const dupIds = this.sampleIdentifierSet({ sn, imei, boardSn });
+    const existIds = this.sampleIdentifierSet(dupSample);
+    const conflictVal = [...dupIds].find(id => existIds.has(id)) || "";
+    const existingLabel = this._existingLabelForConflict(conflictVal, dupSample);
+    return {
+      fieldId: this._fieldIdByIdentifier(conflictVal, sn, imei, boardSn, idPrefix),
+      msg: `于本样机池【${this.sampleDisplayCode(dupSample)}】的 ${existingLabel} 相同`
+    };
+  },
+
+  /** 跨池重复：返回 { fieldId, msg } */
+  _checkGlobalDuplicate(sn, imei, boardSn, excludeCategoryId, excludeSampleId, idPrefix) {
+    const globalDup = this.findDuplicateSampleGlobally({ sn, imei, boardSn }, excludeCategoryId, excludeSampleId);
+    if (!globalDup) return null;
+    const existingLabel = this._existingLabelForConflict(globalDup.conflictId, globalDup.sample);
+    const poolName = globalDup.category.name;
+    const code = this.sampleDisplayCode(globalDup.sample);
+    return {
+      fieldId: this._fieldIdByIdentifier(globalDup.conflictId, sn, imei, boardSn, idPrefix),
+      msg: `于「${poolName}」池【${code}】的 ${existingLabel} 相同`
+    };
   },
 
   downloadSampleTemplate() {
@@ -772,13 +874,24 @@ Object.assign(app, {
 
   validateSamplePersonInput(input) {
     if (!input) return;
+    // 先清除该字段之前的错误标记
+    input.classList.remove("is-invalid");
+    const group = input.closest(".form-group") || input.parentElement;
+    if (group) {
+      const err = group.querySelector(".field-error");
+      if (err) err.remove();
+    }
     const raw = String(input.value || "").trim();
     if (!raw) { input.value = ""; return; }
     const parsed = Utils.parsePersonField(raw);
     if (!parsed.ok) {
-      input.value = "";
-      Utils.toast(`"${raw}" 不是合法的"姓名/工号"格式，已清空（姓名仅汉字/字母，工号仅字母/数字）。`);
+      // 保留用户输入不清空，在输入框下方直接标红提示
+      input.classList.add("is-invalid");
+      if (group && !group.querySelector(".field-error")) {
+        group.insertAdjacentHTML("beforeend", `<div class="field-error">${Utils.esc(parsed.msg)}</div>`);
+      }
     } else {
+      // 合法时规范化为 姓名/工号
       input.value = Utils.personText(parsed.name, parsed.employeeNo);
     }
   },
@@ -809,18 +922,18 @@ Object.assign(app, {
 
   samplePhotosHtml(sample) {
     const photos = Array.isArray(sample?.photos) ? sample.photos : [];
-    return `<div class="sample-photo-actions">
-      <button type="button" class="btn" onclick="app.uploadSamplePhotos('${sample.id}')">上传图片</button>
-    </div>
-    <div class="sample-photo-desc">图片会存入当前样机档案，随样机一起保存和迁移。<br>可上传外观照片、失效分析图片、问题定位图片、测试过程图片及其他相关图片数据。</div>
-    <div class="sample-photo-grid">
+    return `<div class="sample-photo-grid">
+      <div class="sample-photo-card sample-photo-add" onclick="app.uploadSamplePhotos('${sample.id}')">
+        <div class="add-card-plus" style="font-size:28px;margin-bottom:6px">+</div>
+        <div class="add-card-label">上传图片</div>
+      </div>
       ${photos.length ? photos.map(photo => `
         <div class="sample-photo-card">
           <div class="sample-photo-thumb-wrap">
             <button type="button" class="sample-photo-thumb" onclick="app.previewSamplePhoto('${sample.id}','${photo.id}')" title="查看大图">
               <img src="${Utils.esc(photo.url || photo.dataUrl || "")}" alt="${Utils.esc(photo.name || "图片数据")}">
             </button>
-            <button type="button" class="sample-photo-delete-btn" onclick="event.stopPropagation();app.deleteSamplePhoto('${sample.id}','${photo.id}')" title="删除照片">✕</button>
+            <button type="button" class="sample-photo-delete-btn" onclick="event.stopPropagation();app.deleteSamplePhoto('${sample.id}','${photo.id}')" title="删除照片">🗑</button>
           </div>
           <div class="sample-photo-meta">
             <div class="sample-photo-name-row">
@@ -1026,32 +1139,56 @@ Object.assign(app, {
   sampleProblemsHtml(containerId, records = []) {
     const rows = records.length ? records : [{ description: "", source: "初检", taskLabel: "" }];
     return `<div id="${containerId}" class="sample-initial-results sample-problem-table">
-      ${rows.map(v => this.sampleProblemRowHtml(containerId, v)).join("")}
+      ${rows.map((v, i) => this.sampleProblemRowHtml(containerId, v, { isLast: i === rows.length - 1 })).join("")}
     </div>`;
   },
 
-  sampleProblemRowHtml(containerId, record = {}) {
+  sampleProblemRowHtml(containerId, record = {}, opts = {}) {
     const item = typeof record === "string" ? { description: record, source: "初检", taskLabel: "" } : record;
+    const addBtn = opts.isLast ? `<button type="button" class="sample-result-btn add" title="追加一行" onclick="app.addSampleProblemRow('${containerId}')">+</button>` : `<span class="sample-result-btn-spacer"></span>`;
     return `<div class="sample-initial-result-row">
       <input class="sample-problem-desc" value="${Utils.esc(item.description || "")}" placeholder="问题描述，如 有碎亮点">
       <input class="sample-problem-source" value="${Utils.esc(item.source || "初检")}" placeholder="来源">
       <input class="sample-problem-task" value="${Utils.esc(item.taskLabel || "")}" placeholder="关联任务项">
-      <button type="button" class="sample-result-btn add" title="增加一行" onclick="app.addSampleProblemRow('${containerId}')">+</button>
-      <button type="button" class="sample-result-btn remove" title="删除此行" onclick="app.removeSampleProblemRow(this)">-</button>
+      <button type="button" class="sample-result-btn remove" title="删除此行" onclick="app.removeSampleProblemRow(this)">🗑</button>
+      ${addBtn}
     </div>`;
   },
 
   addSampleProblemRow(containerId) {
-    document.getElementById(containerId)?.insertAdjacentHTML("beforeend", this.sampleProblemRowHtml(containerId, { description: "", source: "手动补录", taskLabel: "" }));
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    // 移除旧尾行的 + 按钮，换为占位
+    const prevLast = container.querySelector(".sample-result-btn.add");
+    if (prevLast) {
+      const spacer = document.createElement("span");
+      spacer.className = "sample-result-btn-spacer";
+      prevLast.replaceWith(spacer);
+    }
+    // 追加新行（带 + 按钮）
+    const total = container.querySelectorAll(".sample-initial-result-row").length;
+    container.insertAdjacentHTML("beforeend", this.sampleProblemRowHtml(containerId, { description: "", source: "手动补录", taskLabel: "" }, { isLast: true }));
   },
 
   removeSampleProblemRow(btn) {
     const row = btn.closest(".sample-initial-result-row");
     const wrap = btn.closest(".sample-initial-results");
     if (!row || !wrap) return;
-    if (wrap.querySelectorAll(".sample-initial-result-row").length <= 1) {
+    const allRows = wrap.querySelectorAll(".sample-initial-result-row");
+    if (allRows.length <= 1) {
       row.querySelectorAll("input").forEach(input => input.value = "");
       return;
+    }
+    // 如果删除的是尾行，先把 + 移到上一行
+    if (row.querySelector(".sample-result-btn.add")) {
+      const prevRow = row.previousElementSibling;
+      if (prevRow) {
+        const spacer = prevRow.querySelector(".sample-result-btn-spacer");
+        if (spacer) {
+          const addBtn = row.querySelector(".sample-result-btn.add");
+          spacer.replaceWith(addBtn.cloneNode(true));
+        }
+      }
     }
     row.remove();
   },
@@ -1118,6 +1255,16 @@ Object.assign(app, {
     document.querySelectorAll("[data-sample-archive-panel]").forEach(panel => {
       panel.classList.toggle("active", panel.dataset.sampleArchivePanel === tab);
     });
+    // 更新 footer 说明文字
+    const hints = {
+      info: "查看与编辑样机的基本档案，包括身份标识、当前状态、存放位置、人员归属及初检问题记录。",
+      history: "该样机参与过的全部测试任务记录，含测试结果、故障标记与状态变更日志。",
+      photos: "外观照片、失效分析图片、问题定位截图等。图片随样机档案一起保存，不随任务结束而清除。",
+      ct: "归档 CT 扫描图像、扫描批次、三维结构分析结论等工业 CT 数据。",
+      other: "预留扩展区。后续可在此定义更多样机维度的数据归档功能。"
+    };
+    const hint = document.getElementById("sampleArchiveFooterHint");
+    if (hint) hint.textContent = hints[tab] || "";
   },
 
   sampleTaskResultPhotos(task, sampleId) {
@@ -1294,44 +1441,46 @@ Object.assign(app, {
     if (!found) return;
     const readonly = !!options.readonly;
     const s = found.sample;
-    this.showModal("样机详情：" + this.sampleDisplayCode(s), `
+    this.showModal("样机详情 · " + this.sampleDisplayCode(s), `
       <div class="sample-summary-bar">
         <div class="sample-summary-card"><span class="sample-summary-label">档案编号</span><b class="sample-summary-value">${Utils.esc(this.sampleDisplayCode(s))}</b></div>
-        <div class="sample-summary-card"><span class="sample-summary-label">故障</span><b class="sample-summary-value" style="color:${this.sampleHasProblem(s) ? '#b91c1c' : '#15803d'}">${this.sampleHasProblem(s) ? '有' : '无'}</b></div>
-        <div class="sample-summary-card"><span class="sample-summary-label">当前状态</span><b class="sample-summary-value">${Utils.esc(this.sampleEffectiveStatus(s) || "-")}</b></div>
-        <div class="sample-summary-card"><span class="sample-summary-label">当前任务</span><b class="sample-summary-value">${Utils.esc(s.currentTestItem || "-")}</b></div>
+        <div class="sample-summary-card"><span class="sample-summary-label">故障</span><b class="sample-summary-value" style="color:${this.sampleHasProblem(s) ? '#dc2626' : '#16a34a'}">${this.sampleHasProblem(s) ? '有' : '无'}</b></div>
+        <div class="sample-summary-card"><span class="sample-summary-label">当前状态</span><b class="sample-summary-value">${Utils.esc(this.sampleEffectiveStatus(s) || "—")}</b></div>
+        <div class="sample-summary-card"><span class="sample-summary-label">当前任务</span><b class="sample-summary-value">${Utils.esc(s.currentTestItem || "—")}</b></div>
       </div>
       <div class="sample-archive-shell">
         <aside class="sample-archive-nav">
           <button type="button" class="active" data-sample-archive-tab="info" onclick="app.switchSampleArchiveTab('info')">样机信息</button>
           <button type="button" data-sample-archive-tab="history" onclick="app.switchSampleArchiveTab('history')">测试履历</button>
           <button type="button" data-sample-archive-tab="photos" onclick="app.switchSampleArchiveTab('photos')">图片数据</button>
-          <button type="button" data-sample-archive-tab="ct" onclick="app.switchSampleArchiveTab('ct')">CT数据</button>
+          <button type="button" data-sample-archive-tab="ct" onclick="app.switchSampleArchiveTab('ct')">CT三维数据</button>
           <button type="button" data-sample-archive-tab="other" onclick="app.switchSampleArchiveTab('other')">其他</button>
         </aside>
         <div class="sample-archive-content">
           <section class="sample-archive-panel active" data-sample-archive-panel="info">
-            <div class="form-row sample-id-row">
-              <div class="form-group"><label>SN</label><input id="sdSn" value="${Utils.esc(s.sn || "")}"></div>
-              <div class="form-group"><label>IMEI</label><input id="sdImei" value="${Utils.esc(s.imei || "")}" placeholder="IMEI号（选填）"></div>
-              <div class="form-group"><label>主板SN</label><input id="sdBoardSn" value="${Utils.esc(s.boardSn || "")}" placeholder="主板SN（选填）"></div>
+            <div style="display:flex;flex-direction:column;gap:16px">
+              <div class="form-row sample-id-row">
+                <div class="form-group" style="margin-bottom:0"><label>SN</label><input id="sdSn" value="${Utils.esc(s.sn || "")}" placeholder="序列号"></div>
+                <div class="form-group" style="margin-bottom:0"><label>IMEI</label><input id="sdImei" value="${Utils.esc(s.imei || "")}" placeholder="IMEI号"></div>
+                <div class="form-group" style="margin-bottom:0"><label>主板SN</label><input id="sdBoardSn" value="${Utils.esc(s.boardSn || "")}" placeholder="主板序列号"></div>
+              </div>
+              <div class="form-row form-row-three">
+                <div class="form-group" style="margin-bottom:0"><label>阶段</label><input id="sdStage" value="${Utils.esc(s.sourceStageName || "")}" placeholder="如 V3-1"></div>
+                <div class="form-group" style="margin-bottom:0"><label>方案</label><input id="sdConfig" value="${Utils.esc(s.config || s.model || "")}" placeholder="制式/配置/型号/SKU"></div>
+                <div class="form-group" style="margin-bottom:0"><label>方案编号</label><input id="sdSchemeNo" value="${Utils.esc(s.schemeNo || "")}" placeholder="如 B1"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-group" style="margin-bottom:0"><label>样机状态</label><select id="sdStatus">${this.constants.sampleStatuses.map(x => `<option ${s.status === x ? 'selected' : ''}>${x}</option>`).join("")}</select></div>
+                <div class="form-group" style="margin-bottom:0"><label>当前位置</label>${this.sampleLocationInputHtml("sdLocation", s.location || "")}</div>
+              </div>
+              <div class="form-row">
+                <div class="form-group" style="margin-bottom:0"><label>挂账人</label>${this.samplePersonInputHtml("sdOwner", s.owner || "", "姓名/工号")}</div>
+                <div class="form-group" style="margin-bottom:0"><label>持有人/取走人</label>${this.samplePersonInputHtml("sdBorrower", s.borrower || "", "姓名/工号")}</div>
+              </div>
+              <div class="form-group" style="margin-bottom:0"><label>其他备注信息</label><textarea id="sdNotes" rows="2" style="min-height:56px">${Utils.esc(s.notes || "")}</textarea></div>
+              <div class="sample-info-divider"></div>
+              <div class="form-group" style="margin-bottom:0"><label>样机问题表</label>${this.sampleProblemsHtml("sdInitialResults", this.sampleProblemRecords(s))}</div>
             </div>
-            <div class="form-row form-row-three">
-              <div class="form-group"><label>阶段</label><input id="sdStage" value="${Utils.esc(s.sourceStageName || "")}" placeholder="如 V3-1"></div>
-              <div class="form-group"><label>方案（制式/配置/型号/SKU）</label><input id="sdConfig" value="${Utils.esc(s.config || s.model || "")}" placeholder="如 VXN-XX 或 SKU2"></div>
-              <div class="form-group"><label>方案编号</label><input id="sdSchemeNo" value="${Utils.esc(s.schemeNo || "")}" placeholder="如 B1 或 1"></div>
-            </div>
-            <div class="form-row">
-              <div class="form-group"><label>样机状态</label><select id="sdStatus">${this.constants.sampleStatuses.map(x => `<option ${s.status === x ? 'selected' : ''}>${x}</option>`).join("")}</select></div>
-              <div class="form-group"><label>当前位置</label>${this.sampleLocationInputHtml("sdLocation", s.location || "")}</div>
-            </div>
-            <div class="form-row">
-              <div class="form-group"><label>挂账人(姓名/工号)</label>${this.samplePersonInputHtml("sdOwner", s.owner || "", "任意填写")}</div>
-              <div class="form-group"><label>持有人/取走人(姓名/工号)</label>${this.samplePersonInputHtml("sdBorrower", s.borrower || "", "任意填写")}</div>
-            </div>
-            <div class="form-group"><label>其他备注信息</label><textarea id="sdNotes" rows="2">${Utils.esc(s.notes || "")}</textarea></div>
-            <div class="sample-info-divider"></div>
-            <div class="form-group"><label>样机问题表</label>${this.sampleProblemsHtml("sdInitialResults", this.sampleProblemRecords(s))}</div>
           </section>
           <section class="sample-archive-panel" data-sample-archive-panel="photos">
             ${this.samplePhotosHtml(s)}
@@ -1362,14 +1511,35 @@ Object.assign(app, {
 
       const newIdentity = { sn: newSn, imei: newImei, boardSn: newBoardSn };
       const identityChanged = this.sampleIdentifierSignature(s) !== this.sampleIdentifierSignature(newIdentity);
+      // 自校验：同一台样机的 SN/IMEI/主板SN 互不相同
+      const selfDup = this.validateSampleSelfDuplicate(newSn, newImei, newBoardSn, "sd");
+      if (selfDup) { this.markFieldInvalid(document.getElementById(selfDup.field), selfDup.msg); return true; }
+
       if (identityChanged) {
-        const duplicate = this.findDuplicateSampleInCategory(found.category, newIdentity, s.id);
-        if (duplicate) {
-          this.markFieldInvalid(document.getElementById("sdSn"), `该样机池中已存在相同 SN/IMEI/主板SN 的样机：${this.sampleDisplayCode(duplicate)}`);
-          return true;
-        }
+        // 池内查重
+        const inCat = this._checkInCategoryDuplicate(found.category, newSn, newImei, newBoardSn, s.id, "sd");
+        if (inCat) { this.markFieldInvalid(document.getElementById(inCat.fieldId), inCat.msg); return true; }
+
+        // 跨池查重
+        const global = this._checkGlobalDuplicate(newSn, newImei, newBoardSn, found.category.id, s.id, "sd");
+        if (global) { this.markFieldInvalid(document.getElementById(global.fieldId), global.msg); return true; }
       }
       const location = document.getElementById("sdLocation").value.trim();
+
+      // 人员字段校验（复用全局 parsePersonField）
+      const sdOwnerEl = document.getElementById("sdOwner");
+      const sdBorrowerEl = document.getElementById("sdBorrower");
+      const sdOwnerRaw = sdOwnerEl.value.trim();
+      const sdBorrowerRaw = sdBorrowerEl?.value.trim() || "";
+      if (sdOwnerRaw) {
+        const parsed = Utils.parsePersonField(sdOwnerRaw);
+        if (!parsed.ok) { this.markFieldInvalid(sdOwnerEl, parsed.msg); return true; }
+      }
+      if (sdBorrowerRaw) {
+        const parsed = Utils.parsePersonField(sdBorrowerRaw);
+        if (!parsed.ok) { this.markFieldInvalid(sdBorrowerEl, parsed.msg); return true; }
+      }
+
       s.sn = newSn;
       s.imei = newImei;
       s.boardSn = newBoardSn;
@@ -1384,12 +1554,22 @@ Object.assign(app, {
       s.sourceSkuName = s.config || "Unknown";
       s.status = document.getElementById("sdStatus").value;
       s.location = location;
-      s.owner = document.getElementById("sdOwner").value.trim();
-      s.borrower = document.getElementById("sdBorrower")?.value.trim() || "";
+      // 人员字段已在上面校验通过，此处规范化为 姓名/工号
+      s.owner = sdOwnerRaw ? (() => { const p = Utils.parsePersonField(sdOwnerRaw); return Utils.personText(p.name, p.employeeNo); })() : "";
+      s.borrower = sdBorrowerRaw ? (() => { const p = Utils.parsePersonField(sdBorrowerRaw); return Utils.personText(p.name, p.employeeNo); })() : "";
       s.notes = document.getElementById("sdNotes").value.trim();
       s.updatedAt = Utils.now();
       this.save(); this.render();
     }, readonly ? "关闭" : "确认", { hideCancel: readonly, headerHint: readonly ? "只读查看，不能编辑" : "" });
+    // 在 footer 最左边注入 tab 说明文字
+    const footer = document.querySelector(".modal-footer");
+    if (footer && !document.getElementById("sampleArchiveFooterHint")) {
+      const hint = document.createElement("span");
+      hint.className = "modal-extra-action";
+      hint.id = "sampleArchiveFooterHint";
+      hint.textContent = "查看与编辑样机的基本档案，包括身份标识、当前状态、存放位置、人员归属及初检问题记录。";
+      footer.insertBefore(hint, footer.firstChild);
+    }
     document.querySelector(".modal")?.classList.add("sample-archive-modal");
     if (readonly) {
       const body = document.getElementById("modalBody");
