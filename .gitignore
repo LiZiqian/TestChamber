@@ -16,6 +16,12 @@ Thumbs.db
 # AI assistant settings (not for distribution)
 .claude/
 
+# Project docs (local only, not for distribution)
+docs/
+
+# Claude Code project instructions (local only)
+/CLAUDE.md
+
 # Catch stray database files
 *.sqlite
 *.db
