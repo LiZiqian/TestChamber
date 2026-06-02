@@ -16,13 +16,17 @@ import argparse
 import base64
 import copy
 import hashlib
+import io
 import json
 import mimetypes
 import re
+import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from email.parser import BytesParser
@@ -42,7 +46,11 @@ DB_PATH = DATA_DIR / "testchamber.sqlite"
 INDEX_PATH = ROOT_DIR / "index.html"
 MAX_UPLOAD_BYTES = 80 * 1024 * 1024
 
+DEPLOYMENT_FILE = DATA_DIR / "deployment.json"
 DB_LOCK = threading.Lock()
+
+# 导入预览缓存：{previewId: {data, expires_at}}
+_IMPORT_PREVIEWS: dict[str, dict] = {}
 
 
 def now_iso() -> str:
@@ -65,6 +73,28 @@ def ensure_dirs() -> None:
     DATA_DIR.mkdir(exist_ok=True)
     SAMPLE_DATA_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_DIR.mkdir(exist_ok=True)
+
+
+def load_deployment_id() -> str:
+    """读取部署身份文件，返回 deploymentId 或空字符串"""
+    try:
+        if DEPLOYMENT_FILE.is_file():
+            meta = json.loads(DEPLOYMENT_FILE.read_text(encoding="utf-8"))
+            return str(meta.get("deploymentId") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_deployment_id() -> str:
+    """确保部署身份文件存在，不存在则创建并返回新 ID"""
+    existing = load_deployment_id()
+    if existing:
+        return existing
+    did = f"deploy_{now_iso().replace('-','').replace(':','').replace('T','_')[:15]}_{uuid.uuid4().hex[:8]}"
+    meta = {"deploymentId": did, "createdAt": now_iso(), "name": "未命名部署"}
+    DEPLOYMENT_FILE.write_text(json_dumps(meta, pretty=True), encoding="utf-8")
+    return did
 
 
 def connect_db() -> sqlite3.Connection:
@@ -1448,6 +1478,7 @@ def compose_state(conn: sqlite3.Connection) -> tuple[dict, int, str]:
 
 def init_db() -> None:
     ensure_dirs()
+    ensure_deployment_id()
     with DB_LOCK:
         with connect_db() as conn:
             ensure_schema(conn)
@@ -1484,7 +1515,836 @@ def get_state() -> tuple[dict, int, str]:
             return compose_state(conn)
 
 
-# 任务"已完成/不占用"状态集合（与前端 taskFlowStatus() 返回的完成状态对齐）
+# ── 导出/导入 bundle ────────────────────────────────────────────
+
+def _preview_id() -> str:
+    return f"pv_{uuid.uuid4().hex[:12]}"
+
+
+def _cleanup_expired_previews() -> None:
+    """清理过期的预览缓存（超过30分钟）"""
+    cutoff = time.time() - 1800
+    expired = [k for k, v in _IMPORT_PREVIEWS.items() if v.get("_ts", 0) < cutoff]
+    for k in expired:
+        _cleanup_preview_temp(k)
+        del _IMPORT_PREVIEWS[k]
+
+
+def _cleanup_preview_temp(preview_id: str) -> None:
+    entry = _IMPORT_PREVIEWS.get(preview_id)
+    if not entry:
+        return
+    tmp_dir = entry.get("_tmp_dir")
+    if tmp_dir and Path(tmp_dir).is_dir():
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _content_hash(data: object) -> str:
+    return hashlib.sha256(stable_json(data).encode("utf-8")).hexdigest()[:16]
+
+
+def _entity_label_for_conflict(entity: str, item: dict) -> str:
+    """生成冲突项的人类可读标签"""
+    if entity == "project":
+        return f"{item.get('name', '')} ({item.get('code', '')})"
+    if entity == "stage":
+        return item.get("name", "")
+    if entity == "task":
+        return f"{item.get('category', '')} - {item.get('testItem', '')}"
+    if entity == "sample":
+        parts = [s for s in [item.get("sn"), item.get("imei"), item.get("sampleNo")] if s]
+        return " / ".join(parts) if parts else item.get("id", "")
+    return item.get("id", "")
+
+
+def _strip_view_state(data: dict) -> dict:
+    """移除导出数据中的 UI 状态字段"""
+    clean = copy.deepcopy(data)
+    clean.pop("currentProjectId", None)
+    clean.pop("currentStageId", None)
+    clean.pop("peoplePool", None)
+    clean.pop("locationPool", None)
+    return clean
+
+
+def _normalize_project(data: dict) -> dict:
+    """确保项目数据结构完整"""
+    data = copy.deepcopy(data)
+    data.setdefault("members", [])
+    data.setdefault("locations", [])
+    for stage in data.get("stages") or []:
+        stage.setdefault("skuNames", [])
+        stage.setdefault("bom", [])
+        stage.setdefault("strategy", [])
+        stage.setdefault("progress", [])
+        for task in stage.get("tasks") or []:
+            task.setdefault("sampleIds", [])
+            task.setdefault("logs", [])
+            task.setdefault("removedSampleRecords", [])
+            task.setdefault("sampleFaultRecords", [])
+            task.setdefault("resultUploads", [])
+    return data
+
+
+def build_export_bundle() -> tuple[bytes, str]:
+    """生成完整导出包 zip，返回 (bytes, filename)"""
+    data, revision, _ = get_state()
+    export_data = _strip_view_state(data)
+    deployment_id = load_deployment_id()
+    exported_at = now_iso()
+    export_id = f"exp_{exported_at.replace('-','').replace(':','').replace('T','_')[:15]}_{uuid.uuid4().hex[:6]}"
+
+    manifest = {
+        "format": "testchamber-export-bundle-v1",
+        "appVersion": APP_VERSION,
+        "serverVersion": SERVER_VERSION,
+        "exportedAt": exported_at,
+        "exportId": export_id,
+        "sourceDeploymentId": deployment_id,
+        "sourceName": "",
+        "revision": revision,
+        "projectCount": len(export_data.get("projects") or []),
+        "sampleCount": sum(
+            len(c.get("samples") or [])
+            for c in (export_data.get("sampleLibrary") or {}).get("categories") or []
+        ),
+    }
+
+    state_json = json_dumps(export_data, pretty=True)
+    manifest_json = json_dumps(manifest, pretty=True)
+
+    checksums = {
+        "manifest.json": _content_hash(manifest_json),
+        "state.json": _content_hash(state_json),
+    }
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", manifest_json)
+        zf.writestr("state.json", state_json)
+        zf.writestr("checksums.json", json_dumps(checksums, pretty=True))
+
+        # 收集照片资产
+        for cat in (export_data.get("sampleLibrary") or {}).get("categories") or []:
+            for sample in cat.get("samples") or []:
+                sid = sample.get("id")
+                if not sid:
+                    continue
+                for photo in sample.get("photos") or []:
+                    pid = photo.get("id")
+                    if not pid:
+                        continue
+                    # 原图
+                    rel = photo.get("url", "")
+                    if rel:
+                        rp = path_inside_data(rel)
+                        if rp.is_file():
+                            zf.write(rp, f"assets/samples/{sid}/photos/{rp.name}")
+                    # 缩略图
+                    thumb_url = photo.get("thumbUrl", "")
+                    if thumb_url:
+                        tp = path_inside_data(thumb_url)
+                        if tp.is_file():
+                            zf.write(tp, f"assets/samples/{sid}/photos/{tp.name}")
+
+    ts = exported_at.replace("-", "").replace(":", "")[:15]
+    filename = f"testchamber_export_{ts}.zip"
+    return buf.getvalue(), filename
+
+
+def analyze_import_bundle(headers, raw_body: bytes) -> dict:
+    """解压导入包，与主库对比生成 preview 分析结果"""
+    _cleanup_expired_previews()
+
+    # 使用已有 parse_multipart 提取 zip 文件
+    _, files = parse_multipart(headers, raw_body)
+    zip_raw = None
+    for f in files:
+        if f.get("filename", "").endswith(".zip"):
+            zip_raw = f.get("content", b"")
+            break
+    if not zip_raw:
+        # fallback: 取第一个文件
+        for f in files:
+            zip_raw = f.get("content", b"")
+            break
+
+    if not zip_raw or len(zip_raw) < 4:
+        raise ValueError("未找到有效的 zip 文件内容")
+
+    # 解压到临时目录
+    tmp_dir = tempfile.mkdtemp(prefix="tcv7_import_")
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_raw), "r") as zf:
+            zf.extractall(tmp_dir)
+
+        tmp_path = Path(tmp_dir)
+
+        # 解析 manifest
+        manifest_path = tmp_path / "manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError("导入包缺少 manifest.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        # 解析 state
+        state_path = tmp_path / "state.json"
+        if not state_path.is_file():
+            raise ValueError("导入包缺少 state.json")
+        incoming_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        # 获取主库当前数据
+        current_data, _, _ = get_state()
+
+        # 分析
+        result = _diff_import_bundle(current_data, incoming_state, manifest, tmp_path)
+        preview_id = _preview_id()
+        _IMPORT_PREVIEWS[preview_id] = {
+            "_ts": time.time(),
+            "_tmp_dir": str(tmp_path),
+            "_incoming": incoming_state,
+            "result": result,
+        }
+        # 不清理 tmp_dir（commit 时需要）
+        result["previewId"] = preview_id
+        return result
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path: Path) -> dict:
+    """对比主库与导入数据，生成 autoApply / conflicts / blockers"""
+    auto_apply: list[dict] = []
+    conflicts: list[dict] = []
+    conflict_idx = [0]
+
+    def _next_conflict_id():
+        conflict_idx[0] += 1
+        return f"conflict_{conflict_idx[0]:04d}"
+
+    # 构建主库索引
+    curr_projects = {p["id"]: p for p in (current.get("projects") or [])}
+    curr_project_codes = {p.get("code", ""): p for p in (current.get("projects") or []) if p.get("code")}
+    curr_project_names = {p.get("name", "").strip().lower(): p for p in (current.get("projects") or []) if p.get("name")}
+
+    # 构建导入样机索引（用于样机身份匹配）
+    curr_samples: list[dict] = []
+    for cat in (current.get("sampleLibrary") or {}).get("categories") or []:
+        for s in cat.get("samples") or []:
+            s_copy = dict(s)
+            s_copy["_categoryName"] = cat.get("name", "")
+            curr_samples.append(s_copy)
+    curr_samples_by_id = {s["id"]: s for s in curr_samples}
+    curr_samples_by_sn = {}
+    curr_samples_by_imei = {}
+    for s in curr_samples:
+        sn = (s.get("sn") or "").strip()
+        imei = (s.get("imei") or "").strip()
+        sno = (s.get("sampleNo") or "").strip()
+        if sn:
+            curr_samples_by_sn.setdefault(sn, []).append(s)
+        if imei:
+            curr_samples_by_imei.setdefault(imei, []).append(s)
+        if sno and not sn:
+            curr_samples_by_sn.setdefault(sno, []).append(s)
+
+    # 检查照片文件缺失
+    missing_photo_assets: list[str] = []
+    for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+        for sample in cat.get("samples") or []:
+            sid = sample.get("id", "")
+            for photo in sample.get("photos") or []:
+                pid = photo.get("id", "")
+                url = photo.get("url", "")
+                if url:
+                    # 检查文件是否在 assets 目录中（相对于导入包）
+                    fn = Path(url).name
+                    asset_path = _tmp_path / "assets" / "samples" / sid / "photos" / fn
+                    if not asset_path.is_file():
+                        missing_photo_assets.append(pid)
+
+    blockers = []
+    if missing_photo_assets:
+        blockers.append({
+            "type": "missing_photos",
+            "assetIds": missing_photo_assets[:20],
+            "count": len(missing_photo_assets),
+        })
+
+    # ── 项目匹配 ──
+    matched_incoming_projects: dict[str, tuple[str, str | None]] = {}  # incomingId -> (targetId | newName)
+
+    for proj in incoming.get("projects") or []:
+        pid = proj.get("id", "")
+        pname = (proj.get("name") or "").strip()
+        pcode = (proj.get("code") or "").strip()
+
+        # 1) ID 相同
+        if pid and pid in curr_projects:
+            curr_p = curr_projects[pid]
+            field_diffs = _diff_fields(curr_p, proj, skip_keys={"stages", "tasks"})
+            if field_diffs:
+                conflicts.append({
+                    "conflictId": _next_conflict_id(),
+                    "type": "field_conflict",
+                    "entity": "project",
+                    "currentId": pid, "incomingId": pid,
+                    "label": _entity_label_for_conflict("project", proj),
+                    "current": {k: curr_p.get(k) for k in field_diffs},
+                    "incoming": {k: proj.get(k) for k in field_diffs},
+                    "diffFields": list(field_diffs),
+                    "allowedActions": ["keep_current", "use_incoming"],
+                })
+            # 递归匹配阶段/任务
+            _diff_stages(curr_p, proj, pid, pid, _next_conflict_id, conflicts, auto_apply)
+            continue
+
+        # 2) code 相同
+        if pcode and pcode in curr_project_codes:
+            curr_p = curr_project_codes[pcode]
+            conflicts.append({
+                "conflictId": _next_conflict_id(),
+                "type": "project_name_conflict",
+                "entity": "project",
+                "currentId": curr_p["id"], "incomingId": pid,
+                "label": f"{pname} (code: {pcode})",
+                "current": {"name": curr_p.get("name"), "code": curr_p.get("code")},
+                "incoming": {"name": pname, "code": pcode},
+                "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                "preferredMergeTarget": curr_p["id"],
+            })
+            continue
+
+        # 3) name 相同（大小写不敏感）
+        if pname and pname.lower() in curr_project_names:
+            curr_p = curr_project_names[pname.lower()]
+            conflicts.append({
+                "conflictId": _next_conflict_id(),
+                "type": "project_name_conflict",
+                "entity": "project",
+                "currentId": curr_p["id"], "incomingId": pid,
+                "label": pname,
+                "current": {"name": curr_p.get("name"), "code": curr_p.get("code")},
+                "incoming": {"name": pname, "code": pcode},
+                "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                "preferredMergeTarget": curr_p["id"],
+            })
+            continue
+
+        # 4) 新增项目
+        auto_apply.append({"type": "new_project", "id": pid, "name": pname, "label": pname})
+        matched_incoming_projects[pid] = (pid, None)  # 直接新增
+        # 递归处理其内部阶段/任务（都作为新增）
+        for stage in proj.get("stages") or []:
+            auto_apply.append({"type": "new_stage", "id": stage.get("id"), "name": stage.get("name", ""), "projectId": pid})
+            for task in stage.get("tasks") or []:
+                auto_apply.append({"type": "new_task", "id": task.get("id"),
+                    "label": f"{task.get('category','')}-{task.get('testItem','')}",
+                    "projectId": pid, "stageId": stage.get("id")})
+
+    # ── 样机匹配 ──
+    for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+        cat_name = cat.get("name", "")
+        for sample in cat.get("samples") or []:
+            sid = sample.get("id", "")
+            sn = (sample.get("sn") or "").strip()
+            imei = (sample.get("imei") or "").strip()
+            sno = (sample.get("sampleNo") or "").strip()
+
+            # 1) ID 相同
+            if sid and sid in curr_samples_by_id:
+                curr_s = curr_samples_by_id[sid]
+                field_diffs = _diff_fields(curr_s, sample, skip_keys={"photos", "logs", "problemRecords", "photos", "_categoryName"})
+                if field_diffs:
+                    conflicts.append({
+                        "conflictId": _next_conflict_id(),
+                        "type": "field_conflict",
+                        "entity": "sample",
+                        "currentId": sid, "incomingId": sid,
+                        "label": _entity_label_for_conflict("sample", sample),
+                        "current": {k: curr_s.get(k) for k in field_diffs},
+                        "incoming": {k: sample.get(k) for k in field_diffs},
+                        "diffFields": list(field_diffs),
+                        "allowedActions": ["keep_current", "use_incoming"],
+                        "mergeableFields": list(field_diffs),
+                    })
+                continue
+
+            # 2) SN 相同
+            if sn and sn in curr_samples_by_sn:
+                curr_s = curr_samples_by_sn[sn][0]
+                if curr_s["id"] != sid:
+                    mergeable = ["location", "owner", "status", "borrower", "sourceStageName", "sourceSkuName"]
+                    conflicts.append({
+                        "conflictId": _next_conflict_id(),
+                        "type": "sample_identity_conflict",
+                        "entity": "sample",
+                        "currentId": curr_s["id"], "incomingId": sid,
+                        "matchBy": "sn",
+                        "label": f"SN: {sn}",
+                        "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
+                        "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
+                        "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                        "mergeableFields": mergeable,
+                        "autoMergeSubData": ["logs", "photos", "problemRecords"],
+                        "preferredMergeTarget": curr_s["id"],
+                    })
+                    continue
+
+            # 3) IMEI 相同
+            if imei and imei in curr_samples_by_imei:
+                curr_s = curr_samples_by_imei[imei][0]
+                if curr_s["id"] != sid:
+                    mergeable = ["location", "owner", "status", "borrower", "sourceStageName", "sourceSkuName"]
+                    conflicts.append({
+                        "conflictId": _next_conflict_id(),
+                        "type": "sample_identity_conflict",
+                        "entity": "sample",
+                        "currentId": curr_s["id"], "incomingId": sid,
+                        "matchBy": "imei",
+                        "label": f"IMEI: {imei}",
+                        "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
+                        "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
+                        "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                        "mergeableFields": mergeable,
+                        "autoMergeSubData": ["logs", "photos", "problemRecords"],
+                        "preferredMergeTarget": curr_s["id"],
+                    })
+                    continue
+
+            # 4) 新增样机
+            auto_apply.append({"type": "new_sample", "id": sid, "sn": sn, "label": _entity_label_for_conflict("sample", sample), "categoryName": cat_name})
+
+    # 任务占用冲突检测
+    for proj in incoming.get("projects") or []:
+        for stage in proj.get("stages") or []:
+            for task in stage.get("tasks") or []:
+                if task.get("status") in ("进行中", "阻塞中"):
+                    for sid in task.get("sampleIds") or []:
+                        if sid in curr_samples_by_id:
+                            curr_s = curr_samples_by_id[sid]
+                            if curr_s.get("currentTaskId") and curr_s["currentTaskId"] != task.get("id"):
+                                conflicts.append({
+                                    "conflictId": _next_conflict_id(),
+                                    "type": "task_occupancy_conflict",
+                                    "entity": "sample",
+                                    "sampleId": sid,
+                                    "label": _entity_label_for_conflict("sample", curr_s),
+                                    "currentTaskId": curr_s["currentTaskId"],
+                                    "incomingTaskId": task.get("id"),
+                                    "incomingTaskLabel": _entity_label_for_conflict("task", task),
+                                    "allowedActions": ["skip_occupancy", "import_no_occupy"],
+                                })
+
+    # 统计
+    summary = {
+        "projects": {
+            "new": sum(1 for a in auto_apply if a["type"] == "new_project"),
+            "conflict": sum(1 for c in conflicts if c["entity"] == "project"),
+        },
+        "stages": {
+            "new": sum(1 for a in auto_apply if a["type"] == "new_stage"),
+        },
+        "tasks": {
+            "new": sum(1 for a in auto_apply if a["type"] == "new_task"),
+            "conflict": sum(1 for c in conflicts if c["entity"] == "task"),
+        },
+        "samples": {
+            "new": sum(1 for a in auto_apply if a["type"] == "new_sample"),
+            "conflict": sum(1 for c in conflicts if c["entity"] == "sample"),
+        },
+        "sampleIdentityConflicts": sum(1 for c in conflicts if c["type"] == "sample_identity_conflict"),
+        "fieldConflicts": sum(1 for c in conflicts if c["type"] == "field_conflict"),
+        "occupancyConflicts": sum(1 for c in conflicts if c["type"] == "task_occupancy_conflict"),
+        "nameConflicts": sum(1 for c in conflicts if c["type"] in ("project_name_conflict", "stage_name_conflict")),
+    }
+
+    return {
+        "source": {
+            "deploymentId": manifest.get("sourceDeploymentId", ""),
+            "revision": manifest.get("revision", 0),
+            "exportedAt": manifest.get("exportedAt", ""),
+            "appVersion": manifest.get("appVersion", ""),
+        },
+        "summary": summary,
+        "autoApply": auto_apply,
+        "conflicts": conflicts,
+        "blockers": blockers,
+    }
+
+
+def _diff_stages(curr_proj: dict, incoming_proj: dict, curr_proj_id: str, inc_proj_id: str,
+                  _next_id, conflicts: list, auto_apply: list):
+    """递归比较阶段和任务"""
+    curr_stages = {s["id"]: s for s in (curr_proj.get("stages") or [])}
+    curr_stage_names = {s.get("name", "").strip().lower(): s for s in (curr_proj.get("stages") or []) if s.get("name")}
+
+    for stage in incoming_proj.get("stages") or []:
+        sid = stage.get("id", "")
+        sname = (stage.get("name") or "").strip()
+
+        if sid and sid in curr_stages:
+            curr_s = curr_stages[sid]
+            field_diffs = _diff_fields(curr_s, stage, skip_keys={"tasks"})
+            if field_diffs:
+                conflicts.append({
+                    "conflictId": _next_id(),
+                    "type": "field_conflict",
+                    "entity": "stage",
+                    "currentId": sid, "incomingId": sid,
+                    "label": f"阶段: {sname}",
+                    "current": {k: curr_s.get(k) for k in field_diffs},
+                    "incoming": {k: stage.get(k) for k in field_diffs},
+                    "diffFields": list(field_diffs),
+                    "allowedActions": ["keep_current", "use_incoming"],
+                })
+            # 递归任务
+            curr_tasks = {t["id"]: t for t in (curr_s.get("tasks") or [])}
+            for task in stage.get("tasks") or []:
+                tid = task.get("id", "")
+                tlabel = f"{task.get('category','')}-{task.get('testItem','')}"
+                if tid and tid in curr_tasks:
+                    curr_t = curr_tasks[tid]
+                    field_diffs = _diff_fields(curr_t, task, skip_keys={"logs", "sampleIds", "removedSampleRecords", "sampleFaultRecords", "resultUploads", "resultDraft"})
+                    if field_diffs:
+                        conflicts.append({
+                            "conflictId": _next_id(),
+                            "type": "field_conflict",
+                            "entity": "task",
+                            "currentId": tid, "incomingId": tid,
+                            "label": tlabel,
+                            "current": {k: curr_t.get(k) for k in field_diffs},
+                            "incoming": {k: task.get(k) for k in field_diffs},
+                            "diffFields": list(field_diffs),
+                            "allowedActions": ["keep_current", "use_incoming"],
+                            "mergeableFields": list(field_diffs),
+                        })
+                else:
+                    # 检查是否有同名任务
+                    matched = None
+                    for ctid, ct in curr_tasks.items():
+                        if ct.get("category") == task.get("category") and ct.get("testItem") == task.get("testItem") and ct.get("skuIndex") == task.get("skuIndex"):
+                            matched = ct
+                            break
+                    if matched:
+                        conflicts.append({
+                            "conflictId": _next_id(),
+                            "type": "task_name_conflict",
+                            "entity": "task",
+                            "currentId": matched["id"], "incomingId": tid,
+                            "label": tlabel,
+                            "current": {"category": matched.get("category"), "testItem": matched.get("testItem"), "status": matched.get("status")},
+                            "incoming": {"category": task.get("category"), "testItem": task.get("testItem"), "status": task.get("status")},
+                            "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                            "preferredMergeTarget": matched["id"],
+                        })
+                    else:
+                        auto_apply.append({"type": "new_task", "id": tid, "label": tlabel, "projectId": curr_proj_id, "stageId": sid})
+            continue
+
+        if sname and sname.lower() in curr_stage_names:
+            curr_s = curr_stage_names[sname.lower()]
+            conflicts.append({
+                "conflictId": _next_id(),
+                "type": "stage_name_conflict",
+                "entity": "stage",
+                "currentId": curr_s["id"], "incomingId": sid,
+                "label": sname,
+                "current": {"name": curr_s.get("name")},
+                "incoming": {"name": sname},
+                "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                "preferredMergeTarget": curr_s["id"],
+            })
+            continue
+
+        # 新增阶段
+        auto_apply.append({"type": "new_stage", "id": sid, "name": sname, "projectId": curr_proj_id})
+        for task in stage.get("tasks") or []:
+            auto_apply.append({"type": "new_task", "id": task.get("id"),
+                "label": f"{task.get('category','')}-{task.get('testItem','')}",
+                "projectId": curr_proj_id, "stageId": sid})
+
+
+def _diff_fields(current_item: dict, incoming_item: dict, skip_keys: set = set()) -> set:
+    """返回两个字典中有差异的字段名集合（排除 skip_keys）"""
+    diffs = set()
+    all_keys = set(current_item.keys()) | set(incoming_item.keys())
+    for k in all_keys:
+        if k in skip_keys or k.startswith("_"):
+            continue
+        cv = current_item.get(k)
+        iv = incoming_item.get(k)
+        if stable_json(cv) != stable_json(iv):
+            diffs.add(k)
+    return diffs
+
+
+def commit_import_bundle(payload: dict) -> dict:
+    """执行导入写入"""
+    preview_id = payload.get("previewId", "")
+    decisions = payload.get("decisions") or {}
+
+    _cleanup_expired_previews()
+    entry = _IMPORT_PREVIEWS.get(preview_id)
+    if not entry:
+        return {"ok": False, "error": "previewId 无效或已过期", "status": 400}
+
+    result = entry.get("result") or {}
+    blockers = result.get("blockers") or []
+    if blockers:
+        return {"ok": False, "error": "存在阻断项（如缺失照片），无法提交导入", "blockers": blockers, "status": 400}
+
+    # 验证所有 conflict 都有 decision
+    for c in result.get("conflicts") or []:
+        cid = c.get("conflictId")
+        if cid not in decisions:
+            return {"ok": False, "error": f"冲突 {cid} 尚未处理", "status": 400}
+        d = decisions[cid]
+        action = d.get("action", "")
+        if action == "rename_import" and not d.get("newName", "").strip():
+            return {"ok": False, "error": f"冲突 {cid} 选择改名导入但未提供新名称", "status": 400}
+
+    # 先备份
+    current_data, current_revision, _ = get_state()
+    write_backup(current_data, current_revision)
+
+    incoming = copy.deepcopy(entry["_incoming"])
+    tmp_dir = Path(entry["_tmp_dir"])
+    source_manifest = (result.get("source") or {})
+
+    # 构建决策索引
+    decision_map: dict[str, dict] = {}
+    for c in result.get("conflicts") or []:
+        cid = c.get("conflictId", "")
+        if cid in decisions:
+            decision_map[cid] = decisions[cid]
+
+    # ── 处理项目 ──
+    curr_projects = {p["id"]: p for p in (current_data.setdefault("projects", []))}
+    incoming_projects_by_id = {p["id"]: p for p in (incoming.get("projects") or [])}
+
+    stats = {"projectsAdded": 0, "projectsMerged": 0, "stagesAdded": 0, "tasksAdded": 0,
+             "samplesAdded": 0, "samplesMerged": 0, "photosAdded": 0, "skipped": 0}
+
+    for auto in result.get("autoApply") or []:
+        atype = auto["type"]
+        if atype == "new_project":
+            pid = auto["id"]
+            if pid not in curr_projects and pid in incoming_projects_by_id:
+                curr_projects[pid] = _normalize_project(incoming_projects_by_id[pid])
+                stats["projectsAdded"] += 1
+        elif atype == "new_stage":
+            # 阶段已包含在项目对象中
+            pass
+        elif atype == "new_task":
+            pass  # 任务已包含在项目对象中
+        elif atype == "new_sample":
+            sid = auto["id"]
+            # 稍后处理
+
+    # 处理项目级冲突
+    for c in result.get("conflicts") or []:
+        cid = c["conflictId"]
+        d = decision_map.get(cid, {})
+        action = d.get("action", "skip")
+        etype = c.get("entity")
+
+        if etype == "project":
+            ipid = c.get("incomingId")
+            if action == "merge_into_existing":
+                target_id = d.get("targetId") or c.get("preferredMergeTarget") or c.get("currentId")
+                if ipid in incoming_projects_by_id and target_id in curr_projects:
+                    # 合并：追加子数据（阶段/任务），不覆盖项目主字段
+                    inc_proj = incoming_projects_by_id[ipid]
+                    curr_proj = curr_projects[target_id]
+                    _merge_project_sub_data(curr_proj, inc_proj)
+                    stats["projectsMerged"] += 1
+            elif action == "rename_import":
+                new_name = d.get("newName", "").strip()
+                if new_name and ipid in incoming_projects_by_id:
+                    inc_proj = incoming_projects_by_id[ipid]
+                    inc_proj["name"] = new_name
+                    curr_projects[ipid] = _normalize_project(inc_proj)
+                    stats["projectsAdded"] += 1
+            elif action == "skip":
+                stats["skipped"] += 1
+
+    # 处理样机
+    curr_categories = {c["id"]: c for c in (current_data.setdefault("sampleLibrary", {})).setdefault("categories", [])}
+    incoming_cats_by_id = {}
+    for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+        incoming_cats_by_id[cat["id"]] = cat
+        for s in cat.get("samples") or []:
+            incoming_cats_by_id[s["id"]] = s  # 也索引样机
+
+    # 新增样机
+    for auto in result.get("autoApply") or []:
+        if auto["type"] == "new_sample":
+            sid = auto["id"]
+            # 找到样机所属类别并添加
+            for inc_cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+                for inc_s in inc_cat.get("samples") or []:
+                    if inc_s.get("id") == sid:
+                        cat_name = inc_cat.get("name", "")
+                        # 找到或创建主库类别
+                        target_cat = None
+                        for cid, c in curr_categories.items():
+                            if c.get("name") == cat_name:
+                                target_cat = c
+                                break
+                        if not target_cat:
+                            new_cat_id = f"cat_{uuid.uuid4().hex[:12]}"
+                            target_cat = {"id": new_cat_id, "name": cat_name, "description": "", "samples": []}
+                            curr_categories[new_cat_id] = target_cat
+                        target_cat.setdefault("samples", []).append(copy.deepcopy(inc_s))
+                        stats["samplesAdded"] += 1
+                        break
+
+    # 处理样机冲突
+    for c in result.get("conflicts") or []:
+        if c.get("entity") != "sample":
+            continue
+        cid = c["conflictId"]
+        d = decision_map.get(cid, {})
+        action = d.get("action", "skip")
+
+        if c["type"] == "sample_identity_conflict":
+            if action == "merge_into_existing":
+                target_id = d.get("targetId") or c.get("preferredMergeTarget") or c.get("currentId")
+                inc_id = c.get("incomingId")
+                # 找到导入样机
+                inc_sample = None
+                for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+                    for s in cat.get("samples") or []:
+                        if s.get("id") == inc_id:
+                            inc_sample = s
+                            break
+                if inc_sample and target_id:
+                    # 找到主库样机并合并
+                    for cat_id, cat in curr_categories.items():
+                        for cs in cat.get("samples") or []:
+                            if cs.get("id") == target_id:
+                                # 逐字段选择
+                                field_choices = d.get("fieldChoices", {})
+                                for fname in c.get("mergeableFields", []):
+                                    choice = field_choices.get(fname, "current")
+                                    if choice == "incoming" and fname in inc_sample:
+                                        cs[fname] = inc_sample[fname]
+                                # 追加子数据
+                                sub_data_keys = c.get("autoMergeSubData", [])
+                                for subk in sub_data_keys:
+                                    if subk == "photos":
+                                        existing = {p.get("id"): p for p in (cs.get("photos") or [])}
+                                        for p in inc_sample.get("photos") or []:
+                                            if p.get("id") not in existing:
+                                                cs.setdefault("photos", []).append(copy.deepcopy(p))
+                                                stats["photosAdded"] += 1
+                                    elif subk == "problemRecords":
+                                        existing_hashes = {_content_hash(pr) for pr in (cs.get("problemRecords") or [])}
+                                        for pr in inc_sample.get("problemRecords") or []:
+                                            if _content_hash(pr) not in existing_hashes:
+                                                cs.setdefault("problemRecords", []).append(copy.deepcopy(pr))
+                                                existing_hashes.add(_content_hash(pr))
+                                    elif subk == "logs":
+                                        existing_hashes = {_content_hash(log) for log in (cs.get("logs") or [])}
+                                        for log in inc_sample.get("logs") or []:
+                                            if _content_hash(log) not in existing_hashes:
+                                                cs.setdefault("logs", []).append(copy.deepcopy(log))
+                                                existing_hashes.add(_content_hash(log))
+                                stats["samplesMerged"] += 1
+                                break
+            elif action == "rename_import":
+                inc_id = c.get("incomingId")
+                new_sn = d.get("newSN", "").strip()
+                new_imei = d.get("newIMEI", "").strip()
+                new_sample_no = d.get("newSampleNo", "").strip()
+                # 找到导入样机
+                inc_sample = None
+                inc_cat_name = ""
+                for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+                    for s in cat.get("samples") or []:
+                        if s.get("id") == inc_id:
+                            inc_sample = s
+                            inc_cat_name = cat.get("name", "")
+                            break
+                if inc_sample:
+                    if new_sn:
+                        inc_sample["sn"] = new_sn
+                    if new_imei:
+                        inc_sample["imei"] = new_imei
+                    if new_sample_no:
+                        inc_sample["sampleNo"] = new_sample_no
+                    # 添加到类别
+                    target_cat = None
+                    for cid, cat in curr_categories.items():
+                        if cat.get("name") == inc_cat_name:
+                            target_cat = cat
+                            break
+                    if not target_cat:
+                        new_cat_id = f"cat_{uuid.uuid4().hex[:12]}"
+                        target_cat = {"id": new_cat_id, "name": inc_cat_name, "description": "", "samples": []}
+                        curr_categories[new_cat_id] = target_cat
+                    target_cat.setdefault("samples", []).append(copy.deepcopy(inc_sample))
+                    stats["samplesAdded"] += 1
+            elif action == "skip":
+                stats["skipped"] += 1
+
+    # ── 复制照片资产文件 ──
+    for cat in curr_categories.values():
+        for sample in cat.get("samples") or []:
+            sid = sample.get("id", "")
+            for photo in sample.get("photos") or []:
+                url = photo.get("url", "")
+                if url:
+                    fn = Path(url).name
+                    asset_src = tmp_dir / "assets" / "samples" / sid / "photos" / fn
+                    if asset_src.is_file():
+                        dest_dir = SAMPLE_DATA_DIR / sid / "photos"
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        dest_path = dest_dir / fn
+                        if not dest_path.exists():
+                            shutil.copy2(asset_src, dest_path)
+                        # 更新 url 为相对路径
+                        photo["url"] = f"data/samples/{sid}/photos/{fn}"
+                thumb_url = photo.get("thumbUrl", "")
+                if thumb_url:
+                    fn2 = Path(thumb_url).name
+                    asset_src2 = tmp_dir / "assets" / "samples" / sid / "photos" / fn2
+                    if asset_src2.is_file():
+                        dest_dir = SAMPLE_DATA_DIR / sid / "photos"
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        dest_path = dest_dir / fn2
+                        if not dest_path.exists():
+                            shutil.copy2(asset_src2, dest_path)
+                        photo["thumbUrl"] = f"data/samples/{sid}/photos/{fn2}"
+
+    # ── 重新生成样机数据，同步到 SQLite ──
+    # 将 categories dict 转回 list
+    current_data["sampleLibrary"]["categories"] = list(curr_categories.values())
+    current_data["projects"] = list(curr_projects.values())
+
+    import_remark = f"导入数据包 (deployment={source_manifest.get('sourceDeploymentId','?')})"
+    ok, resp = save_state(current_data, None, "import-bundle", remark=import_remark, user="数据导入")
+
+    if not ok:
+        return {"ok": False, "error": resp.get("error", "写入失败"), "status": resp.get("status", 500)}
+
+    _cleanup_preview_temp(preview_id)
+    del _IMPORT_PREVIEWS[preview_id]
+
+    return {"ok": True, "stats": stats, "newRevision": resp.get("newRevision", 0)}
+
+    # 如果 save_state 失败或未到达，清理
+    _cleanup_preview_temp(preview_id)
+
+
+# ── commit 中需要的 manifest 引用 ──
+def _manifest_from_preview(preview_id: str) -> dict:
+    entry = _IMPORT_PREVIEWS.get(preview_id)
+    if not entry:
+        return {}
+    return (entry.get("result") or {}).get("source", {})
+
 FINISHED_TASK_STATUSES = {"正常完成", "异常终止"}
 
 
@@ -1730,7 +2590,21 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(parsed.path)
 
         if path == "/api/health":
-            self._send_json({"ok": True, "version": APP_VERSION, "time": now_iso(), "data_dir": str(DATA_DIR)})
+            self._send_json({"ok": True, "version": APP_VERSION, "time": now_iso(), "data_dir": str(DATA_DIR), "deploymentId": load_deployment_id()})
+            return
+
+        if path == "/api/export-bundle":
+            try:
+                zip_bytes, filename = build_export_bundle()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Length", str(len(zip_bytes)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(zip_bytes)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
         if path == "/api/state":
@@ -1794,6 +2668,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+
+        if path == "/api/import-bundle/preview":
+            try:
+                result = analyze_import_bundle(self.headers, self._read_body())
+                self._send_json({"ok": True, **result})
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/import-bundle/commit":
+            try:
+                payload = json.loads(self._read_body(max_bytes=MAX_UPLOAD_BYTES).decode("utf-8"))
+                result = commit_import_bundle(payload)
+                if result.get("status"):
+                    self._send_json(result, result["status"])
+                else:
+                    self._send_json({"ok": True, **result})
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         route = self._sample_photo_route(unquote(parsed.path))
         if not route or route[1] is not None:
             self._send_json({"ok": False, "error": "Not Found"}, 404)

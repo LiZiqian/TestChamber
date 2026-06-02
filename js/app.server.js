@@ -174,4 +174,26 @@ Object.assign(app, {
     this.updateServerStatus(statusText);
   },
 
+  // ── 数据包导入导出 ──
+
+  async importBundlePreview(file) {
+    const form = new FormData();
+    form.append("bundle", file);
+    const resp = await fetch("/api/import-bundle/preview", { method: "POST", body: form });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || "预览分析失败");
+    return json;
+  },
+
+  async importBundleCommit(previewId, decisions) {
+    const resp = await fetch("/api/import-bundle/commit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ previewId, decisions }),
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || "导入失败");
+    return json;
+  },
+
 });
