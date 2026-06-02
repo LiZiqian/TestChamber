@@ -1,6 +1,6 @@
 # 数字治理平台 V7 · TestChamber
 
-> 测似活动管理系统
+> 测试活动管理系统
 
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Vanilla JS](https://img.shields.io/badge/JavaScript-ES2020+-F7DF1E?logo=javascript&logoColor=000)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
