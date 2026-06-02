@@ -18,26 +18,46 @@
 .dispatch-sample-body { display: none; padding: 6px 8px; max-height: 260px; overflow: auto }
 .dispatch-sample-body.open { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; align-items: start }
 .dispatch-sample-row {
-  display: flex; gap: 10px; align-items: flex-start;
-  border: 1px solid var(--border); padding: 8px 12px;
-  border-radius: 9px; margin: 0; color: var(--text);
-  background: #fff; font-size: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--border);
+  padding: 9px 14px;
+  border-radius: 10px;
+  margin: 0;
+  color: var(--text);
+  background: #fff;
+  font-size: 12px;
   cursor: pointer;
 }
 .dispatch-sample-row:hover { border-color: var(--primary) }
+.dispatch-sample-row:has(input[type="checkbox"]:checked) {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, .12);
+}
 .dispatch-sample-info {
-  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+}
+.dispatch-sample-title-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 .dispatch-sample-id {
   font-weight: 800;
   color: var(--primary);
   cursor: pointer;
-  font-size: 13px;
-  align-self: flex-start;
+  font-size: 14px;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dispatch-sample-id:hover {
   text-decoration: underline;
@@ -45,29 +65,52 @@
 .dispatch-sample-stage {
   font-size: 12px;
   color: #64748b;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dispatch-sample-tested {
   font-size: 12px;
   color: #6b7280;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dispatch-sample-check {
   flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  padding: 3px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 5px;
 }
 .dispatch-sample-check:hover {
   background: #f1f5f9;
 }
 .dispatch-sample-check input[type="checkbox"] {
-  width: auto;
+  width: 14px;
+  height: 14px;
   margin: 0;
 }
 .dispatch-sample-status {
   flex-shrink: 0;
   align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  width: 86px;
+}
+.dispatch-sample-status .badge {
+  min-width: 76px;
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  line-height: 1;
 }
 .dispatch-sample-row.is-disabled {
   opacity: .50;

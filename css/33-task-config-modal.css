@@ -320,17 +320,46 @@
 .task-config-modal #tcPanelSample .dispatch-sample-body.open {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  gap: 8px;
   align-items: start;
   align-content: start;
   min-height: 0;
   height: auto;
-  max-height: clamp(320px, 42vh, 520px);
+  max-height: clamp(500px, 58vh, 680px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 2px 28px;
+  padding: 8px 4px 28px;
   scrollbar-gutter: stable;
   overscroll-behavior: auto;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-row {
+  min-height: 86px;
+  padding: 10px 14px;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-id {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-stage,
+.task-config-modal #tcPanelSample .dispatch-sample-tested {
+  font-size: 12px;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-status {
+  width: 66px;
+  gap: 6px;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-status .badge {
+  min-width: 58px;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 /* Last group: no border, extra bottom breathing room */

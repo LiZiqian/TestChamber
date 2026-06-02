@@ -15,8 +15,8 @@
 @import '32-task-flow.css?v=20260602-perf20';
 @import '32-task-issue-record.css';
 @import '32-task-flow-actions.css?v=20260602-perf21';
-@import '33-task-config-modal.css';
-@import '34-sample-picker.css';
+@import '33-task-config-modal.css?v=20260603-taskcfg03';
+@import '34-sample-picker.css?v=20260603-taskcfg02';
 @import '35-task-result.css';
 @import '35-task-result-modal.css';
 @import '35-task-sample-list.css?v=20260602-perf15';

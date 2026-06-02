@@ -206,13 +206,15 @@ Object.assign(app, {
             : `${Utils.esc(testedItems.slice(0, 3).join("、"))} 等 ${testedItems.length} 项`;
         return `
               <div class="dispatch-sample-row ${canPick ? "" : "is-disabled"}" onclick="app.onTaskSampleRowClick(event,'${inputName}','${progressSelectId}','${hintId}')" title="${Utils.esc(disabledReason)}" data-search-text="${Utils.esc(this.getAssignSampleSearchText(x))}">
-                <label class="dispatch-sample-check"><input type="checkbox" name="${inputName}" value="${x.id}" data-sample-pick="${inputName}" ${selected ? "checked" : ""} ${canPick ? "" : "disabled"} ${canPick ? changeAttr : ""}></label>
                 <div class="dispatch-sample-info">
-                  <span class="dispatch-sample-id" onclick="event.preventDefault();event.stopPropagation();app.openSampleReadonly('${x.id}')">${identity}</span>
+                  <div class="dispatch-sample-title-line">
+                    <span class="dispatch-sample-id" onclick="event.preventDefault();event.stopPropagation();app.openSampleReadonly('${x.id}')">${identity}</span>
+                    <label class="dispatch-sample-check"><input type="checkbox" name="${inputName}" value="${x.id}" data-sample-pick="${inputName}" ${selected ? "checked" : ""} ${canPick ? "" : "disabled"} ${canPick ? changeAttr : ""}></label>
+                  </div>
                   <span class="dispatch-sample-stage">阶段/方案：${stageSku}</span>
                   <span class="dispatch-sample-tested">已测：${testedText}</span>
                 </div>
-                <span class="dispatch-sample-status"><span class="badge ${this.sampleHasProblem(x) ? 's-故障' : 's-OK'}">${this.sampleHasProblem(x) ? '故障' : 'OK'}</span> <span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span></span>
+                <div class="dispatch-sample-status"><span class="badge ${this.sampleHasProblem(x) ? 's-故障' : 's-OK'}">${this.sampleHasProblem(x) ? '故障' : 'OK'}</span><span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span></div>
               </div>`;
       }).join("")}
           </div>
