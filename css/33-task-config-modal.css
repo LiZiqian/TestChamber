@@ -215,7 +215,7 @@
 }
 
 .sample-limit-hidden {
-  display: none !important;
+  display: none;
 }
 
 /* ---- Scroll Container (唯一主滚动区域) — 扁平无框 ---- */

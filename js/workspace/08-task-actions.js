@@ -59,14 +59,13 @@ Object.assign(app, {
     this.showConfirm("开始测试？", () => {
       const user = t.owner;
       const reason = isRestart ? "恢复测试" : "开始测试";
-      const from = t.status;
-      t.status = "进行中";
-      t.completed = false;
-      if (!isRestart || !t.startDate) t.startDate = Utils.today();
-      const prog = s.progress.find(x => x.id === t.progressId);
-      if (prog) { prog.status = "Testing"; prog.owner = t.owner; prog.startDate = t.startDate; }
+      const transition = this.transitionTaskStatus(s, t, "进行中", {
+        owner: t.owner,
+        startDate: (!isRestart || !t.startDate) ? Utils.today() : t.startDate,
+        resetStartDate: !isRestart
+      });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "测试中", { user, source: isRestart ? "任务重启" : "任务启动", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
-      this.addTaskLog(t, isRestart ? "重启任务" : "启动任务", { user, reason, fromStatus: from, toStatus: t.status });
+      this.addTaskLog(t, isRestart ? "重启任务" : "启动任务", { user, reason, fromStatus: transition.fromStatus, toStatus: transition.toStatus });
       this.save(); this.render();
     }, { title: "启动任务", okText: "开始测试", okClass: "btn btn-pass" });
   },
@@ -399,12 +398,9 @@ Object.assign(app, {
       const reason = document.getElementById("reason").value.trim();
       if (!user) { this.markFieldInvalid(document.getElementById("user"), "请选择状态变更人。请先在项目人员配置中新增人员。"); return true; }
       if (!reason) { this.markFieldInvalid(document.getElementById("reason"), "必须填写阻塞原因"); return true; }
-      const from = t.status;
-      t.status = "阻塞"; t.blockReason = reason;
-      const prog = s.progress.find(x => x.id === t.progressId);
-      if (prog) { prog.status = "阻塞"; prog.issue = reason; }
+      const transition = this.transitionTaskStatus(s, t, "阻塞中", { reason, issue: reason });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "在位等待", { user, source: "任务阻塞", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
-      this.addTaskLog(t, "阻塞任务", { user, reason, fromStatus: from, toStatus: t.status });
+      this.addTaskLog(t, "阻塞任务", { user, reason, fromStatus: transition.fromStatus, toStatus: transition.toStatus });
       this.save(); this.render();
     });
   },

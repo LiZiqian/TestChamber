@@ -103,6 +103,10 @@ def url_for_asset(sample_id: str, asset_id: str) -> str:
     return f"/api/samples/{quote(str(sample_id), safe='')}/photos/{quote(str(asset_id), safe='')}"
 
 
+def thumbnail_asset_id(photo_id: str) -> str:
+    return f"{photo_id}__thumb"
+
+
 def file_ext(original_name: str, mime_type: str) -> str:
     suffix = Path(original_name or "").suffix.lower()
     if suffix and re.fullmatch(r"\.[a-z0-9]{1,8}", suffix):
@@ -450,12 +454,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 def normalize_photo_meta(sample_id: str, photo: dict) -> dict:
     photo_id = str(photo.get("id") or f"photo_{uuid.uuid4().hex}")
+    thumb_id = str(photo.get("thumbId") or photo.get("thumbnailId") or "")
     name = str(photo.get("name") or photo.get("originalName") or "外观照片")
     mime_type = str(photo.get("type") or photo.get("mimeType") or mimetypes.guess_type(name)[0] or "application/octet-stream")
     relative_path = str(photo.get("relativePath") or "")
     size = int(photo.get("size") or 0)
     uploaded_at = str(photo.get("uploadedAt") or photo.get("createdAt") or now_iso())
-    return {
+    meta = {
         "id": photo_id,
         "name": name,
         "type": mime_type,
@@ -464,6 +469,29 @@ def normalize_photo_meta(sample_id: str, photo: dict) -> dict:
         "relativePath": relative_path,
         "uploadedAt": uploaded_at,
     }
+    thumb_url = str(photo.get("thumbUrl") or photo.get("thumbnailUrl") or "")
+    thumb_relative_path = str(photo.get("thumbRelativePath") or photo.get("thumbnailRelativePath") or "")
+    if thumb_id or thumb_url or thumb_relative_path:
+        thumb_id = thumb_id or thumbnail_asset_id(photo_id)
+        meta.update({
+            "thumbId": thumb_id,
+            "thumbUrl": thumb_url or url_for_asset(sample_id, thumb_id),
+            "thumbnailUrl": thumb_url or url_for_asset(sample_id, thumb_id),
+            "thumbRelativePath": thumb_relative_path,
+        })
+    return meta
+
+
+def attach_thumbnail_meta(photo_meta: dict, thumb_meta: dict | None) -> dict:
+    if not thumb_meta:
+        return photo_meta
+    photo_meta["thumbId"] = thumb_meta["id"]
+    photo_meta["thumbUrl"] = thumb_meta["url"]
+    photo_meta["thumbnailUrl"] = thumb_meta["url"]
+    photo_meta["thumbRelativePath"] = thumb_meta.get("relativePath", "")
+    photo_meta["thumbType"] = thumb_meta.get("type", "")
+    photo_meta["thumbSize"] = thumb_meta.get("size", 0)
+    return photo_meta
 
 
 def store_asset_bytes(
@@ -500,6 +528,67 @@ def store_asset_bytes(
         INSERT INTO sample_assets
         (id, sample_id, kind, original_name, file_name, relative_path, mime_type, size, created_at, created_by, deleted_at)
         VALUES (?, ?, 'photo', ?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+            sample_id = excluded.sample_id,
+            kind = excluded.kind,
+            original_name = excluded.original_name,
+            file_name = excluded.file_name,
+            relative_path = excluded.relative_path,
+            mime_type = excluded.mime_type,
+            size = excluded.size,
+            created_at = excluded.created_at,
+            created_by = excluded.created_by,
+            deleted_at = NULL
+        """,
+        (
+            asset_id,
+            sample_id,
+            meta["name"],
+            file_name,
+            relative_path,
+            meta["type"],
+            meta["size"],
+            created_at,
+            uploaded_by,
+        ),
+    )
+    return meta
+
+
+def store_thumbnail_bytes(
+    conn: sqlite3.Connection,
+    sample_id: str,
+    photo_id: str,
+    content: bytes,
+    original_name: str,
+    mime_type: str,
+    *,
+    uploaded_at: str | None = None,
+    uploaded_by: str = "",
+) -> dict:
+    asset_id = thumbnail_asset_id(photo_id)
+    ext = file_ext(original_name, mime_type)
+    file_name = f"{safe_segment(asset_id, 'thumb')}{ext}"
+    target_dir = SAMPLE_DATA_DIR / safe_segment(sample_id, "sample") / "photos"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / file_name
+    target.write_bytes(content)
+    relative_path = target.relative_to(DATA_DIR).as_posix()
+    created_at = uploaded_at or now_iso()
+    meta = {
+        "id": asset_id,
+        "name": original_name or file_name,
+        "type": mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream",
+        "size": len(content),
+        "url": url_for_asset(sample_id, asset_id),
+        "relativePath": relative_path,
+        "uploadedAt": created_at,
+    }
+    conn.execute(
+        """
+        INSERT INTO sample_assets
+        (id, sample_id, kind, original_name, file_name, relative_path, mime_type, size, created_at, created_by, deleted_at)
+        VALUES (?, ?, 'photo_thumb', ?, ?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
             sample_id = excluded.sample_id,
             kind = excluded.kind,
@@ -581,6 +670,37 @@ def upsert_existing_photo_asset(conn: sqlite3.Connection, sample_id: str, photo:
             meta["uploadedAt"],
         ),
     )
+    thumb_relative_path = meta.get("thumbRelativePath") or ""
+    if thumb_relative_path:
+        thumb_id = meta.get("thumbId") or thumbnail_asset_id(meta["id"])
+        thumb_file_name = Path(thumb_relative_path).name
+        conn.execute(
+            """
+            INSERT INTO sample_assets
+            (id, sample_id, kind, original_name, file_name, relative_path, mime_type, size, created_at, created_by, deleted_at)
+            VALUES (?, ?, 'photo_thumb', ?, ?, ?, ?, ?, ?, '', NULL)
+            ON CONFLICT(id) DO UPDATE SET
+                sample_id = excluded.sample_id,
+                kind = excluded.kind,
+                original_name = excluded.original_name,
+                file_name = excluded.file_name,
+                relative_path = excluded.relative_path,
+                mime_type = excluded.mime_type,
+                size = excluded.size,
+                created_at = excluded.created_at,
+                deleted_at = NULL
+            """,
+            (
+                thumb_id,
+                sample_id,
+                str(photo.get("thumbName") or photo.get("thumbnailName") or f"{meta['name']} 缩略图"),
+                thumb_file_name,
+                thumb_relative_path,
+                str(photo.get("thumbType") or photo.get("thumbnailType") or "image/jpeg"),
+                int(photo.get("thumbSize") or photo.get("thumbnailSize") or 0),
+                meta["uploadedAt"],
+            ),
+        )
     return meta
 
 
@@ -683,6 +803,7 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
             active_sample_ids.append(sample_id)
             sample_json = copy.deepcopy(sample)
             sample_json.pop("photos", None)
+            sample_json.pop("logs", None)
             conn.execute(
                 """
                 INSERT INTO sample_records
@@ -716,10 +837,6 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
                     str(sample.get("updatedAt") or ts),
                 ),
             )
-            for sample_log in sample.get("logs", []) or []:
-                if isinstance(sample_log, dict):
-                    logs.append(sample_log)
-
     if active_sample_ids:
         placeholders = ",".join("?" for _ in active_sample_ids)
         removed_rows = conn.execute(
@@ -797,8 +914,9 @@ def load_sample_photos(conn: sqlite3.Connection, sample_id: str) -> list[dict]:
         """,
         (sample_id,),
     ).fetchall()
-    return [
-        {
+    photos: list[dict] = []
+    for row in rows:
+        meta = {
             "id": row["id"],
             "name": row["original_name"] or row["file_name"] or "外观照片",
             "type": row["mime_type"] or "application/octet-stream",
@@ -807,8 +925,26 @@ def load_sample_photos(conn: sqlite3.Connection, sample_id: str) -> list[dict]:
             "relativePath": row["relative_path"],
             "uploadedAt": row["created_at"],
         }
-        for row in rows
-    ]
+        thumb_id = thumbnail_asset_id(row["id"])
+        thumb = conn.execute(
+            """
+            SELECT id, mime_type, size, relative_path
+            FROM sample_assets
+            WHERE sample_id = ? AND id = ? AND kind = 'photo_thumb' AND deleted_at IS NULL
+            """,
+            (sample_id, thumb_id),
+        ).fetchone()
+        if thumb:
+            meta.update({
+                "thumbId": thumb["id"],
+                "thumbUrl": url_for_asset(sample_id, thumb["id"]),
+                "thumbnailUrl": url_for_asset(sample_id, thumb["id"]),
+                "thumbRelativePath": thumb["relative_path"],
+                "thumbType": thumb["mime_type"] or "image/jpeg",
+                "thumbSize": int(thumb["size"] or 0),
+            })
+        photos.append(meta)
+    return photos
 
 
 def load_sample_library(conn: sqlite3.Connection) -> dict:
@@ -1615,7 +1751,7 @@ class Handler(BaseHTTPRequestHandler):
                             """
                             SELECT relative_path, mime_type
                             FROM sample_assets
-                            WHERE sample_id = ? AND id = ? AND kind = 'photo' AND deleted_at IS NULL
+                            WHERE sample_id = ? AND id = ? AND kind IN ('photo', 'photo_thumb') AND deleted_at IS NULL
                             """,
                             (sample_id, photo_id),
                         ).fetchone()
@@ -1667,6 +1803,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             fields, files = parse_multipart(self.headers, self._read_body())
             image_files = [f for f in files if f["field"] in ("photos", "photo", "file")]
+            thumb_files = {}
+            for f in files:
+                m = re.match(r"^thumb_(\d+)$", str(f.get("field") or ""))
+                if m:
+                    thumb_files[int(m.group(1))] = f
             if not image_files:
                 self._send_json({"ok": False, "error": "没有收到照片文件"}, 400)
                 return
@@ -1681,7 +1822,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(sample.get("photos"), list):
                         sample["photos"] = []
                     uploaded = []
-                    for file_item in image_files:
+                    for idx, file_item in enumerate(image_files):
                         meta = store_asset_bytes(
                             conn,
                             sample_id,
@@ -1690,6 +1831,19 @@ class Handler(BaseHTTPRequestHandler):
                             file_item["mime_type"],
                             uploaded_by=self.client_address[0],
                         )
+                        thumb_item = thumb_files.get(idx)
+                        if thumb_item:
+                            thumb_meta = store_thumbnail_bytes(
+                                conn,
+                                sample_id,
+                                meta["id"],
+                                thumb_item["content"],
+                                thumb_item["filename"],
+                                thumb_item["mime_type"],
+                                uploaded_at=meta.get("uploadedAt"),
+                                uploaded_by=self.client_address[0],
+                            )
+                            attach_thumbnail_meta(meta, thumb_meta)
                         uploaded.append(meta)
                         sample["photos"].append(meta)
                     sample["updatedAt"] = now_iso()
@@ -1716,18 +1870,27 @@ class Handler(BaseHTTPRequestHandler):
                     if not sample:
                         self._send_json({"ok": False, "error": "样机不存在"}, 404)
                         return
-                    asset = conn.execute(
-                        "SELECT relative_path FROM sample_assets WHERE sample_id = ? AND id = ? AND kind = 'photo' AND deleted_at IS NULL",
-                        (sample_id, photo_id),
-                    ).fetchone()
-                    if asset:
+                    asset_rows = conn.execute(
+                        """
+                        SELECT relative_path FROM sample_assets
+                        WHERE sample_id = ? AND id IN (?, ?) AND kind IN ('photo', 'photo_thumb') AND deleted_at IS NULL
+                        """,
+                        (sample_id, photo_id, thumbnail_asset_id(photo_id)),
+                    ).fetchall()
+                    for asset in asset_rows:
                         try:
                             target = path_inside_data(asset["relative_path"])
                             if target.is_file():
                                 target.unlink()
                         except Exception as e:
                             print(f"[WARN] 删除照片文件失败：{e}")
-                    conn.execute("UPDATE sample_assets SET deleted_at = ? WHERE sample_id = ? AND id = ? AND kind = 'photo'", (now_iso(), sample_id, photo_id))
+                    conn.execute(
+                        """
+                        UPDATE sample_assets SET deleted_at = ?
+                        WHERE sample_id = ? AND id IN (?, ?) AND kind IN ('photo', 'photo_thumb')
+                        """,
+                        (now_iso(), sample_id, photo_id, thumbnail_asset_id(photo_id)),
+                    )
                     sample["photos"] = [p for p in (sample.get("photos") or []) if str(p.get("id")) != str(photo_id)]
                     sample["updatedAt"] = now_iso()
                     result = commit_data_mutation(conn, data, "delete_sample_photo", "删除样机外观照片", self.client_address[0])

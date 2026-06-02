@@ -167,6 +167,35 @@
 .temp-change-plan-row input[type="date"] {
   width: 100%;
 }
+.temp-change-modal .temp-change-header-row,
+.temp-change-modal .temp-change-plan-row {
+  align-items: flex-end;
+}
+.temp-change-modal .temp-change-header-row .form-group,
+.temp-change-modal .temp-change-plan-row .form-group {
+  margin-bottom: 0;
+}
+.temp-change-modal .form-group > label {
+  line-height: 20px;
+  margin-bottom: 8px;
+}
+.temp-change-modal .temp-change-plan-row select,
+.temp-change-modal .temp-change-plan-row input[type="date"],
+.temp-change-modal textarea#tempReason {
+  height: var(--temp-change-field-height);
+  min-height: var(--temp-change-field-height);
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 14px;
+  line-height: 20px;
+  border-radius: 9px;
+}
+.temp-change-modal textarea#tempReason {
+  max-height: var(--temp-change-field-height);
+  resize: none;
+  overflow: hidden;
+  vertical-align: middle;
+}
 .temp-change-sample-section {
   margin-top: 18px;
 }
@@ -181,49 +210,4 @@
 .sample-limit-count {
   display: inline-block; margin-left: 8px; padding: 2px 7px;
   border-radius: 999px; background: #fff; border: 1px solid currentColor;
-}
-
-/* 临时变更 input 高度规则（已弃用）
-.temp-change-plan-row input {
-  height: var(--temp-change-field-height) !important;
-  min-height: var(--temp-change-field-height) !important;
-  max-height: var(--temp-change-field-height) !important;
-  box-sizing: border-box !important;
-  padding: 8px 10px !important;
-  font-size: 14px !important;
-  line-height: 20px !important;
-  border-radius: 9px !important;
-}
-*/
-
-/* 重点：专门压住全局 textarea min-height:64px */
-.temp-change-modal .modal-body .temp-change-header-row .form-group > textarea#tempReason,
-.temp-change-modal .modal-body .form-group > textarea#tempReason:not([style*="max-width"]):not([style*="width"]) {
-  height: var(--temp-change-field-height) !important;
-  min-height: var(--temp-change-field-height) !important;
-  max-height: var(--temp-change-field-height) !important;
-  box-sizing: border-box !important;
-  padding: 8px 10px !important;
-  font-size: 14px !important;
-  line-height: 20px !important;
-  border-radius: 9px !important;
-  resize: none !important;
-  overflow: hidden !important;
-  vertical-align: middle !important;
-}
-
-/* 标签和控件底部对齐 */
-.temp-change-modal .temp-change-header-row,
-.temp-change-modal .temp-change-plan-row {
-  align-items: flex-end !important;
-}
-
-.temp-change-modal .temp-change-header-row .form-group,
-.temp-change-modal .temp-change-plan-row .form-group {
-  margin-bottom: 0 !important;
-}
-
-.temp-change-modal .form-group > label {
-  line-height: 20px !important;
-  margin-bottom: 8px !important;
 }

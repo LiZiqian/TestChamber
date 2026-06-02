@@ -363,9 +363,7 @@ const Utils = {
       if (method === 0) {
         dataBytes = compressed;
       } else if (method === 8) {
-        if (!("DecompressionStream" in window)) throw new Error("当前浏览器不支持直接解析XLSX，请使用新版Chrome或导入CSV");
-        const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-        dataBytes = new Uint8Array(await new Response(stream).arrayBuffer());
+        dataBytes = await Utils.inflateRawBytes(compressed);
       } else {
         dataBytes = null;
       }
@@ -373,6 +371,153 @@ const Utils = {
       ptr += 46 + fileNameLen + extraLen + commentLen;
     }
     return files;
+  },
+
+  async inflateRawBytes(compressed) {
+    const root = typeof globalThis !== "undefined" ? globalThis : window;
+    const NativeDecompressionStream = root.DecompressionStream || root.window?.DecompressionStream;
+    if (NativeDecompressionStream && root.Blob && root.Response) {
+      const stream = new root.Blob([compressed]).stream().pipeThrough(new NativeDecompressionStream("deflate-raw"));
+      return new Uint8Array(await new root.Response(stream).arrayBuffer());
+    }
+    return Utils.inflateRawBytesFallback(compressed);
+  },
+
+  inflateRawBytesFallback(compressed) {
+    const input = compressed instanceof Uint8Array ? compressed : new Uint8Array(compressed);
+    let bitPos = 0;
+    const output = [];
+    const lengthBase = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+    const lengthExtra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+    const distBase = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+    const distExtra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+
+    const readBits = count => {
+      let value = 0;
+      for (let i = 0; i < count; i++) {
+        if ((bitPos >> 3) >= input.length) throw new Error("XLSX压缩数据损坏");
+        value |= ((input[bitPos >> 3] >> (bitPos & 7)) & 1) << i;
+        bitPos++;
+      }
+      return value;
+    };
+    const reverseBits = (value, length) => {
+      let reversed = 0;
+      for (let i = 0; i < length; i++) {
+        reversed = (reversed << 1) | (value & 1);
+        value >>= 1;
+      }
+      return reversed;
+    };
+    const buildHuffman = lengths => {
+      const maxBits = Math.max(...lengths, 0);
+      const counts = Array(maxBits + 1).fill(0);
+      const nextCode = Array(maxBits + 1).fill(0);
+      const tables = Array.from({ length: maxBits + 1 }, () => new Map());
+      lengths.forEach(len => { if (len) counts[len]++; });
+      let code = 0;
+      for (let bits = 1; bits <= maxBits; bits++) {
+        code = (code + counts[bits - 1]) << 1;
+        nextCode[bits] = code;
+      }
+      lengths.forEach((len, symbol) => {
+        if (!len) return;
+        const canonical = nextCode[len]++;
+        tables[len].set(reverseBits(canonical, len), symbol);
+      });
+      return { maxBits, tables };
+    };
+    const decodeSymbol = tree => {
+      let code = 0;
+      for (let len = 1; len <= tree.maxBits; len++) {
+        code |= readBits(1) << (len - 1);
+        const symbol = tree.tables[len].get(code);
+        if (symbol !== undefined) return symbol;
+      }
+      throw new Error("XLSX压缩编码损坏");
+    };
+    const fixedTrees = () => {
+      const literalLengths = Array(288).fill(0).map((_, i) => {
+        if (i <= 143) return 8;
+        if (i <= 255) return 9;
+        if (i <= 279) return 7;
+        return 8;
+      });
+      return { literalTree: buildHuffman(literalLengths), distanceTree: buildHuffman(Array(32).fill(5)) };
+    };
+    const dynamicTrees = () => {
+      const hlit = readBits(5) + 257;
+      const hdist = readBits(5) + 1;
+      const hclen = readBits(4) + 4;
+      const order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+      const codeLengths = Array(19).fill(0);
+      for (let i = 0; i < hclen; i++) codeLengths[order[i]] = readBits(3);
+      const codeTree = buildHuffman(codeLengths);
+      const lengths = [];
+      while (lengths.length < hlit + hdist) {
+        const symbol = decodeSymbol(codeTree);
+        if (symbol <= 15) {
+          lengths.push(symbol);
+        } else if (symbol === 16) {
+          const repeat = readBits(2) + 3;
+          const prev = lengths[lengths.length - 1] || 0;
+          for (let i = 0; i < repeat; i++) lengths.push(prev);
+        } else if (symbol === 17) {
+          const repeat = readBits(3) + 3;
+          for (let i = 0; i < repeat; i++) lengths.push(0);
+        } else if (symbol === 18) {
+          const repeat = readBits(7) + 11;
+          for (let i = 0; i < repeat; i++) lengths.push(0);
+        }
+      }
+      return {
+        literalTree: buildHuffman(lengths.slice(0, hlit)),
+        distanceTree: buildHuffman(lengths.slice(hlit, hlit + hdist))
+      };
+    };
+    const inflateCompressedBlock = (literalTree, distanceTree) => {
+      while (true) {
+        const symbol = decodeSymbol(literalTree);
+        if (symbol < 256) {
+          output.push(symbol);
+        } else if (symbol === 256) {
+          return;
+        } else if (symbol <= 285) {
+          const idx = symbol - 257;
+          if (idx >= lengthBase.length) throw new Error("XLSX压缩长度损坏");
+          const length = lengthBase[idx] + readBits(lengthExtra[idx]);
+          const distSymbol = decodeSymbol(distanceTree);
+          if (distSymbol >= distBase.length) throw new Error("XLSX压缩距离损坏");
+          const distance = distBase[distSymbol] + readBits(distExtra[distSymbol]);
+          if (!distance || distance > output.length) throw new Error("XLSX压缩距离损坏");
+          for (let i = 0; i < length; i++) output.push(output[output.length - distance]);
+        } else {
+          throw new Error("XLSX压缩长度损坏");
+        }
+      }
+    };
+
+    let isFinal = false;
+    while (!isFinal) {
+      isFinal = !!readBits(1);
+      const type = readBits(2);
+      if (type === 0) {
+        bitPos = Math.ceil(bitPos / 8) * 8;
+        const len = readBits(16);
+        const nlen = readBits(16);
+        if (((len ^ 0xffff) & 0xffff) !== nlen) throw new Error("XLSX未压缩块损坏");
+        for (let i = 0; i < len; i++) output.push(readBits(8));
+      } else if (type === 1) {
+        const trees = fixedTrees();
+        inflateCompressedBlock(trees.literalTree, trees.distanceTree);
+      } else if (type === 2) {
+        const trees = dynamicTrees();
+        inflateCompressedBlock(trees.literalTree, trees.distanceTree);
+      } else {
+        throw new Error("XLSX压缩块类型不支持");
+      }
+    }
+    return new Uint8Array(output);
   },
 
   parseXlsxSharedStrings(xml) {

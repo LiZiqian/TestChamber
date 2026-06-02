@@ -22,12 +22,12 @@
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   min-height: 150px;
-  border: 2px dashed var(--border) !important;
+  border: 2px dashed var(--border);
   background: var(--card); cursor: pointer;
   transition: border-color .2s, background .2s, box-shadow .2s;
 }
 .add-card:hover {
-  border-color: var(--primary) !important;
+  border-color: var(--primary);
   background: #f8fafc;
   box-shadow: 0 4px 20px rgba(0, 0, 0, .08);
 }
@@ -79,7 +79,7 @@
 /* ---- Required ---- */
 .required::after, .req::after { content: " *"; color: #dc2626; font-weight: 900 }
 .req-star { color: #dc2626; font-weight: 900; margin-left: 2px }
-.danger-field-label { color: #dc2626 !important }
+.danger-field-label { color: #dc2626 }
 
 /* ---- Misc ---- */
 .path { font-size: 12px; color: var(--muted) }

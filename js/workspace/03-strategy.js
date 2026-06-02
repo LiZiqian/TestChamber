@@ -250,7 +250,7 @@ Object.assign(app, {
       else removedCount++;
     });
     expected.forEach(v => {
-      kept.push({ id: Utils.id("prog_"), ...v, status: "待启动", owner: "", startDate: "", endDate: "", issue: "", sampleIds: [] });
+      kept.push(this.createProgressRecord(v));
       addedCount++;
     });
     s.progress = kept;

@@ -204,7 +204,7 @@ Object.assign(app, {
       const added = sampleIds.filter(id => !oldSampleIds.includes(id));
       t.sampleIds = sampleIds;
       t.requiredSampleCount = check.required;
-      if (!t.status) t.status = "待下发";
+      if (!t.status) this.repairTaskStatus(t, "待下发");
       removed.forEach(id => {
         if (!this.isSampleUsedByAnotherOpenTask(id, t.id)) {
           this.changeSampleStatus(id, "闲置", { user: operator, source: "任务样机重新分配", reason: "未下发任务调整样机", projectId: p.id, stageId: s.id });
@@ -271,7 +271,7 @@ Object.assign(app, {
       t.planStartDate = start;
       t.planEndDate = end;
       t.planDate = start;
-      if (!t.status) t.status = "待下发";
+      if (!t.status) this.repairTaskStatus(t, "待下发");
       this.addTaskLog(t, "设置计划时间", { user: owner, reason: `计划开始 ${start}，计划终止 ${end}` });
       this.save(); this.render();
     });
@@ -394,76 +394,6 @@ Object.assign(app, {
 `;
   },
 
-  saveTaskPlanConfig(projectId, stageId, progressId, taskId) {
-    const p = this.data.projects.find(x => x.id === projectId);
-    const s = p?.stages.find(x => x.id === stageId);
-    let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
-    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
-    if (!p || !s || !progress) return;
-    const owner = document.getElementById("tcPlanOwner")?.value.trim() || "";
-    const start = document.getElementById("tcPlanStartDate")?.value || "";
-    const end = document.getElementById("tcPlanEndDate")?.value || "";
-    this.clearFieldValidationMarks();
-    if (!owner) { this.markFieldInvalid(document.getElementById("tcPlanOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return; }
-    if (!start || !end) {
-      if (!start) this.markFieldInvalid(document.getElementById("tcPlanStartDate"), "必须填写计划开始时间");
-      if (!end) this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "必须填写计划终止时间");
-      return;
-    }
-    if (start > end) {
-      this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "计划终止时间不能早于计划开始时间");
-      return;
-    }
-    if (t && !this.isTaskChangePayloadChanged(t, { owner, planStartDate: start, planEndDate: end })) {
-      Utils.toast("未检测到变更");
-      this.closeModal();
-      return;
-    }
-    t = t || this.ensurePlanTask(s, progress, { owner, planStartDate: start, planEndDate: end });
-    t.owner = owner;
-    t.planStartDate = start;
-    t.planEndDate = end;
-    t.planDate = start;
-    if (!t.status) t.status = "待下发";
-    this.addTaskLog(t, "设置计划时间", { user: owner, reason: `计划开始 ${start}，计划终止 ${end}` });
-    this.save(); this.render();
-    Utils.toast("计划配置已保存");
-    this.closeModal();
-  },
-
-  saveTaskSampleConfig(projectId, stageId, progressId, taskId) {
-    const p = this.data.projects.find(x => x.id === projectId);
-    const s = p?.stages.find(x => x.id === stageId);
-    let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
-    const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
-    if (!p || !s || !progress) return;
-    const operator = t?.owner || "管理员";
-    const sampleIds = this.getSelectedTaskSampleIds("tcSamplePick");
-    const check = this.validateTaskSampleSelection(progress, sampleIds, "样机分配");
-    if (t && !this.isTaskChangePayloadChanged(t, { owner: t.owner, planStartDate: t.planStartDate || t.planDate || "", planEndDate: t.planEndDate || "", sampleIds })) {
-      Utils.toast("未检测到变更");
-      this.closeModal();
-      return;
-    }
-    if (!check.ok) { alert(check.msg); return; }
-    const oldSampleIds = [...(t?.sampleIds || [])];
-    t = t || this.ensurePlanTask(s, progress);
-    const removed = oldSampleIds.filter(id => !sampleIds.includes(id));
-    const added = sampleIds.filter(id => !oldSampleIds.includes(id));
-    t.sampleIds = sampleIds;
-    t.requiredSampleCount = check.required;
-    if (!t.status) t.status = "待下发";
-    removed.forEach(id => {
-      if (!this.isSampleUsedByAnotherOpenTask(id, t.id)) {
-        this.changeSampleStatus(id, "闲置", { user: operator, source: "任务样机重新分配", reason: "未下发任务调整样机", projectId: p.id, stageId: s.id });
-      }
-    });
-    added.forEach(id => this.changeSampleStatus(id, "在位等待", { user: operator, source: "任务样机分配", reason: "未下发任务分配样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
-    this.addTaskLog(t, oldSampleIds.length ? "重新分配样机" : "分配样机", { user: operator, reason: "未下发任务样机配置", detail: `样机：${sampleIds.map(id => this.findSample(id)?.sample.sampleNo || id).join(", ")}` });
-    this.save(); this.render();
-    Utils.toast("样机配置已保存");
-    this.closeModal();
-  },
 
   saveTaskConfigAll(projectId, stageId, progressId, taskId) {
     const p = this.data.projects.find(x => x.id === projectId);
@@ -532,7 +462,7 @@ Object.assign(app, {
       added.forEach(id => this.changeSampleStatus(id, "在位等待", { user: operator, source: "任务样机分配", reason: "未下发任务分配样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
     }
     // 状态 + 日志
-    if (!t.status) t.status = "待下发";
+    if (!t.status) this.repairTaskStatus(t, "待下发");
     if (planChanged) {
       this.addTaskLog(t, "设置计划时间", { user: owner, reason: `计划开始 ${start}，计划终止 ${end}` });
     }

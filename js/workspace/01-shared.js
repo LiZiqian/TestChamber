@@ -49,6 +49,104 @@ Object.assign(app, {
     return "待下发";
   },
 
+  taskStoredStatus(flowStatus) {
+    const flow = String(flowStatus || "").trim();
+    if (["异常完成", "异常终止", "失败", "Fail"].includes(flow)) return "异常终止";
+    if (["正常完成", "已完成", "通过", "Pass"].includes(flow)) return "正常完成";
+    if (["阻塞", "阻塞中"].includes(flow)) return "阻塞";
+    if (["进行中", "Testing"].includes(flow)) return "进行中";
+    return "待下发";
+  },
+
+  repairTaskStatus(task, nextStatus, ctx = {}) {
+    if (!task) return { status: "", flow: "" };
+    const storedStatus = this.taskStoredStatus(nextStatus);
+    const flowStatus = this.taskFlowStatus({ ...task, status: storedStatus, completed: ["正常完成", "异常终止"].includes(storedStatus) });
+    const changed = task.status !== storedStatus;
+    task.status = storedStatus;
+
+    if (flowStatus === "进行中") {
+      task.completed = false;
+      if (ctx.startDate !== undefined && (!task.startDate || ctx.resetStartDate)) task.startDate = ctx.startDate;
+    } else if (flowStatus === "阻塞中") {
+      task.completed = false;
+      if (ctx.reason !== undefined) task.blockReason = ctx.reason || "";
+    } else if (["正常完成", "异常终止"].includes(flowStatus)) {
+      task.completed = true;
+      task.completionType = flowStatus;
+      if (ctx.completedAt !== undefined) task.completedAt = ctx.completedAt;
+      if (ctx.endDate !== undefined) task.endDate = ctx.endDate;
+    } else {
+      task.completed = false;
+      if (ctx.clearCompletion) {
+        task.completionType = "";
+        task.completedAt = "";
+      }
+    }
+    if (changed && ctx.markChanged) this._normalizedChanged = true;
+    return { status: task.status, flow: flowStatus };
+  },
+
+  setProgressStatus(progress, nextStatus, ctx = {}) {
+    if (!progress) return null;
+    const status = String(nextStatus || "").trim();
+    if (status && progress.status !== status) {
+      progress.status = status;
+      if (ctx.markChanged) this._normalizedChanged = true;
+    }
+    return progress;
+  },
+
+  createProgressRecord(values = {}) {
+    return {
+      id: Utils.id("prog_"),
+      ...values,
+      status: values.status || "待启动",
+      owner: values.owner || "",
+      startDate: values.startDate || "",
+      endDate: values.endDate || "",
+      issue: values.issue || "",
+      sampleIds: Array.isArray(values.sampleIds) ? values.sampleIds : []
+    };
+  },
+
+  transitionTaskStatus(stage, task, nextStatus, ctx = {}) {
+    if (!task) return { fromStatus: "", toStatus: "", fromFlow: "", toFlow: "" };
+    const fromStatus = task.status || "";
+    const fromFlow = this.taskFlowStatus(task);
+    const repaired = this.repairTaskStatus(task, nextStatus, {
+      ...ctx,
+      startDate: ctx.startDate || Utils.today(),
+      completedAt: ctx.completedAt || Utils.now(),
+      endDate: ctx.endDate || task.endDate || Utils.today()
+    });
+    const toFlow = repaired.flow;
+
+    this.syncProgressStatus(stage, task, toFlow, ctx);
+    return { fromStatus, toStatus: task.status, fromFlow, toFlow };
+  },
+
+  syncProgressStatus(stage, task, flowStatus, ctx = {}) {
+    const progress = ctx.progress || (stage?.progress || []).find(x => x.id === task?.progressId);
+    if (!progress) return null;
+    if (ctx.progressStatus) {
+      this.setProgressStatus(progress, ctx.progressStatus);
+    } else if (flowStatus === "进行中") {
+      this.setProgressStatus(progress, "Testing");
+    } else if (flowStatus === "阻塞中") {
+      this.setProgressStatus(progress, "阻塞");
+    } else if (flowStatus === "正常完成") {
+      this.setProgressStatus(progress, ctx.result || "Pass");
+    } else if (flowStatus === "异常终止") {
+      this.setProgressStatus(progress, ctx.result || "Fail");
+    }
+    if (ctx.owner !== undefined) progress.owner = ctx.owner;
+    if (ctx.startDate !== undefined) progress.startDate = ctx.startDate;
+    if (ctx.endDate !== undefined) progress.endDate = ctx.endDate;
+    if (ctx.issue !== undefined) progress.issue = ctx.issue;
+    return progress;
+  },
+
   taskStatusBadgeClass(status) {
     if (status === "进行中") return "status-running";
     if (status === "阻塞中") return "status-blocked";

@@ -9,6 +9,7 @@ Object.assign(app, {
       version: this.version,
       currentProjectId: null,
       currentStageId: null,
+      eventSchema: "sample_events_v2",
       users: [],
       projects: [],
       sampleLibrary: { categories: [], logs: [] }
@@ -32,6 +33,11 @@ Object.assign(app, {
 
   normalize() {
     this.data.version = this.version;
+    if (this.data.eventSchema !== "sample_events_v2") {
+      this.data.eventSchema = "sample_events_v2";
+      if (this.data.sampleLibrary) this.data.sampleLibrary.logs = [];
+      this._normalizedChanged = true;
+    }
     if (!this.data.sampleLibrary) this.data.sampleLibrary = { categories: [], logs: [] };
     if (!Array.isArray(this.data.sampleLibrary.categories)) this.data.sampleLibrary.categories = [];
     if (!Array.isArray(this.data.sampleLibrary.logs)) this.data.sampleLibrary.logs = [];
@@ -124,9 +130,14 @@ Object.assign(app, {
           if (!Array.isArray(t.logs)) t.logs = [];
           t.owner = this.normalizePersonText(t.owner);
           if (typeof t.archived === "undefined") t.archived = false;
-          if (t.status === "完成") t.status = "正常完成";
-          if (t.status === "已完成") { t.status = t.completionType || "正常完成"; t.completed = true; }
-          t.status = this.taskFlowStatus(t);
+          let normalizedTaskStatus = t.status;
+          if (normalizedTaskStatus === "完成") normalizedTaskStatus = "正常完成";
+          if (normalizedTaskStatus === "已完成") {
+            normalizedTaskStatus = t.completionType || "正常完成";
+            t.completed = true;
+          }
+          if (normalizedTaskStatus !== t.status) this._normalizedChanged = true;
+          this.repairTaskStatus(t, this.taskFlowStatus({ ...t, status: normalizedTaskStatus }), { markChanged: true });
           const progress = t.progressId ? s.progress.find(x => x.id === t.progressId) : null;
           if (progress) {
             if (!t.strategyId && progress.strategyId) t.strategyId = progress.strategyId;
@@ -147,19 +158,11 @@ Object.assign(app, {
       }
     }));
     this.eachSample(s => {
-      if (!Array.isArray(s.logs)) s.logs = [];
-      if (!s.status) s.status = "闲置";
-      const statusMap = {
-        "已分配": "在位等待",
-        "进入测试任务": "测试中",
-        "已归还": "闲置",
-        "借出": "取走分析",
-        "已借出": "取走分析",
-        "待维修": "闲置",
-        "报废": "闲置"
-      };
-      if (statusMap[s.status]) s.status = statusMap[s.status];
-      if (!this.constants.sampleStatuses.includes(s.status)) s.status = "闲置";
+      if (Array.isArray(s.logs)) {
+        delete s.logs;
+        this._normalizedChanged = true;
+      }
+      this.repairSampleStatus(s, s.status || "闲置", { markChanged: true });
       if (typeof s.imei === "undefined") s.imei = "";
       if (typeof s.boardSn === "undefined") s.boardSn = "";
       if (typeof s.schemeNo === "undefined") s.schemeNo = "";
@@ -191,19 +194,6 @@ Object.assign(app, {
         }).filter(x => x.description && !Utils.isNoSampleIssueText(x.description));
         if (s.problemRecords.length !== beforeProblemCount) this._normalizedChanged = true;
       }
-      (s.logs || []).forEach(log => {
-        if (!(log.faultMarked || log.flowStatus === "故障")) return;
-        const description = String(log.problemDescription || log.reason || "历史任务标记故障").trim();
-        const taskLabel = [log.projectName || this.projectName(log.projectId), log.stageName || this.stageName(log.projectId, log.stageId), log.testItem]
-          .filter(v => v && v !== "-").join(" - ");
-        const exists = s.problemRecords.some(item =>
-          item.description === description && item.source === "测试任务" && item.taskLabel === taskLabel
-        );
-        if (!exists) {
-          s.problemRecords.push({ id: Utils.id("problem_"), description, source: "测试任务", taskLabel });
-          this._normalizedChanged = true;
-        }
-      });
       s.initialResults = s.problemRecords.map(item => item.description);
       s.initialResult = s.initialResults.join("\n");
       if (typeof s.borrower === "undefined") s.borrower = "";
@@ -277,6 +267,43 @@ Object.assign(app, {
     return status;
   },
 
+  normalizeSampleStatusValue(status) {
+    const raw = String(status || "").trim();
+    const statusMap = {
+      "已分配": "在位等待",
+      "进入测试任务": "测试中",
+      "已归还": "闲置",
+      "借出": "取走分析",
+      "已借出": "取走分析",
+      "待维修": "闲置",
+      "报废": "闲置",
+      "故障": "闲置"
+    };
+    const normalized = statusMap[raw] || raw || "闲置";
+    return this.constants.sampleStatuses.includes(normalized) ? normalized : "闲置";
+  },
+
+  repairSampleStatus(sample, nextStatus, ctx = {}) {
+    if (!sample) return "";
+    const normalized = this.normalizeSampleStatusValue(nextStatus);
+    if (sample.status !== normalized) {
+      sample.status = normalized;
+      if (ctx.markChanged !== false) this._normalizedChanged = true;
+    }
+    return normalized;
+  },
+
+  clearSampleOccupancy(sample, ctx = {}) {
+    if (!sample) return false;
+    const changed = !!(sample.currentProjectId || sample.currentStageId || sample.currentTaskId || sample.currentTestItem);
+    sample.currentProjectId = null;
+    sample.currentStageId = null;
+    sample.currentTaskId = null;
+    sample.currentTestItem = "";
+    if (changed && ctx.markChanged !== false) this._normalizedChanged = true;
+    return changed;
+  },
+
   sampleTaskLabelFromCtx(ctx = {}) {
     const project = ctx.projectName || this.projectName(ctx.projectId);
     const stage = ctx.stageName || this.stageName(ctx.projectId, ctx.stageId);
@@ -302,14 +329,41 @@ Object.assign(app, {
   },
 
   // ---- 样机状态 ----
+  createSampleEventLog(sample, fromStatus, toStatus, flowStatus, ctx = {}) {
+    return {
+      id: Utils.id("event_"),
+      time: Utils.now(),
+      eventType: "sample_status",
+      sampleId: sample.id,
+      sampleNo: sample.sampleNo,
+      action: ctx.source || "未知入口",
+      source: ctx.source || "未知入口",
+      user: ctx.user || "未填写",
+      from: fromStatus,
+      to: toStatus,
+      flowStatus,
+      reason: ctx.reason || "",
+      detail: ctx.detail || "",
+      projectId: ctx.projectId || sample.currentProjectId,
+      stageId: ctx.stageId || sample.currentStageId,
+      projectName: ctx.projectName || this.projectName(ctx.projectId || sample.currentProjectId),
+      stageName: ctx.stageName || this.stageName(ctx.projectId || sample.currentProjectId, ctx.stageId || sample.currentStageId),
+      taskId: ctx.taskId || sample.currentTaskId,
+      testItem: ctx.testItem || sample.currentTestItem,
+      faultMarked: !!ctx.faultMarked,
+      problemDescription: String(ctx.problemDescription || "").trim(),
+      photoIds: Array.isArray(ctx.photoIds) ? ctx.photoIds : [],
+      photos: Array.isArray(ctx.photos) ? ctx.photos : []
+    };
+  },
+
   changeSampleStatus(sampleId, newStatus, ctx = {}) {
-    if (newStatus === "已借出") newStatus = "取走分析";
-    if (newStatus === "故障") newStatus = "闲置";
+    newStatus = this.normalizeSampleStatusValue(newStatus);
     const found = this.findSample(sampleId);
     if (!found) return;
     const s = found.sample, old = this.sampleEffectiveStatus(s);
     if (old === newStatus && !ctx.forceLog && !ctx.taskId && !ctx.receiver) return;
-    s.status = newStatus;
+    this.repairSampleStatus(s, newStatus, { markChanged: false });
     s.updatedAt = Utils.now();
     const isFault = !!ctx.faultMarked;
     const problemDescription = String(ctx.problemDescription || "").trim();
@@ -339,22 +393,8 @@ Object.assign(app, {
     s.currentTaskId = freeStatus ? null : (ctx.taskId ?? s.currentTaskId);
     s.currentTestItem = freeStatus ? "" : (ctx.testItem ?? s.currentTestItem);
     const displayStatus = this.sampleEffectiveStatus(s);
-    const log = {
-      id: Utils.id("log_"), time: Utils.now(), sampleId: s.id, sampleNo: s.sampleNo,
-      action: ctx.source || "未知入口",
-      user: ctx.user || "未填写", source: ctx.source || "未知入口",
-      from: old, to: displayStatus, flowStatus: newStatus, reason: ctx.reason || "",
-      projectId: ctx.projectId || s.currentProjectId, stageId: ctx.stageId || s.currentStageId,
-      projectName: ctx.projectName || this.projectName(ctx.projectId || s.currentProjectId),
-      stageName: ctx.stageName || this.stageName(ctx.projectId || s.currentProjectId, ctx.stageId || s.currentStageId),
-      taskId: ctx.taskId || s.currentTaskId, testItem: ctx.testItem || s.currentTestItem,
-      faultMarked: isFault,
-      problemDescription,
-      photoIds: Array.isArray(ctx.photoIds) ? ctx.photoIds : [],
-      photos: Array.isArray(ctx.photos) ? ctx.photos : []
-    };
-    s.logs = s.logs || [];
-    s.logs.push(log);
+    const log = this.createSampleEventLog(s, old, displayStatus, newStatus, { ...ctx, faultMarked: isFault, problemDescription });
+    if (!Array.isArray(this.data.sampleLibrary.logs)) this.data.sampleLibrary.logs = [];
     this.data.sampleLibrary.logs.push(log);
   },
 
@@ -377,12 +417,10 @@ Object.assign(app, {
       const activeUsages = this.activeTaskUsagesForSample(sample.id);
       if (activeUsages.length) return;
       if (sample.currentTaskId || ["测试中", "在位等待"].includes(sample.status)) {
-        sample.currentProjectId = null;
-        sample.currentStageId = null;
-        sample.currentTaskId = null;
-        sample.currentTestItem = "";
-        if (["测试中", "在位等待"].includes(sample.status)) sample.status = "闲置";
-        this._normalizedChanged = true;
+        this.clearSampleOccupancy(sample, { markChanged: true });
+        if (["测试中", "在位等待"].includes(sample.status)) {
+          this.repairSampleStatus(sample, "闲置", { markChanged: true });
+        }
       }
     });
   },

@@ -1,0 +1,268 @@
+/* ========================================
+   TestChamber V7 - Task sample list
+   Split from the previous monolithic module.
+   ======================================== */
+
+/* 任务样机清单 — 行式布局 */
+.task-sample-row-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-sample-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.task-sample-row:hover {
+  border-color: var(--border);
+  background: #f8fafc;
+}
+.task-sample-row.is-removed {
+  opacity: 0.78;
+  background: #fafaf9;
+  border-color: #e7e5e4;
+}
+.task-sample-row-info {
+  flex: 1 1 180px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-sample-row-id {
+  font-weight: 700;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 14px;
+  align-self: flex-start;
+}
+.task-sample-row-id:hover {
+  text-decoration: underline;
+}
+.task-sample-row-id.disabled {
+  color: #9ca3af;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.task-sample-row-archive {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-sample-row-tested {
+  flex: 0 1 200px;
+  min-width: 120px;
+  font-size: 12px;
+  color: #6b7280;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.task-sample-row-problems {
+  flex: 0 1 220px;
+  min-width: 100px;
+  font-size: 12px;
+  color: #6b7280;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.task-sample-row-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.task-sample-row-status {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sample-fault-badge.has-fault {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.sample-fault-badge.no-fault {
+  background: #dcfce7;
+  color: #166534;
+}
+.task-sample-removed-detail {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: #9a3412;
+  padding-top: 4px;
+  border-top: 1px dashed #fed7aa;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.task-sample-problem-text {
+  color: #b45309;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+.task-sample-problem-count {
+  color: #b45309;
+  font-weight: 700;
+  cursor: help;
+}
+.task-sample-problem-none {
+  color: #cbd5e1;
+}
+.task-sample-row-list .empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: #94a3b8;
+  font-size: 14px;
+}
+.task-add-footer {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 2px;
+}
+.task-add-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 168px;
+  border: 1px dashed #86efac;
+  background: rgba(240, 253, 244, .72);
+  color: #166534;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 900;
+  cursor: pointer;
+  transition: .16s ease;
+}
+.task-add-main:hover {
+  transform: translateY(-1px);
+  border-color: #22c55e;
+  background: #f0fdf4;
+  box-shadow: 0 8px 18px rgba(22, 101, 52, .10);
+}
+.task-add-main .row-action-btn { width: 28px; height: 28px; flex: 0 0 auto }
+.task-pool-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.task-pool-hint {
+  margin-left: auto;
+  color: #166534;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.task-pool-table {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.task-pool-table table {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+.task-pool-table th,
+.task-pool-table td {
+  padding: 7px 8px;
+  font-size: 12px;
+}
+.task-pool-table th { font-size: 11px; white-space: nowrap }
+.task-pool-table th:nth-child(1),
+.task-pool-table td:nth-child(1) { width: 36px; text-align: center }
+.task-pool-table th:nth-child(2),
+.task-pool-table td:nth-child(2) { width: 92px }
+.task-pool-table th:nth-child(3),
+.task-pool-table td:nth-child(3) { width: auto }
+.task-pool-table th:nth-child(4),
+.task-pool-table td:nth-child(4) { width: 72px }
+.task-pool-table th:nth-child(5),
+.task-pool-table td:nth-child(5) { width: 72px }
+.task-pool-table th:nth-child(6),
+.task-pool-table td:nth-child(6) { width: 74px }
+.task-pool-table .compact-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-pool-count {
+  max-width: 58px;
+  height: 32px;
+  padding: 5px 6px;
+  text-align: center;
+}
+@media (max-width: 1100px) {
+  .task-flow-summary { grid-template-columns: repeat(3, minmax(0, 1fr)) }
+  .task-filter-item { flex: 0 1 160px; min-width: 140px; max-width: 180px }
+}
+@media (max-width: 720px) {
+  .task-flow-summary { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+  .task-filter-item { flex: 0 1 100%; min-width: 0; max-width: none }
+  .task-add-main { width: 100%; min-width: 0; font-size: 14px }
+  .task-pool-hint { width: 100%; margin-left: 0 }
+}
+
+/* 任务结果弹窗中的挂账人行 */
+.task-result-account-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.task-result-account-row .form-group {
+  flex: 1;
+  min-width: 160px;
+}
+.task-result-account-row label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 3px;
+  display: block;
+}
+
+/* 样机去向选择行中的挂账人/持有人字段 */
+.sample-destination-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.sample-destination-extra label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+  display: block;
+}
+.sample-destination-extra input {
+  width: 100%;
+  font-size: 13px;
+}

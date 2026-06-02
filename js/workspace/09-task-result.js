@@ -243,7 +243,7 @@ Object.assign(app, {
     const photos = this.taskResultRowPhotos(row);
     list.innerHTML = photos.length ? photos.map(photo => `
       <button type="button" class="task-result-photo-chip" onclick="app.previewSamplePhoto('${Utils.esc(sampleId)}','${Utils.esc(photo.id)}')" title="${Utils.esc(photo.name || "结果图片")}">
-        ${photo.url ? `<img src="${Utils.esc(photo.url)}" alt="${Utils.esc(photo.name || "结果图片")}">` : ""}
+        ${this.photoThumbUrl(photo) ? `<img src="${Utils.esc(this.photoThumbUrl(photo))}" alt="${Utils.esc(photo.name || "结果图片")}">` : ""}
         <span>${Utils.esc(photo.name || "结果图片")}</span>
       </button>
     `).join("") : "";
@@ -267,7 +267,7 @@ Object.assign(app, {
       try {
         if (!(await this.prepareBeforeDirectMutation("上传任务结果图片前同步"))) return;
         const form = new FormData();
-        files.forEach(file => form.append("photos", file, file.name));
+        await this.appendPhotoUploadFiles(form, files);
         form.append("revision", String(this.serverRevision || 0));
         const ctx = this._taskResultUploadContext || {};
         form.append("remark", `任务结果图片：${ctx.taskLabel || "未命名任务"}`);
@@ -278,6 +278,8 @@ Object.assign(app, {
           id: photo.id,
           name: photo.name || "结果图片",
           url: photo.url || "",
+          thumbUrl: photo.thumbUrl || photo.thumbnailUrl || "",
+          thumbnailUrl: photo.thumbnailUrl || photo.thumbUrl || "",
           uploadedAt: photo.uploadedAt || Utils.now(),
           type: photo.type || "",
           size: photo.size || 0
@@ -336,6 +338,8 @@ Object.assign(app, {
         id: photo.id,
         name: photo.name || "结果图片",
         url: photo.url || "",
+        thumbUrl: photo.thumbUrl || photo.thumbnailUrl || "",
+        thumbnailUrl: photo.thumbnailUrl || photo.thumbUrl || "",
         uploadedAt: photo.uploadedAt || "",
         type: photo.type || "",
         size: photo.size || 0
@@ -562,22 +566,17 @@ Object.assign(app, {
 
     if (finishTask) {
       const completionType = payload.finishType;
-      task.status = completionType;
-      task.completed = true;
-      task.completionType = completionType;
-      task.completedAt = now;
-      task.endDate = payload.resultDate || Utils.today();
-      const progress = stage.progress.find(x => x.id === task.progressId);
-      if (progress) {
-        progress.status = result;
-        progress.endDate = task.endDate;
-        progress.issue = result === "Fail" ? reason : "";
-      }
+      const transition = this.transitionTaskStatus(stage, task, completionType, {
+        completedAt: now,
+        endDate: payload.resultDate || Utils.today(),
+        progressStatus: result,
+        issue: result === "Fail" ? reason : ""
+      });
       this.addTaskLog(task, "结束任务", {
         user: payload.user,
         reason,
         fromStatus: from,
-        toStatus: completionType,
+        toStatus: transition.toStatus,
         detail: `结果：${result}；结束方式：${completionType}`
       });
     } else {
