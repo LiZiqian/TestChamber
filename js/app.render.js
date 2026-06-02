@@ -107,17 +107,13 @@ Object.assign(app, {
         ${subHtml}`;
     }).join("");
 
-    // 数据工具区（底部）
-    document.getElementById("nav").innerHTML += `
-      <div class="nav-tools-divider"></div>
-      <div class="nav-tools-section">
-        <div class="nav-tools-title">数据工具</div>
-        <div class="nav-tool-item" onclick="app.exportBundle()" title="导出完整数据包">
-          <span class="nav-tool-icon">⬇</span><span class="nav-tool-label">导出完整数据包</span>
-        </div>
-        <div class="nav-tool-item" onclick="app.importBundle()" title="导入数据包">
-          <span class="nav-tool-icon">⬆</span><span class="nav-tool-label">导入数据包</span>
-        </div>
+    // 数据工具（侧栏底部）
+    document.getElementById("navTools").innerHTML = `
+      <div class="nav-tool-item" onclick="app.exportBundle()" title="导出完整数据包">
+        <span class="nav-tool-icon">⬇</span><span class="nav-tool-label">导出完整数据包</span>
+      </div>
+      <div class="nav-tool-item" onclick="app.importBundle()" title="导入数据包">
+        <span class="nav-tool-icon">⬆</span><span class="nav-tool-label">导入数据包</span>
       </div>`;
 
     this.applySidebarState();

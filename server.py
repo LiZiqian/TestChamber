@@ -25,6 +25,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 import zipfile
 from collections import defaultdict
@@ -1543,6 +1544,81 @@ def _content_hash(data: object) -> str:
     return hashlib.sha256(stable_json(data).encode("utf-8")).hexdigest()[:16]
 
 
+# ── ZIP 安全解压 ──
+
+_ZIP_MAX_FILE_BYTES = 100 * 1024 * 1024   # 单个文件最大 100MB
+_ZIP_MAX_TOTAL_BYTES = 500 * 1024 * 1024  # 总解压最大 500MB
+_ZIP_ALLOWED_PREFIXES = (
+    "manifest.json",
+    "state.json",
+    "checksums.json",
+    "assets/samples/",
+)
+
+# 危险模式：路径穿越
+_ZIP_DANGEROUS_RE = re.compile(
+    r"(^|[/\\])\.\.[/\\]"       # ../ 或 ..\
+    r"|^[/\\]"                   # 绝对路径
+    r"|^[A-Za-z]:[/\\]"         # Windows 盘符 (C:\ D:/)
+)
+# 符号链接标志位（不同平台可能不同，这里只防御常见情况）
+# ZipInfo.external_attr 高 16 位是 Unix 文件模式，symlink 是 0120000
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, dest_dir: str) -> None:
+    """安全解压 zip 到 dest_dir，防御路径穿越、符号链接、超大文件"""
+    dest = Path(dest_dir).resolve()
+    total_bytes = 0
+
+    for entry in zf.infolist():
+        name = entry.filename
+
+        # 1. 拒绝危险路径模式
+        if _ZIP_DANGEROUS_RE.search(name.replace("\\", "/")):
+            raise ValueError(f"ZIP 包含不安全路径: {name}")
+
+        # 2. 拒绝符号链接
+        # Unix symlink: external_attr >> 16 & 0o170000 == 0o120000
+        mode = (entry.external_attr >> 16) & 0o170000
+        if mode == 0o120000:
+            raise ValueError(f"ZIP 包含符号链接，拒绝: {name}")
+
+        # 3. 白名单路径前缀
+        allowed = any(name == p or name.startswith(p) for p in _ZIP_ALLOWED_PREFIXES)
+        if not allowed:
+            raise ValueError(f"ZIP 包含不允许的文件: {name}")
+
+        # 4. 验证解压后仍在 dest 子树内
+        # 先归一化路径再解析
+        normalized = name.replace("\\", "/")
+        target = (dest / normalized).resolve()
+        try:
+            target.relative_to(dest)
+        except ValueError:
+            raise ValueError(f"ZIP 路径越界: {name}")
+
+        # 5. 大小检查
+        file_size = entry.file_size
+        if file_size > _ZIP_MAX_FILE_BYTES:
+            raise ValueError(f"ZIP 文件过大 ({file_size} bytes): {name}")
+        total_bytes += file_size
+        if total_bytes > _ZIP_MAX_TOTAL_BYTES:
+            raise ValueError(f"ZIP 总解压大小超过 {_ZIP_MAX_TOTAL_BYTES} bytes")
+
+        # 6. 安全写入
+        if entry.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(entry) as src, open(target, "wb") as dst:
+                # 分块读取，避免大文件撑爆内存
+                while True:
+                    chunk = src.read(8192)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+
+
 def _entity_label_for_conflict(entity: str, item: dict) -> str:
     """生成冲突项的人类可读标签"""
     if entity == "project":
@@ -1624,7 +1700,7 @@ def build_export_bundle() -> tuple[bytes, str]:
         zf.writestr("state.json", state_json)
         zf.writestr("checksums.json", json_dumps(checksums, pretty=True))
 
-        # 收集照片资产
+        # 收集照片资产（单个文件异常不中断整个导出）
         for cat in (export_data.get("sampleLibrary") or {}).get("categories") or []:
             for sample in cat.get("samples") or []:
                 sid = sample.get("id")
@@ -1634,18 +1710,24 @@ def build_export_bundle() -> tuple[bytes, str]:
                     pid = photo.get("id")
                     if not pid:
                         continue
-                    # 原图
-                    rel = photo.get("url", "")
+                    # 原图 — use relativePath to locate files on disk
+                    rel = (photo.get("relativePath") or "").strip()
                     if rel:
-                        rp = path_inside_data(rel)
-                        if rp.is_file():
-                            zf.write(rp, f"assets/samples/{sid}/photos/{rp.name}")
-                    # 缩略图
-                    thumb_url = photo.get("thumbUrl", "")
-                    if thumb_url:
-                        tp = path_inside_data(thumb_url)
-                        if tp.is_file():
-                            zf.write(tp, f"assets/samples/{sid}/photos/{tp.name}")
+                        try:
+                            rp = path_inside_data(rel)
+                            if rp.is_file():
+                                zf.write(rp, f"assets/samples/{sid}/photos/{rp.name}")
+                        except (ValueError, OSError, RuntimeError) as e:
+                            print(f"[EXPORT] 跳过照片 {pid}: {e}")
+                    # 缩略图 — use thumbRelativePath
+                    thumb_rel = (photo.get("thumbRelativePath") or "").strip()
+                    if thumb_rel:
+                        try:
+                            tp = path_inside_data(thumb_rel)
+                            if tp.is_file():
+                                zf.write(tp, f"assets/samples/{sid}/photos/{tp.name}")
+                        except (ValueError, OSError, RuntimeError) as e:
+                            print(f"[EXPORT] 跳过缩略图 {pid}: {e}")
 
     ts = exported_at.replace("-", "").replace(":", "")[:15]
     filename = f"testchamber_export_{ts}.zip"
@@ -1676,7 +1758,7 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
     tmp_dir = tempfile.mkdtemp(prefix="tcv7_import_")
     try:
         with zipfile.ZipFile(io.BytesIO(zip_raw), "r") as zf:
-            zf.extractall(tmp_dir)
+            _safe_extract_zip(zf, tmp_dir)
 
         tmp_path = Path(tmp_dir)
 
@@ -1693,7 +1775,7 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
         incoming_state = json.loads(state_path.read_text(encoding="utf-8"))
 
         # 获取主库当前数据
-        current_data, _, _ = get_state()
+        current_data, current_revision, _ = get_state()
 
         # 分析
         result = _diff_import_bundle(current_data, incoming_state, manifest, tmp_path)
@@ -1702,6 +1784,7 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
             "_ts": time.time(),
             "_tmp_dir": str(tmp_path),
             "_incoming": incoming_state,
+            "_revision": current_revision,
             "result": result,
         }
         # 不清理 tmp_dir（commit 时需要）
@@ -1755,10 +1838,10 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
             sid = sample.get("id", "")
             for photo in sample.get("photos") or []:
                 pid = photo.get("id", "")
-                url = photo.get("url", "")
-                if url:
+                rel = photo.get("relativePath", "")
+                if rel:
                     # 检查文件是否在 assets 目录中（相对于导入包）
-                    fn = Path(url).name
+                    fn = Path(rel).name
                     asset_path = _tmp_path / "assets" / "samples" / sid / "photos" / fn
                     if not asset_path.is_file():
                         missing_photo_assets.append(pid)
@@ -1793,7 +1876,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                     "current": {k: curr_p.get(k) for k in field_diffs},
                     "incoming": {k: proj.get(k) for k in field_diffs},
                     "diffFields": list(field_diffs),
-                    "allowedActions": ["keep_current", "use_incoming"],
+                    "allowedActions": ["apply_field_choices"],
                 })
             # 递归匹配阶段/任务
             _diff_stages(curr_p, proj, pid, pid, _next_conflict_id, conflicts, auto_apply)
@@ -1865,7 +1948,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                         "current": {k: curr_s.get(k) for k in field_diffs},
                         "incoming": {k: sample.get(k) for k in field_diffs},
                         "diffFields": list(field_diffs),
-                        "allowedActions": ["keep_current", "use_incoming"],
+                        "allowedActions": ["apply_field_choices"],
                         "mergeableFields": list(field_diffs),
                     })
                 continue
@@ -1884,7 +1967,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                         "label": f"SN: {sn}",
                         "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
                         "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
-                        "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                        "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
                         "mergeableFields": mergeable,
                         "autoMergeSubData": ["logs", "photos", "problemRecords"],
                         "preferredMergeTarget": curr_s["id"],
@@ -1905,7 +1988,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                         "label": f"IMEI: {imei}",
                         "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
                         "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
-                        "allowedActions": ["merge_into_existing", "rename_import", "skip"],
+                        "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
                         "mergeableFields": mergeable,
                         "autoMergeSubData": ["logs", "photos", "problemRecords"],
                         "preferredMergeTarget": curr_s["id"],
@@ -1996,7 +2079,7 @@ def _diff_stages(curr_proj: dict, incoming_proj: dict, curr_proj_id: str, inc_pr
                     "current": {k: curr_s.get(k) for k in field_diffs},
                     "incoming": {k: stage.get(k) for k in field_diffs},
                     "diffFields": list(field_diffs),
-                    "allowedActions": ["keep_current", "use_incoming"],
+                    "allowedActions": ["apply_field_choices"],
                 })
             # 递归任务
             curr_tasks = {t["id"]: t for t in (curr_s.get("tasks") or [])}
@@ -2016,7 +2099,7 @@ def _diff_stages(curr_proj: dict, incoming_proj: dict, curr_proj_id: str, inc_pr
                             "current": {k: curr_t.get(k) for k in field_diffs},
                             "incoming": {k: task.get(k) for k in field_diffs},
                             "diffFields": list(field_diffs),
-                            "allowedActions": ["keep_current", "use_incoming"],
+                            "allowedActions": ["apply_field_choices"],
                             "mergeableFields": list(field_diffs),
                         })
                 else:
@@ -2094,6 +2177,17 @@ def commit_import_bundle(payload: dict) -> dict:
     if blockers:
         return {"ok": False, "error": "存在阻断项（如缺失照片），无法提交导入", "blockers": blockers, "status": 400}
 
+    # ── Revision 校验：commit 时主库 revision 必须与 preview 时一致 ──
+    preview_revision = entry.get("_revision")
+    if preview_revision is not None:
+        _, current_revision_check, _ = get_state()
+        if current_revision_check != preview_revision:
+            return {"ok": False,
+                    "error": "服务器数据在预览后被其他用户修改，请重新选择文件导入。",
+                    "error_code": "IMPORT_REVISION_CONFLICT",
+                    "server_revision": current_revision_check,
+                    "status": 409}
+
     # 验证所有 conflict 都有 decision
     for c in result.get("conflicts") or []:
         cid = c.get("conflictId")
@@ -2101,8 +2195,17 @@ def commit_import_bundle(payload: dict) -> dict:
             return {"ok": False, "error": f"冲突 {cid} 尚未处理", "status": 400}
         d = decisions[cid]
         action = d.get("action", "")
-        if action == "rename_import" and not d.get("newName", "").strip():
-            return {"ok": False, "error": f"冲突 {cid} 选择改名导入但未提供新名称", "status": 400}
+        if action == "rename_import":
+            # 项目/阶段/任务改名导入：必须有 newName
+            if not d.get("newName", "").strip():
+                return {"ok": False, "error": f"冲突 {cid} 选择改名导入但未提供新名称", "status": 400}
+        elif action == "import_as_new_with_identity_edit":
+            # 样机标识编辑导入：必须有至少一个新标识字段
+            new_sn = (d.get("newSN") or "").strip()
+            new_imei = (d.get("newIMEI") or "").strip()
+            new_sample_no = (d.get("newSampleNo") or "").strip()
+            if not new_sn and not new_imei and not new_sample_no:
+                return {"ok": False, "error": f"冲突 {cid} 选择编辑标识导入但未提供新 SN/IMEI/编号", "status": 400}
 
     # 先备份
     current_data, current_revision, _ = get_state()
@@ -2123,8 +2226,15 @@ def commit_import_bundle(payload: dict) -> dict:
     curr_projects = {p["id"]: p for p in (current_data.setdefault("projects", []))}
     incoming_projects_by_id = {p["id"]: p for p in (incoming.get("projects") or [])}
 
-    stats = {"projectsAdded": 0, "projectsMerged": 0, "stagesAdded": 0, "tasksAdded": 0,
-             "samplesAdded": 0, "samplesMerged": 0, "photosAdded": 0, "skipped": 0}
+    stats = {"projectsAdded": 0, "projectsMerged": 0, "stagesAdded": 0, "stagesMerged": 0,
+             "tasksAdded": 0, "tasksMerged": 0, "samplesAdded": 0, "samplesMerged": 0,
+             "photosAdded": 0, "skipped": 0}
+
+    # ── ID 映射表（incoming → target），所有写入必须经此重映射 ──
+    project_id_map: dict[str, str] = {}  # incomingPID → targetPID
+    stage_id_map: dict[str, str] = {}    # incomingSID → targetSID
+    task_id_map: dict[str, str] = {}     # incomingTID → targetTID
+    sample_id_map: dict[str, str] = {}   # incomingSampleID → targetSampleID
 
     for auto in result.get("autoApply") or []:
         atype = auto["type"]
@@ -2133,6 +2243,7 @@ def commit_import_bundle(payload: dict) -> dict:
             if pid not in curr_projects and pid in incoming_projects_by_id:
                 curr_projects[pid] = _normalize_project(incoming_projects_by_id[pid])
                 stats["projectsAdded"] += 1
+                project_id_map[pid] = pid
         elif atype == "new_stage":
             proj_id = auto.get("projectId", "")
             sid = auto["id"]
@@ -2142,6 +2253,7 @@ def commit_import_bundle(payload: dict) -> dict:
                     if inc_stage.get("id") == sid:
                         curr_projects[proj_id].setdefault("stages", []).append(copy.deepcopy(inc_stage))
                         stats["stagesAdded"] += 1
+                        stage_id_map[sid] = sid
                         break
         elif atype == "new_task":
             proj_id = auto.get("projectId", "")
@@ -2158,6 +2270,7 @@ def commit_import_bundle(payload: dict) -> dict:
                                     if cs.get("id") == stage_id:
                                         cs.setdefault("tasks", []).append(copy.deepcopy(inc_task))
                                         stats["tasksAdded"] += 1
+                                        task_id_map[tid] = tid
                                         break
                                 break
                         break
@@ -2165,12 +2278,85 @@ def commit_import_bundle(payload: dict) -> dict:
             sid = auto["id"]
             # 稍后处理
 
+    # 处理样机类别索引（field_conflict 中 sample 类型需要）
+    curr_categories = {c["id"]: c for c in (current_data.setdefault("sampleLibrary", {})).setdefault("categories", [])}
+    incoming_cats_by_id = {}
+    for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+        incoming_cats_by_id[cat["id"]] = cat
+        for s in cat.get("samples") or []:
+            incoming_cats_by_id[s["id"]] = s
+
     # 处理项目级冲突
     for c in result.get("conflicts") or []:
         cid = c["conflictId"]
         d = decision_map.get(cid, {})
         action = d.get("action", "skip")
         etype = c.get("entity")
+
+        # ── 硬规则：未实现冲突类型必须报错 ──
+        ctype = c.get("type", "unknown")
+        SUPPORTED = ("field_conflict", "project_name_conflict",
+                     "stage_name_conflict", "task_name_conflict",
+                     "sample_identity_conflict", "task_occupancy_conflict")
+        if ctype not in SUPPORTED:
+            return {"ok": False,
+                    "error": f"不支持的冲突类型: {ctype} (冲突 {cid})",
+                    "error_code": "UNSUPPORTED_IMPORT_CONFLICT", "status": 400}
+
+        # ── field_conflict：统一处理所有实体类型 ──
+        if c.get("type") == "field_conflict":
+            if action == "apply_field_choices":
+                field_choices = d.get("fieldChoices", {})
+                target_id = c.get("currentId")
+                inc_id = c.get("incomingId")
+                if etype == "project":
+                    if target_id in curr_projects and inc_id in incoming_projects_by_id:
+                        curr_p = curr_projects[target_id]
+                        inc_p = incoming_projects_by_id[inc_id]
+                        for fname in c.get("diffFields", []):
+                            choice = field_choices.get(fname, "current")
+                            if choice == "incoming" and fname in inc_p:
+                                curr_p[fname] = inc_p[fname]
+                        stats["projectsMerged"] += 1
+                        project_id_map[inc_id] = target_id
+                elif etype == "stage":
+                    # 在当前主库中查找 stage
+                    for proj_id, proj in curr_projects.items():
+                        for stage in proj.get("stages") or []:
+                            if stage.get("id") == target_id:
+                                inc_stage = _find_incoming_stage(incoming_projects_by_id, inc_id)
+                                if inc_stage:
+                                    for fname in c.get("diffFields", []):
+                                        choice = field_choices.get(fname, "current")
+                                        if choice == "incoming" and fname in inc_stage:
+                                            stage[fname] = inc_stage[fname]
+                                break
+                elif etype == "task":
+                    for proj_id, proj in curr_projects.items():
+                        for stage in proj.get("stages") or []:
+                            for task in stage.get("tasks") or []:
+                                if task.get("id") == target_id:
+                                    inc_task = _find_incoming_task(incoming_projects_by_id, inc_id)
+                                    if inc_task:
+                                        for fname in c.get("diffFields", []):
+                                            choice = field_choices.get(fname, "current")
+                                            if choice == "incoming" and fname in inc_task:
+                                                task[fname] = inc_task[fname]
+                                    break
+                elif etype == "sample":
+                    for cat_id, cat in curr_categories.items():
+                        for cs in cat.get("samples") or []:
+                            if cs.get("id") == target_id:
+                                inc_sample = incoming_cats_by_id.get(inc_id)
+                                if inc_sample and isinstance(inc_sample, dict):
+                                    for fname in c.get("diffFields", []):
+                                        choice = field_choices.get(fname, "current")
+                                        if choice == "incoming" and fname in inc_sample:
+                                            cs[fname] = inc_sample[fname]
+                                break
+            elif action == "skip":
+                stats["skipped"] += 1
+            continue  # field_conflict 已处理，跳过后续 entity 特定逻辑
 
         if etype == "project":
             ipid = c.get("incomingId")
@@ -2182,6 +2368,7 @@ def commit_import_bundle(payload: dict) -> dict:
                     curr_proj = curr_projects[target_id]
                     _merge_project_sub_data(curr_proj, inc_proj)
                     stats["projectsMerged"] += 1
+                    project_id_map[ipid] = target_id
             elif action == "rename_import":
                 new_name = d.get("newName", "").strip()
                 if new_name and ipid in incoming_projects_by_id:
@@ -2189,7 +2376,104 @@ def commit_import_bundle(payload: dict) -> dict:
                     inc_proj["name"] = new_name
                     curr_projects[ipid] = _normalize_project(inc_proj)
                     stats["projectsAdded"] += 1
+                    project_id_map[ipid] = ipid
             elif action == "skip":
+                stats["skipped"] += 1
+
+        # ── stage_name_conflict ──
+        elif c.get("type") == "stage_name_conflict":
+            inc_sid = c.get("incomingId")
+            inc_stage = _find_incoming_stage(incoming_projects_by_id, inc_sid)
+            if action == "merge_into_existing":
+                target_id = d.get("targetId") or c.get("preferredMergeTarget") or c.get("currentId")
+                if inc_stage and target_id:
+                    for proj_id, proj in curr_projects.items():
+                        for st in proj.get("stages") or []:
+                            if st.get("id") == target_id:
+                                existing_task_ids = {t.get("id") for t in (st.get("tasks") or [])}
+                                for inc_task in inc_stage.get("tasks") or []:
+                                    tid = inc_task.get("id", "")
+                                    if tid and tid not in existing_task_ids:
+                                        st.setdefault("tasks", []).append(copy.deepcopy(inc_task))
+                                        stats["tasksAdded"] += 1
+                                        existing_task_ids.add(tid)
+                                stats["stagesMerged"] += 1
+                                stage_id_map[inc_sid] = target_id
+                                break
+            elif action == "rename_import":
+                new_name = d.get("newName", "").strip()
+                if new_name and inc_stage and inc_sid:
+                    inc_stage["name"] = new_name
+                    # 查找 stage 所属的 incoming project，经 project_id_map 定位 target project
+                    for inc_pid, inc_proj in incoming_projects_by_id.items():
+                        found = any(s.get("id") == inc_sid for s in (inc_proj.get("stages") or []))
+                        if found:
+                            target_pid = project_id_map.get(inc_pid, inc_pid)
+                            if target_pid in curr_projects:
+                                curr_projects[target_pid].setdefault("stages", []).append(copy.deepcopy(inc_stage))
+                                stats["stagesAdded"] += 1
+                                stage_id_map[inc_sid] = inc_sid
+                            break
+            elif action == "skip":
+                stats["skipped"] += 1
+
+        # ── task_name_conflict ──
+        elif c.get("type") == "task_name_conflict":
+            inc_tid = c.get("incomingId")
+            inc_task = _find_incoming_task(incoming_projects_by_id, inc_tid)
+            if action == "merge_into_existing":
+                target_id = d.get("targetId") or c.get("preferredMergeTarget") or c.get("currentId")
+                if inc_task and target_id:
+                    for proj_id, proj in curr_projects.items():
+                        for st in proj.get("stages") or []:
+                            for tk in st.get("tasks") or []:
+                                if tk.get("id") == target_id:
+                                    # 合并日志/结果
+                                    for subkey in ("logs", "resultUploads", "sampleFaultRecords", "removedSampleRecords"):
+                                        existing_hashes = {_content_hash(x) for x in (tk.get(subkey) or [])}
+                                        for item in (inc_task.get(subkey) or []):
+                                            if _content_hash(item) not in existing_hashes:
+                                                tk.setdefault(subkey, []).append(copy.deepcopy(item))
+                                                existing_hashes.add(_content_hash(item))
+                                    stats["tasksMerged"] += 1
+                                    task_id_map[inc_tid] = target_id
+                                    break
+            elif action == "rename_import":
+                new_name = d.get("newName", "").strip()
+                if new_name and inc_task and inc_tid:
+                    inc_task["testItem"] = new_name
+                    # 找到 task 所属的 stage → project，经映射定位
+                    for inc_pid, inc_proj in incoming_projects_by_id.items():
+                        for inc_st in (inc_proj.get("stages") or []):
+                            for inc_tk in (inc_st.get("tasks") or []):
+                                if inc_tk.get("id") == inc_tid:
+                                    target_pid = project_id_map.get(inc_pid, inc_pid)
+                                    target_sid = stage_id_map.get(inc_st.get("id"), inc_st.get("id"))
+                                    if target_pid in curr_projects:
+                                        for cs in curr_projects[target_pid].get("stages") or []:
+                                            if cs.get("id") == target_sid:
+                                                cs.setdefault("tasks", []).append(copy.deepcopy(inc_task))
+                                                stats["tasksAdded"] += 1
+                                                task_id_map[inc_tid] = inc_tid
+                                                break
+                                    break
+            elif action == "skip":
+                stats["skipped"] += 1
+
+        # ── task_occupancy_conflict ──
+        elif c.get("type") == "task_occupancy_conflict":
+            sid = c.get("sampleId")
+            if action in ("skip_occupancy", "import_no_occupy", "skip"):
+                if action == "skip_occupancy" and sid:
+                    # 清除导入样机的占用字段
+                    for inc_cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
+                        for inc_s in inc_cat.get("samples") or []:
+                            if inc_s.get("id") == sid:
+                                inc_s["currentTaskId"] = None
+                                inc_s["currentProjectId"] = None
+                                inc_s["currentStageId"] = None
+                                inc_s["currentTestItem"] = None
+                                break
                 stats["skipped"] += 1
 
     # 处理样机
@@ -2221,6 +2505,7 @@ def commit_import_bundle(payload: dict) -> dict:
                             curr_categories[new_cat_id] = target_cat
                         target_cat.setdefault("samples", []).append(copy.deepcopy(inc_s))
                         stats["samplesAdded"] += 1
+                        sample_id_map[sid] = sid
                         break
 
     # 处理样机冲突
@@ -2275,8 +2560,9 @@ def commit_import_bundle(payload: dict) -> dict:
                                                 cs.setdefault("logs", []).append(copy.deepcopy(log))
                                                 existing_hashes.add(_content_hash(log))
                                 stats["samplesMerged"] += 1
+                                sample_id_map[inc_id] = target_id
                                 break
-            elif action == "rename_import":
+            elif action == "import_as_new_with_identity_edit":
                 inc_id = c.get("incomingId")
                 new_sn = d.get("newSN", "").strip()
                 new_imei = d.get("newIMEI", "").strip()
@@ -2309,45 +2595,73 @@ def commit_import_bundle(payload: dict) -> dict:
                         curr_categories[new_cat_id] = target_cat
                     target_cat.setdefault("samples", []).append(copy.deepcopy(inc_sample))
                     stats["samplesAdded"] += 1
+                    sample_id_map[inc_id] = inc_id
             elif action == "skip":
                 stats["skipped"] += 1
 
-    # ── 复制照片资产文件 ──
+    # ── 复制照片资产文件（经 sample_id_map 定位源文件）──
+    # 反向映射：target sample ID → incoming sample ID
+    target_to_incoming_sample: dict[str, str] = {v: k for k, v in sample_id_map.items()}
     for cat in curr_categories.values():
         for sample in cat.get("samples") or []:
-            sid = sample.get("id", "")
+            target_sid = sample.get("id", "")
+            # 查找照片在导入包中对应的 incoming 样机 ID
+            inc_sid = target_to_incoming_sample.get(target_sid, target_sid)
             for photo in sample.get("photos") or []:
-                url = photo.get("url", "")
-                if url:
-                    fn = Path(url).name
-                    asset_src = tmp_dir / "assets" / "samples" / sid / "photos" / fn
+                photo_id = photo.get("id", "")
+                # 原图：用 relativePath 获取真实文件名（含扩展名）
+                rel = photo.get("relativePath", "")
+                if rel:
+                    fn = Path(rel).name
+                    asset_src = tmp_dir / "assets" / "samples" / inc_sid / "photos" / fn
                     if asset_src.is_file():
-                        dest_dir = SAMPLE_DATA_DIR / sid / "photos"
+                        dest_dir = SAMPLE_DATA_DIR / target_sid / "photos"
                         dest_dir.mkdir(parents=True, exist_ok=True)
                         dest_path = dest_dir / fn
                         if not dest_path.exists():
                             shutil.copy2(asset_src, dest_path)
-                        # 更新 url 为相对路径
-                        photo["url"] = f"data/samples/{sid}/photos/{fn}"
-                thumb_url = photo.get("thumbUrl", "")
-                if thumb_url:
-                    fn2 = Path(thumb_url).name
-                    asset_src2 = tmp_dir / "assets" / "samples" / sid / "photos" / fn2
-                    if asset_src2.is_file():
-                        dest_dir = SAMPLE_DATA_DIR / sid / "photos"
+                            stats["photosAdded"] += 1
+                        # 重写 4 个路径字段，全部基于 target_sid
+                        photo["relativePath"] = f"samples/{target_sid}/photos/{fn}"
+                        photo["url"] = f"/api/samples/{target_sid}/photos/{photo_id}"
+                    else:
+                        # 文件缺失：清除路径引用避免 404
+                        photo["url"] = ""
+                        photo["relativePath"] = ""
+                else:
+                    photo["url"] = ""
+                    photo["relativePath"] = ""
+                # 缩略图：用 thumbRelativePath
+                thumb_rel = photo.get("thumbRelativePath", "")
+                if thumb_rel:
+                    thumb_fn = Path(thumb_rel).name
+                    thumb_src = tmp_dir / "assets" / "samples" / inc_sid / "photos" / thumb_fn
+                    if thumb_src.is_file():
+                        dest_dir = SAMPLE_DATA_DIR / target_sid / "photos"
                         dest_dir.mkdir(parents=True, exist_ok=True)
-                        dest_path = dest_dir / fn2
-                        if not dest_path.exists():
-                            shutil.copy2(asset_src2, dest_path)
-                        photo["thumbUrl"] = f"data/samples/{sid}/photos/{fn2}"
+                        thumb_dest = dest_dir / thumb_fn
+                        if not thumb_dest.exists():
+                            shutil.copy2(thumb_src, thumb_dest)
+                        # 重写缩略图路径
+                        photo["thumbRelativePath"] = f"samples/{target_sid}/photos/{thumb_fn}"
+                        photo["thumbUrl"] = url_for_asset(target_sid, thumbnail_asset_id(photo_id))
+                    else:
+                        photo["thumbUrl"] = ""
+                        photo["thumbRelativePath"] = ""
+                else:
+                    photo["thumbUrl"] = ""
+                    photo["thumbRelativePath"] = ""
 
     # ── 重新生成样机数据，同步到 SQLite ──
     # 将 categories dict 转回 list
     current_data["sampleLibrary"]["categories"] = list(curr_categories.values())
     current_data["projects"] = list(curr_projects.values())
 
+    # ── 统一 ID 重映射：所有交叉引用经映射表重写 ──
+    _apply_id_maps(current_data, project_id_map, stage_id_map, task_id_map, sample_id_map)
+
     import_remark = f"导入数据包 (deployment={source_manifest.get('sourceDeploymentId','?')})"
-    ok, resp = save_state(current_data, None, "import-bundle", remark=import_remark, user="数据导入")
+    ok, resp = save_state(current_data, preview_revision, "import-bundle", remark=import_remark, user="数据导入")
 
     if not ok:
         _cleanup_preview_temp(preview_id)
@@ -2357,7 +2671,74 @@ def commit_import_bundle(payload: dict) -> dict:
     _cleanup_preview_temp(preview_id)
     del _IMPORT_PREVIEWS[preview_id]
 
-    return {"ok": True, "stats": stats, "newRevision": resp.get("newRevision", 0)}
+    return {"ok": True, "stats": stats, "newRevision": resp.get("revision", 0), "updated_at": resp.get("updated_at", "")}
+
+
+def _find_incoming_stage(incoming_projects_by_id: dict, stage_id: str) -> dict | None:
+    """在导入数据中查找指定 ID 的 stage"""
+    for proj in incoming_projects_by_id.values():
+        for stage in (proj.get("stages") or []):
+            if stage.get("id") == stage_id:
+                return stage
+    return None
+
+
+def _find_incoming_task(incoming_projects_by_id: dict, task_id: str) -> dict | None:
+    """在导入数据中查找指定 ID 的 task"""
+    for proj in incoming_projects_by_id.values():
+        for stage in (proj.get("stages") or []):
+            for task in (stage.get("tasks") or []):
+                if task.get("id") == task_id:
+                    return task
+    return None
+
+
+def _apply_id_maps(data: dict, project_id_map: dict, stage_id_map: dict,
+                   task_id_map: dict, sample_id_map: dict) -> None:
+    """统一重映射所有交叉引用 ID（传入的 data 原地修改）"""
+    # 1. 项目：重映射 stage/task 中的引用
+    for proj in data.get("projects") or []:
+        for stage in proj.get("stages") or []:
+            for task in stage.get("tasks") or []:
+                # 任务 sampleIds 经 sample_id_map 重映射
+                if task.get("sampleIds"):
+                    task["sampleIds"] = [sample_id_map.get(sid, sid) for sid in task["sampleIds"]]
+                # 任务日志
+                for log in task.get("logs") or []:
+                    _remap_log_ids(log, project_id_map, stage_id_map, task_id_map, sample_id_map)
+                # removedSampleRecords
+                for rec in task.get("removedSampleRecords") or []:
+                    old_sid = rec.get("sampleId")
+                    if old_sid and old_sid in sample_id_map:
+                        rec["sampleId"] = sample_id_map[old_sid]
+                # sampleFaultRecords
+                for rec in task.get("sampleFaultRecords") or []:
+                    old_sid = rec.get("sampleId")
+                    if old_sid and old_sid in sample_id_map:
+                        rec["sampleId"] = sample_id_map[old_sid]
+
+    # 2. 样机：重映射占用字段
+    for cat in (data.get("sampleLibrary") or {}).get("categories") or []:
+        for sample in cat.get("samples") or []:
+            cp = sample.get("currentProjectId")
+            if cp and cp in project_id_map:
+                sample["currentProjectId"] = project_id_map[cp]
+            cs = sample.get("currentStageId")
+            if cs and cs in stage_id_map:
+                sample["currentStageId"] = stage_id_map[cs]
+            ct = sample.get("currentTaskId")
+            if ct and ct in task_id_map:
+                sample["currentTaskId"] = task_id_map[ct]
+
+
+def _remap_log_ids(log: dict, project_id_map: dict, stage_id_map: dict,
+                   task_id_map: dict, sample_id_map: dict) -> None:
+    """重映射单条日志中的 ID 引用"""
+    for field, id_map in [("sampleId", sample_id_map), ("projectId", project_id_map),
+                           ("stageId", stage_id_map), ("taskId", task_id_map)]:
+        old_val = log.get(field)
+        if old_val and old_val in id_map:
+            log[field] = id_map[old_val]
 
 
 def _merge_project_sub_data(target: dict, source: dict) -> None:
@@ -2647,7 +3028,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(zip_bytes)
             except Exception as e:
-                self._send_json({"ok": False, "error": str(e)}, 500)
+                traceback.print_exc()
+                self._send_json({"ok": False, "error": str(e), "errorCode": "EXPORT_FAILED"}, 500)
             return
 
         if path == "/api/state":

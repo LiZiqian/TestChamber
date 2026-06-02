@@ -1,48 +1,41 @@
 /* ========================================
-   TestChamber V7 — 数据包导入预览弹窗
+   TestChamber V7 — 数据包导入预览弹窗 & 导航工具
    ======================================== */
 
-/* ── 导航数据工具区 ── */
+/* ── 导航数据工具（侧栏底部 .sidebar-footer 内）── */
 
-.nav-tools-divider {
-  border-top: 1px solid var(--color-border, #e0e0e0);
-  margin: 8px 12px 4px;
-}
-
-.nav-tools-section {
-  padding: 4px 8px 8px;
-  opacity: 0.75;
-}
-
-.nav-tools-title {
-  font-size: 11px;
-  color: var(--color-text-muted, #888);
-  padding: 4px 12px 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.nav-tools {
+  padding: 0 0 6px;
 }
 
 .nav-tool-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--color-text-secondary, #666);
+  color: #64748b;
   transition: background 0.15s, color 0.15s;
 }
 
 .nav-tool-item:hover {
-  background: var(--color-bg-hover, #f0f0f0);
-  color: var(--color-text, #333);
+  background: #f1f5f9;
+  color: #0f172a;
 }
 
 .nav-tool-icon {
-  font-size: 12px;
-  width: 18px;
+  font-size: 14px;
+  width: 22px;
   text-align: center;
+  flex-shrink: 0;
+}
+
+.nav-tool-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── 导入预览弹窗 ── */

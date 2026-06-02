@@ -7,14 +7,59 @@ Object.assign(app, {
 
   // ── 导出 ──
 
-  exportBundle() {
-    const a = document.createElement("a");
-    a.href = "/api/export-bundle";
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    Utils.toast("正在下载数据包…");
+  async exportBundle() {
+    Utils.toast("正在生成数据包…");
+    try {
+      const resp = await fetch("/api/export-bundle");
+      if (!resp.ok) {
+        let serverMsg = "";
+        try {
+          const err = await resp.json();
+          if (err && err.error) serverMsg = err.error;
+        } catch (_) { /* response not JSON */ }
+        const fullMsg = serverMsg ? `${serverMsg} (HTTP ${resp.status})` : `HTTP ${resp.status}`;
+        console.error("[EXPORT] 导出失败:", fullMsg, "| Content-Type:", resp.headers.get("Content-Type"));
+        if (resp.status === 403) {
+          Utils.toast("导出失败：服务器拒绝访问，请尝试重启服务器后重试");
+        } else {
+          Utils.toast("导出失败：" + fullMsg);
+        }
+        return;
+      }
+
+      const contentType = resp.headers.get("Content-Type") || "";
+      if (!contentType.includes("application/zip") && !contentType.includes("application/octet-stream")) {
+        console.error("[EXPORT] 非预期的 Content-Type:", contentType);
+        Utils.toast("导出失败：服务器返回了非 zip 内容 (HTTP " + resp.status + ")");
+        return;
+      }
+
+      const blob = await resp.blob();
+      if (!blob || blob.size === 0) {
+        Utils.toast("导出失败：数据包为空");
+        return;
+      }
+
+      // 从 Content-Disposition 解析文件名
+      let filename = "testchamber_export.zip";
+      const cd = resp.headers.get("Content-Disposition") || "";
+      const fnMatch = cd.match(/filename\s*=\s*"?([^";\r\n]+)"?/i);
+      if (fnMatch && fnMatch[1]) filename = fnMatch[1];
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      Utils.toast("数据包导出完成");
+    } catch (e) {
+      console.error("[EXPORT] 请求异常:", e);
+      Utils.toast("导出失败：" + (e.message || "网络错误"));
+    }
   },
 
   // ── 导入（入口） ──
@@ -269,7 +314,7 @@ Object.assign(app, {
       html += `</div>`;
     }
 
-    html += `<label><input type="radio" name="action_${cid}" value="rename_import"> 作为新样机导入，修改标识：</label>
+    html += `<label><input type="radio" name="action_${cid}" value="import_as_new_with_identity_edit"> 作为新样机导入，修改标识：</label>
       <div class="conflict-rename-row" id="rename_row_${cid}" style="display:none; margin-left:24px">
         SN：<input type="text" id="rename_sn_${cid}" placeholder="修改 SN" style="width:160px">
         IMEI：<input type="text" id="rename_imei_${cid}" placeholder="修改 IMEI" style="width:160px">
@@ -301,7 +346,8 @@ Object.assign(app, {
       </div>`;
     }
 
-    html += `<label style="margin-top:8px"><input type="radio" name="action_${cid}" value="skip"> 跳过此项</label>
+    html += `<label style="margin-top:8px"><input type="radio" name="action_${cid}" value="apply_field_choices"> 应用以上字段选择到主库</label>
+      <label><input type="radio" name="action_${cid}" value="skip"> 跳过此项</label>
     </div>`;
     return html;
   },
@@ -335,7 +381,10 @@ Object.assign(app, {
           // 显示/隐藏 rename row
           const renameRow = document.getElementById(`rename_row_${cid}`);
           if (renameRow) {
-            renameRow.style.display = radio.value === "rename_import" ? "block" : "none";
+            renameRow.style.display =
+              (radio.value === "rename_import" || radio.value === "import_as_new_with_identity_edit")
+                ? "block"
+                : "none";
           }
           // 显示/隐藏 field choices（merge_into_existing 时）
           const fieldChoices = document.getElementById(`field_choices_${cid}`);
@@ -379,19 +428,17 @@ Object.assign(app, {
       const decision = { action };
 
       if (action === "rename_import") {
-        if (c.type === "sample_identity_conflict") {
-          decision.newSN = (document.getElementById(`rename_sn_${cid}`) || {}).value || "";
-          decision.newIMEI = (document.getElementById(`rename_imei_${cid}`) || {}).value || "";
-          decision.newSampleNo = (document.getElementById(`rename_sno_${cid}`) || {}).value || "";
-        } else {
-          decision.newName = (document.getElementById(`rename_input_${cid}`) || {}).value || "";
-        }
-        // 改名导入需要填写新名称/标识
-        if (c.type === "sample_identity_conflict") {
-          if (!decision.newSN && !decision.newIMEI && !decision.newSampleNo) continue;
-        } else {
-          if (!decision.newName) continue;
-        }
+        // 项目/阶段/任务改名导入
+        decision.newName = (document.getElementById(`rename_input_${cid}`) || {}).value || "";
+        if (!decision.newName) continue;
+      }
+
+      if (action === "import_as_new_with_identity_edit") {
+        // 样机标识编辑导入
+        decision.newSN = (document.getElementById(`rename_sn_${cid}`) || {}).value || "";
+        decision.newIMEI = (document.getElementById(`rename_imei_${cid}`) || {}).value || "";
+        decision.newSampleNo = (document.getElementById(`rename_sno_${cid}`) || {}).value || "";
+        if (!decision.newSN && !decision.newIMEI && !decision.newSampleNo) continue;
       }
 
       if (action === "merge_into_existing") {
@@ -400,6 +447,17 @@ Object.assign(app, {
         const mergeableFields = c.mergeableFields || c.diffFields || [];
         const fieldChoices = {};
         for (const f of mergeableFields) {
+          const fr = modal.querySelector(`input[name="field_${cid}_${f}"]:checked`);
+          if (fr) fieldChoices[f] = fr.value;
+        }
+        decision.fieldChoices = fieldChoices;
+      }
+
+      if (action === "apply_field_choices") {
+        // field_conflict：逐字段选择写入
+        const diffFields = c.diffFields || c.mergeableFields || [];
+        const fieldChoices = {};
+        for (const f of diffFields) {
           const fr = modal.querySelector(`input[name="field_${cid}_${f}"]:checked`);
           if (fr) fieldChoices[f] = fr.value;
         }
@@ -476,8 +534,8 @@ Object.assign(app, {
       this._importState.decisions[c.conflictId] = { action: "skip" };
       this._importState.processedConflicts.add(c.conflictId);
     }
-    // 直接提交
-    const shouldClose = await this._onImportCommit();
+    // 直接提交，跳过 DOM 重新收集
+    const shouldClose = await this._onImportCommit({ skipCollect: true });
     if (shouldClose === false || shouldClose === undefined) {
       // 弹窗已关闭
     }
@@ -485,9 +543,9 @@ Object.assign(app, {
 
   // ── 提交导入 ──
 
-  async _onImportCommit() {
-    // 先收集决策
-    this._collectImportDecisions();
+  async _onImportCommit({ skipCollect = false } = {}) {
+    // 先收集决策（quick import 可跳过）
+    if (!skipCollect) this._collectImportDecisions();
 
     const totalConflicts = (this._importState.preview.conflicts || []).length;
     const processed = this._importState.processedConflicts.size;
@@ -517,7 +575,12 @@ Object.assign(app, {
       await this.reloadFromServer();
       this.render();
     } catch (e) {
-      Utils.toast("导入失败: " + (e.message || e));
+      const msg = e.message || e;
+      if (msg.includes("修改") || msg.includes("revision")) {
+        Utils.toast("导入失败：服务器数据已被修改，请重新选择文件导入");
+      } else {
+        Utils.toast("导入失败: " + msg);
+      }
       return true; // 保持弹窗打开
     }
 
