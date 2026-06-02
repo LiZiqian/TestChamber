@@ -614,7 +614,7 @@ Object.assign(app, {
     return this.isTaskResultSamplesEqual(a, b);
   },
 
-  saveTaskResult(projectId, stageId, taskId, finishTask = false) {
+  async saveTaskResult(projectId, stageId, taskId, finishTask = false) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!p || !s || !t) return false;
     const payload = this.collectTaskResultForm();
@@ -633,7 +633,12 @@ Object.assign(app, {
       if (samplesChanged) {
         this.applyTaskResult(p, s, t, payload, false);
       }
-      this.save(); this.render();
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: samplesChanged ? "upload_task_result" : "save_task_result_draft",
+        remark: samplesChanged ? "保存测试结果" : "保存测试结果草稿",
+        user: payload.user
+      });
+      if (!saved) return true;
       Utils.toast(samplesChanged ? "结果已保存，样机去向和人员已同步到样机档案。" : "结果已保存（样机无变化）。");
       return false;
     }
@@ -644,7 +649,12 @@ Object.assign(app, {
     }
     this.applyTaskResult(p, s, t, payload, finishTask);
     if (finishTask) delete t.resultDraft;
-    this.save(); this.render();
+    const saved = await this.commitTaskMutation(p, s, t, {
+      action: finishTask ? "finish_task_result" : "upload_task_result",
+      remark: finishTask ? "结束任务并保存结果" : "保存测试结果",
+      user: payload.user
+    });
+    if (!saved) return true;
     Utils.toast(finishTask ? "任务已结束，结果和样机档案已同步。" : "本次结果已保存，样机档案已同步。");
     return false;
   },

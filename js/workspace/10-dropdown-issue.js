@@ -127,7 +127,8 @@ Object.assign(app, {
       if (catInput) catInput.value = category;
       if (itemInput) itemInput.value = item;
     }
-    this.save(); this.closeCaseDropdown();
+    this.scheduleStageStrategySave?.(450, "update_strategy", "选择测试用例");
+    this.closeCaseDropdown();
     Utils.toast(field === 'category' ? `已选择：${category}` : `已选择：${item}`);
   },
 
@@ -139,7 +140,12 @@ Object.assign(app, {
     if (!t) return;
     if (!t.issueRecord) t.issueRecord = { dtsNo: "", isIssue: "", issueNote: "" };
     t.issueRecord.issueNote = String(value || "").trim();
-    this.save();
+    this.commitTaskMutation(p, s, t, {
+      action: "update_issue_record",
+      remark: "更新任务问题确认备注",
+      user: "管理员",
+      render: false
+    });
   },
 
   taskIssueRecordHtml(task, project = null, stage = null) {
@@ -187,13 +193,22 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         <label>问题确认说明</label>
         <textarea id="issueRecordNote" rows="4" placeholder="填写问题确认说明">${Utils.esc(r.issueNote || "")}</textarea>
       </div>
-    `, () => {
+    `, async () => {
+      const snapshot = this.cloneData(this.data);
       t.issueRecord = {
         dtsNo: document.getElementById("issueRecordDtsNo").value.trim(),
         isIssue: document.getElementById("issueRecordIsIssue").value,
         issueNote: document.getElementById("issueRecordNote").value.trim()
       };
-      this.save(); this.render();
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: "update_issue_record",
+        remark: "录入任务问题单",
+        user: "管理员",
+        render: false
+      });
+      if (!saved) { this.data = snapshot; return true; }
+      this.render();
+      return false;
     }, "保存");
   }
 

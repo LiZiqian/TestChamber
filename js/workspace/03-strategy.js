@@ -10,7 +10,6 @@ Object.assign(app, {
     this.view.selectedStageId = stageId;
     this.view.stageStrategyId = stageId;
     this.view.module = "projectWorkspace";
-    this.save();
     this.render();
   },
 
@@ -26,8 +25,24 @@ Object.assign(app, {
     this.view.stageStrategyId = null;
     this.view.module = targetModule;
     if (targetModule !== "projectWorkspace") this.view.selectedCategoryId = null;
-    this.save();
+    this.persistStageStrategyMutation("leave_stage_strategy", "离开阶段策略页保存", { render: false });
     this.render();
+  },
+
+  async persistStageStrategyMutation(action = "update_stage_strategy", remark = "阶段策略增量保存", { render = false } = {}) {
+    const p = this.currentProject();
+    const s = this.currentStage();
+    if (!p || !s) return false;
+    return this.commitStageMutation(p, s, { action, remark, user: "管理员", render });
+  },
+
+  scheduleStageStrategySave(delay = 450, action = "update_stage_strategy", remark = "阶段策略编辑") {
+    clearTimeout(this._stageStrategySaveTimer);
+    this.updateServerStatus("待同步");
+    this._stageStrategySaveTimer = setTimeout(() => {
+      this._stageStrategySaveTimer = null;
+      this.persistStageStrategyMutation(action, remark, { render: false });
+    }, delay);
   },
 
   renderStageStrategyPage() {
@@ -88,25 +103,71 @@ Object.assign(app, {
     const s = this.currentStage();
     if (!s.bom) s.bom = [];
     s.bom.push({ materialName: "" });
-    this.save(); this.render();
+    this.persistStageStrategyMutation("update_bom", "新增 BOM 物料", { render: false });
+    this.render();
   },
   updateBom(idx, field, val) {
     const s = this.currentStage();
     if (!s || !s.bom || !s.bom[idx]) return;
     s.bom[idx][field] = val;
-    this.save();
+    this.scheduleStageStrategySave(450, "update_bom", "编辑 BOM 物料");
   },
   deleteBomRow(idx) {
     const s = this.currentStage();
     if (!s || !s.bom) return;
     s.bom.splice(idx, 1);
-    this.save(); this.render();
+    this.persistStageStrategyMutation("update_bom", "删除 BOM 物料", { render: false });
+    this.render();
   },
 
   // ==================== 测试策略配置（删除"生成/同步进展"按钮）====================
+  stageStrategyFilterText(row) {
+    const category = String(row?.category || "").trim().toLowerCase();
+    const item = String(row?.item || "").trim().toLowerCase();
+    return { category, item };
+  },
+  stageStrategyRowMatches(row, keyword) {
+    const kw = String(keyword || "").trim().toLowerCase();
+    if (!kw) return true;
+    const text = this.stageStrategyFilterText(row);
+    return text.category.includes(kw) || text.item.includes(kw);
+  },
+  stageStrategyVisibleRows(stage) {
+    const filters = this.view.stageStrategyFilters || {};
+    const includeKw = String(filters.includeKeyword || "").trim();
+    const excludeKw = String(filters.excludeKeyword || "").trim();
+    return (stage.strategy || [])
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => this.stageStrategyRowMatches(row, includeKw))
+      .filter(({ row }) => !excludeKw || !this.stageStrategyRowMatches(row, excludeKw));
+  },
+  stageStrategySearchHtml(stage, visibleRows) {
+    const filters = this.view.stageStrategyFilters || {};
+    const includeKeyword = filters.includeKeyword || "";
+    const excludeKeyword = filters.excludeKeyword || "";
+    const total = (stage.strategy || []).length;
+    const visible = visibleRows.length;
+    const hasFilter = String(includeKeyword || "").trim() || String(excludeKeyword || "").trim();
+    return `
+      <div class="strategy-search-bar">
+        <label class="strategy-search-field">
+          <span>正向搜索</span>
+          <input type="text" value="${Utils.esc(includeKeyword)}" placeholder="类别 / 用例名称"
+            oninput="app.setStageStrategyFilter('includeKeyword', this.value)">
+        </label>
+        <label class="strategy-search-field">
+          <span>反向搜索</span>
+          <input type="text" value="${Utils.esc(excludeKeyword)}" placeholder="排除类别 / 用例名称"
+            oninput="app.setStageStrategyFilter('excludeKeyword', this.value)">
+        </label>
+        <div class="strategy-search-count">显示 ${visible} / ${total} 条</div>
+        <button type="button" class="btn btn-sm btn-outline" ${hasFilter ? "" : "disabled"} onclick="app.clearStageStrategyFilters()">清空</button>
+      </div>`;
+  },
   workspaceStrategyHtml(stage) {
     const p = this.currentProject();
     const caseCount = (p?.testCaseMaster || []).length;
+    const visibleRows = this.stageStrategyVisibleRows(stage);
     const strategyMinWidth = 56 + 236 + 276 + 140 + (stage.skuNames.length * 92) + 86;
     return `
       <div class="section-head">
@@ -120,6 +181,7 @@ Object.assign(app, {
           <button class="btn btn-sm btn-outline" onclick="app.importTestCaseXlsx()">导入用例集</button>
         </div>
       </div>
+      ${this.stageStrategySearchHtml(stage, visibleRows)}
       <div class="mini-table wide-table-scroll strategy-table"><table class="strategy-config-table" style="min-width:${strategyMinWidth}px">
         <colgroup>
           <col class="col-row-no">
@@ -137,7 +199,7 @@ Object.assign(app, {
           ${stage.skuNames.map(n => `<th style="color:var(--primary);font-weight:900;text-align:center">${Utils.esc(n)}</th>`).join("")}
           <th>操作</th>
         </tr></thead>
-        <tbody>${stage.strategy.map((r, idx) => `
+        <tbody>${visibleRows.map(({ row: r, index: idx }) => `
           <tr data-strategy-row="${idx}">
             <td class="row-no">${idx + 1}</td>
             <td><input data-field="category" value="${Utils.esc(r.category || "")}" autocomplete="off"
@@ -155,7 +217,7 @@ Object.assign(app, {
               onblur="app.validateSampleSizeInput(this)" placeholder="正整数"></td>
             ${stage.skuNames.map((n, i) => `<td style="text-align:center;vertical-align:middle"><input data-sku="${i + 1}" type="checkbox" style="width:auto;vertical-align:middle" ${r.skuMap?.[i + 1] ? 'checked' : ''} onchange="app.updateStrategySku(${idx},${i + 1},this.checked)"></td>`).join("")}
             <td><button class="btn btn-sm btn-danger" onclick="app.deleteStrategyRow(${idx})">删除</button></td>
-          </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 5}" class="empty">暂无策略。先新增测试项。</td></tr>`}</tbody>
+          </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 5}" class="empty">${(stage.strategy || []).length ? "无匹配策略，请调整搜索条件。" : "暂无策略。先新增测试项。"}</td></tr>`}</tbody>
       </table></div>
         <div class="task-add-footer">
           <button class="task-add-main" onclick="app.addStrategyRow()">
@@ -168,7 +230,8 @@ Object.assign(app, {
   addStrategyRow() {
     const s = this.currentStage();
     s.strategy.push({ id: Utils.id("strat_"), category: "", item: "", sampleSize: 1, skuMap: { 1: true } });
-    this.save(); this.render();
+    this.persistStageStrategyMutation("update_strategy", "新增测试策略", { render: false });
+    this.render();
   },
   onStrategyInput(idx, field, el) {
     const s = this.currentStage();
@@ -177,7 +240,7 @@ Object.assign(app, {
     if (field === 'sampleSize') el.classList.toggle('invalid', Utils.parsePositiveInt(el.value) === null && String(el.value || '').trim() !== '');
     // P1.6：方案输入实时静默同步到 progress，避免折叠/关页/导航前未同步导致工作台进度丢失
     this.scheduleStrategySync();
-    this.scheduleSave();
+    this.scheduleStageStrategySave(650, "update_strategy", "编辑测试策略");
   },
   validateSampleSizeInput(el) {
     const n = Utils.parsePositiveInt(el.value);
@@ -190,7 +253,7 @@ Object.assign(app, {
     s.strategy[idx].skuMap[sku] = val;
     // P1.6：SKU 勾选立刻同步到进度并保存
     this.autoSyncProgress();
-    this.save();
+    this.persistStageStrategyMutation("update_strategy", "编辑测试策略 SKU", { render: false });
   },
 
   /** P1.6：方案输入实时静默同步到 progress（节流），避免离开页面/关闭浏览器时丢同步。 */
@@ -205,7 +268,8 @@ Object.assign(app, {
   deleteStrategyRow(idx) {
     const s = this.currentStage();
     s.strategy.splice(idx, 1);
-    this.save(); this.render();
+    this.persistStageStrategyMutation("update_strategy", "删除测试策略", { render: false });
+    this.render();
   },
 
   syncStrategyFromDom() {
@@ -256,7 +320,7 @@ Object.assign(app, {
     s.progress = kept;
 
     if (addedCount || removedCount) {
-      this.save();
+      this.persistStageStrategyMutation("sync_strategy_progress", "策略自动同步进度", { render: false });
       Utils.toast(`进展已自动同步：新增 ${addedCount}，移除 ${removedCount}，当前 ${s.progress.length} 条。`);
     }
   },
@@ -294,7 +358,12 @@ Object.assign(app, {
         const p = this.currentProject();
         if (!p) { alert("请先选择一个项目。"); return; }
         p.testCaseMaster = rows;
-        this.save();
+        await this.commitProjectMutation(p, {
+          action: "import_test_cases",
+          remark: "导入测试用例集",
+          user: "管理员",
+          render: false
+        });
         Utils.toast(`已导入 ${rows.length} 条测试用例。`);
         this.render();
       } catch (e) {

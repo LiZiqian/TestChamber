@@ -16,7 +16,7 @@ Object.assign(app, {
             </div>
             <div class="path" style="display:flex;gap:12px"><span style="color:#64748b;min-width:48px">编号</span><span>${Utils.esc(p.code || "-")}</span></div>
             <div class="path" style="display:flex;gap:12px"><span style="color:#64748b;min-width:48px">负责人</span><span>${Utils.esc(p.owner || "-")}</span></div>
-            <div class="path" style="display:flex;gap:12px"><span style="color:#64748b;min-width:48px">阶段数</span><span>${p.stages.length}</span></div>
+            <div class="path" style="display:flex;gap:12px"><span style="color:#64748b;min-width:48px">阶段数</span><span>${p.stageCount ?? (p.stages || []).length}</span></div>
             <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.deleteProject('${p.id}')" title="删除项目">🗑</button>
           </div>
         `).join("")}
@@ -45,7 +45,7 @@ Object.assign(app, {
         </div>
         <div class="form-group" style="margin-bottom:0"><label>负责人</label><input id="pOwner" placeholder="姓名/工号"></div>
       </div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
       const nameEl = document.getElementById("pName");
       const name = nameEl.value.trim();
@@ -73,8 +73,20 @@ Object.assign(app, {
       this.data.projects.push(p);
       this.view.selectedProjectId = p.id;
       this.view.selectedStageId = null;
-      this.save();
-      this.render();
+      const saved = await this.commitProjectMutation(p, {
+        action: "create_project",
+        remark: "新建项目",
+        user: ownerText || "管理员",
+        createIfMissing: true
+      });
+      if (!saved) {
+        this.data.projects = this.data.projects.filter(item => item.id !== p.id);
+        this.view.selectedProjectId = this.data.projects[0]?.id || null;
+        this.view.selectedStageId = this.currentProject()?.stages?.[0]?.id || null;
+        return true;
+      }
+      Utils.toast("项目已新建");
+      return false;
     }, "确认", { className: "modal-sm" });
   },
 
@@ -85,8 +97,9 @@ Object.assign(app, {
       <div class="form-group"><label>项目名称</label><input id="pName" value="${Utils.esc(p.name)}"></div>
       <div class="form-group"><label>项目编号</label><input id="pCode" value="${Utils.esc(p.code || "")}"></div>
       <div class="form-group"><label>负责人</label><input id="pOwner" value="${Utils.esc(p.owner || "")}"></div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
+      const snapshot = this.cloneData(this.data);
       const nameEl = document.getElementById("pName");
       const name = nameEl.value.trim();
       if (!name) { this.markFieldInvalid(nameEl, "项目名称不能为空"); return true; }
@@ -111,8 +124,17 @@ Object.assign(app, {
           p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, active: true });
         }
       }
-      this.save();
-      this.render();
+      const saved = await this.commitProjectMutation(p, {
+        action: "update_project",
+        remark: "编辑项目",
+        user: ownerText || "管理员"
+      });
+      if (!saved) {
+        this.data = snapshot;
+        return true;
+      }
+      Utils.toast("项目已保存");
+      return false;
     }, "确认", { className: "modal-sm" });
   },
 
@@ -189,9 +211,10 @@ Object.assign(app, {
     </div>`;
   },
 
-  deleteProject(id) {
-    const p = this.data.projects.find(x => x.id === id);
+  async deleteProject(id) {
+    let p = this.data.projects.find(x => x.id === id);
     if (!p) return;
+    p = await this.ensureProjectLoaded(id, { includeTasks: true, render: false }) || p;
     let html;
     try {
       const impact = this.collectProjectDeleteImpact(p);
@@ -213,8 +236,14 @@ Object.assign(app, {
     }
     this.showDangerConfirm(
       html,
-      () => {
+      async () => {
+        const snapshot = this.cloneData(this.data);
         const projectTaskIds = (p.stages || []).flatMap(st => (st.tasks || []).map(t => t.id).filter(Boolean));
+        const affectedSampleIds = new Set();
+        (p.stages || []).forEach(st => (st.tasks || []).forEach(t => {
+          if (!t || t.archived || this.isTaskCompleted(t)) return;
+          (t.sampleIds || []).forEach(id => affectedSampleIds.add(String(id || "")));
+        }));
         (p.stages || []).forEach(st => (st.tasks || []).forEach(t => {
           if (!t || t.archived || this.isTaskCompleted(t)) return;
           this.releaseTaskSamples(t, {
@@ -226,11 +255,29 @@ Object.assign(app, {
             forceLog: true
           }, projectTaskIds);
         }));
+        const affectedSamples = [...affectedSampleIds]
+          .map(sampleId => this.findSample(sampleId)?.sample)
+          .filter(Boolean);
+        const sampleEvents = (this.data.sampleLibrary.logs || []).filter(log => affectedSampleIds.has(String(log?.sampleId || "")));
         this.data.projects = this.data.projects.filter(project => project.id !== id);
         this.view.selectedProjectId = this.data.projects[0]?.id || null;
         this.view.selectedStageId = this.currentProject()?.stages?.[0]?.id || null;
-        this.save();
+        const saved = await this.commitProjectMutation(p, {
+          action: "delete_project",
+          remark: "删除项目",
+          user: "管理员",
+          deleteProject: true,
+          samples: affectedSamples,
+          sampleEvents,
+          render: false
+        });
+        if (!saved) {
+          this.data = snapshot;
+          return true;
+        }
         this.render();
+        Utils.toast("项目已删除，关联样机占用已释放。");
+        return false;
       },
       {
         title: `删除项目「${Utils.esc(p.name)}」`,
@@ -241,13 +288,21 @@ Object.assign(app, {
     );
   },
 
-  selectProject(id) {
+  async selectProject(id) {
     this.view.selectedProjectId = id;
-    const p = this.currentProject();
+    this.view.selectedStageId = null;
+    this.view.stageStrategyId = null;
+    this.view.module = "projectWorkspace";
+    this.render();
+    const p = await this.ensureProjectLoaded(id, { includeTasks: false, render: false });
+    if (!p) {
+      this.view.module = "projects";
+      this.render();
+      return;
+    }
     this.view.selectedStageId = p?.stages?.[0]?.id || null;
     this.view.stageStrategyId = null;
     this.view.module = "projectWorkspace";
-    this.save();
     this.render();
   }
 });

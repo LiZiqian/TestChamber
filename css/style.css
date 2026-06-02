@@ -5,13 +5,13 @@
 @import '00-vars.css';
 @import '01-layout.css';
 @import '02-components.css';
-@import '20-samples.css';
+@import '20-samples.css?v=20260602-perf12';
 @import '21-sample-photos.css';
 @import '22-sample-archive.css';
 @import '30-workspace-home.css';
 @import '30-workspace-members.css';
 @import '30-workspace-sections.css';
-@import '31-stage-strategy.css';
+@import '31-stage-strategy.css?v=20260602-perf12';
 @import '32-task-flow.css';
 @import '32-task-issue-record.css';
 @import '32-task-flow-actions.css';

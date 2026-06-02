@@ -94,18 +94,20 @@ Object.assign(app, {
     };
 
     const body = this._renderImportPreviewBody(preview);
-    this.showModal({
-      title: "导入数据包",
-      body,
-      wide: true,
-      okText: "确认导入已处理项目",
-      onOk: () => {
-        return this._onImportCommit();
-      },
-      onCancel: () => {
-        this._importState = null;
-      },
+    this.showModal("导入数据包", body, () => {
+      void this._onImportCommit();
+      return true;
+    }, "确认导入已处理项目", {
+      className: "import-bundle-modal",
+      cancelText: "取消",
     });
+    const cancelBtn = document.getElementById("modalCancel");
+    if (cancelBtn) {
+      cancelBtn.onclick = () => {
+        this._importState = null;
+        this.closeModal();
+      };
+    }
 
     // 插入「仅导入无冲突数据」按钮
     this._injectQuickImportButton();
@@ -369,14 +371,19 @@ Object.assign(app, {
 
   // ── 绑定冲突处理事件 ──
 
+  _importModalRoot() {
+    return document.getElementById("modalBody") || document.querySelector(".modal");
+  },
+
   _bindConflictHandlers() {
     // Radio 切换显示/隐藏子选项
-    const modal = document.querySelector(".modal-content");
+    const modal = this._importModalRoot();
     if (!modal) return;
 
     modal.querySelectorAll(".conflict-actions").forEach(actionsDiv => {
       const cid = actionsDiv.dataset.cid;
-      actionsDiv.querySelectorAll("input[type=radio]").forEach(radio => {
+      const refreshDecisions = () => this._collectImportDecisions();
+      actionsDiv.querySelectorAll(`input[name="action_${cid}"]`).forEach(radio => {
         radio.addEventListener("change", () => {
           // 显示/隐藏 rename row
           const renameRow = document.getElementById(`rename_row_${cid}`);
@@ -391,7 +398,17 @@ Object.assign(app, {
           if (fieldChoices) {
             fieldChoices.style.display = radio.value === "merge_into_existing" ? "block" : "none";
           }
+          refreshDecisions();
         });
+      });
+      actionsDiv.querySelectorAll("input[type=radio]").forEach(radio => {
+        if (radio.name !== `action_${cid}`) {
+          radio.addEventListener("change", refreshDecisions);
+        }
+      });
+
+      actionsDiv.querySelectorAll("input[type=text]").forEach(input => {
+        input.addEventListener("input", refreshDecisions);
       });
 
       // "全部保留/使用" 按钮
@@ -399,11 +416,13 @@ Object.assign(app, {
         btn.addEventListener("click", () => {
           const action = btn.dataset.action;
           const targetCid = btn.dataset.cid;
-          actionsDiv.querySelectorAll(`input[name^="field_${targetCid}_"]`).forEach(r => {
-            if (action === "all_current") r.value = "current";
-            if (action === "all_incoming") r.value = "incoming";
-            r.checked = r.value === (action === "all_current" ? "current" : "incoming");
+          const desired = action === "all_current" ? "current" : "incoming";
+          actionsDiv.querySelectorAll(`input[name^="field_${targetCid}_"][value="${desired}"]`).forEach(r => {
+            r.checked = true;
           });
+          const applyAction = actionsDiv.querySelector(`input[name="action_${targetCid}"][value="apply_field_choices"]`);
+          if (applyAction) applyAction.checked = true;
+          refreshDecisions();
         });
       });
     });
@@ -412,14 +431,21 @@ Object.assign(app, {
   // ── 收集决策 → 更新状态 ──
 
   _collectImportDecisions() {
-    const modal = document.querySelector(".modal-content");
+    if (!this._importState) return;
+    const modal = this._importModalRoot();
     if (!modal) return;
 
     const conflicts = this._importState.preview.conflicts || [];
     this._importState.processedConflicts = new Set();
+    const nextDecisions = {};
 
     for (const c of conflicts) {
       const cid = c.conflictId;
+      const statusEl = document.getElementById(`conflict_status_${cid}`);
+      if (statusEl) statusEl.textContent = "⏳ 待处理";
+      const cardEl = document.getElementById(`conflict_${cid}`);
+      if (cardEl) cardEl.classList.remove("conflict-processed");
+
       // 查找选中的 action radio
       const actionRadio = modal.querySelector(`input[name="action_${cid}"]:checked`);
       if (!actionRadio) continue;
@@ -462,26 +488,31 @@ Object.assign(app, {
           if (fr) fieldChoices[f] = fr.value;
         }
         decision.fieldChoices = fieldChoices;
+        if (diffFields.length > 0 && Object.keys(fieldChoices).length < diffFields.length) {
+          continue;
+        }
       }
 
-      this._importState.decisions[cid] = decision;
+      nextDecisions[cid] = decision;
       this._importState.processedConflicts.add(cid);
 
       // 更新状态标记
-      const statusEl = document.getElementById(`conflict_status_${cid}`);
       if (statusEl) statusEl.textContent = "✅ 已处理";
-      const cardEl = document.getElementById(`conflict_${cid}`);
       if (cardEl) cardEl.classList.add("conflict-processed");
     }
 
+    this._importState.decisions = nextDecisions;
     this._updateImportCommitButton();
   },
 
   // ── 更新确认按钮状态 ──
 
   _updateImportCommitButton() {
+    if (!this._importState) return;
     const totalConflicts = (this._importState.preview.conflicts || []).length;
     const processed = this._importState.processedConflicts.size;
+    const unprocessedEl = document.getElementById("importUnprocessedCount");
+    if (unprocessedEl) unprocessedEl.textContent = String(Math.max(0, totalConflicts - processed));
     const okBtn = document.getElementById("modalOk");
     if (!okBtn) return;
 
@@ -508,8 +539,9 @@ Object.assign(app, {
   _injectQuickImportButton() {
     // 在弹窗 footer 插入第三个按钮
     setTimeout(() => {
-      const footer = document.querySelector(".confirm-box-footer");
+      const footer = document.querySelector(".modal-footer");
       if (!footer) return;
+      document.getElementById("quickImportBtn")?.remove();
       const btn = document.createElement("button");
       btn.className = "btn btn-outline";
       btn.textContent = "仅导入无冲突数据";
@@ -527,6 +559,7 @@ Object.assign(app, {
 
   async _onQuickImport() {
     // 跳过所有冲突项，只提交 autoApply
+    if (!this._importState) return;
     const conflicts = this._importState.preview.conflicts || [];
     this._importState.decisions = {};
     this._importState.processedConflicts = new Set();
@@ -544,6 +577,7 @@ Object.assign(app, {
   // ── 提交导入 ──
 
   async _onImportCommit({ skipCollect = false } = {}) {
+    if (!this._importState) return true;
     // 先收集决策（quick import 可跳过）
     if (!skipCollect) this._collectImportDecisions();
 
@@ -570,6 +604,7 @@ Object.assign(app, {
         `导入完成：新增 ${result.stats?.projectsAdded || 0} 项目、` +
         `${result.stats?.samplesAdded || 0} 样机，` +
         `合并 ${result.stats?.samplesMerged || 0} 样机，` +
+        `事件 ${result.stats?.sampleEventsAdded || 0} 条，` +
         `跳过 ${result.stats?.skipped || 0} 项`
       );
       await this.reloadFromServer();
@@ -585,7 +620,8 @@ Object.assign(app, {
     }
 
     this._importState = null;
-    return; // 关闭弹窗
+    this.closeModal();
+    return false;
   },
 
 });

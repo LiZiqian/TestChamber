@@ -8,6 +8,7 @@ Object.assign(app, {
   openSampleDetail(sampleId, options = {}) {
     const found = this.findSample(sampleId);
     if (!found) return;
+    this._activeSampleDetailId = sampleId;
     const readonly = !!options.readonly;
     const s = found.sample;
     this.showModal("样机详情 · " + this.sampleDisplayCode(s), `
@@ -65,7 +66,7 @@ Object.assign(app, {
           </section>
         </div>
       </div>
-    `, () => {
+    `, async () => {
       if (readonly) return false;
       this.clearFieldValidationMarks();
       const newSn = document.getElementById("sdSn").value.trim();
@@ -109,6 +110,7 @@ Object.assign(app, {
         if (!parsed.ok) { this.markFieldInvalid(sdBorrowerEl, parsed.msg); return true; }
       }
 
+      const dataSnapshot = this.cloneData(this.data);
       s.sn = newSn;
       s.imei = newImei;
       s.boardSn = newBoardSn;
@@ -142,7 +144,17 @@ Object.assign(app, {
       s.location = location;
       s.notes = document.getElementById("sdNotes").value.trim();
       s.updatedAt = Utils.now();
-      this.save(); this.render();
+      const saved = await this.commitSampleMutation(s, {
+        action: "sample_detail_update",
+        remark: "样机详情编辑",
+        user: "管理员"
+      });
+      if (!saved) {
+        this.data = dataSnapshot;
+        return true;
+      }
+      Utils.toast("样机详情已保存");
+      return false;
     }, readonly ? "关闭" : "确认", { hideCancel: readonly, headerHint: readonly ? "只读查看，不能编辑" : "" });
     // 在 footer 最左边注入 tab 说明文字
     const footer = document.querySelector(".modal-footer");
@@ -159,6 +171,16 @@ Object.assign(app, {
       body?.querySelectorAll(".sample-archive-content input, .sample-archive-content select, .sample-archive-content textarea").forEach(el => { el.disabled = true; });
       body?.querySelectorAll(".sample-archive-content button:not(.sample-history-photo):not(.sample-photo-thumb):not(.sample-history-summary)").forEach(el => { el.disabled = true; });
     }
+  },
+
+  refreshSampleArchivePanels(sampleId) {
+    if (this._activeSampleDetailId !== sampleId) return;
+    const sample = this.findSample(sampleId)?.sample;
+    if (!sample) return;
+    const photosPanel = document.querySelector('[data-sample-archive-panel="photos"]');
+    if (photosPanel) photosPanel.innerHTML = this.samplePhotosHtml(sample);
+    const historyPanel = document.querySelector('[data-sample-archive-panel="history"]');
+    if (historyPanel) historyPanel.innerHTML = this.sampleTestHistoryHtml(sampleId);
   },
 
 });

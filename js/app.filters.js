@@ -15,9 +15,21 @@ Object.assign(app, {
     this.view.progressFilters = {};
     this.renderPreserveScroll();
   },
+  setStageStrategyFilter(field, value) {
+    if (!this.view.stageStrategyFilters) {
+      this.view.stageStrategyFilters = { includeKeyword: "", excludeKeyword: "" };
+    }
+    this.view.stageStrategyFilters[field] = String(value || "");
+    this.renderPreserveScroll();
+  },
+  clearStageStrategyFilters() {
+    this.view.stageStrategyFilters = { includeKeyword: "", excludeKeyword: "" };
+    this.renderPreserveScroll();
+  },
   setTaskFlowFilter(field, value) {
     if (!this.view.taskFlowFilters) this.view.taskFlowFilters = {};
     this.view.taskFlowFilters[field] = value;
+    this.view.taskFlowPage = 1;
     this.renderPreserveScroll();
   },
   setTaskFlowTextFilter(field, value) {
@@ -37,6 +49,7 @@ Object.assign(app, {
     }
     clearTimeout(this._taskFlowTextFilterTimer);
     this._taskFlowTextFilterTimer = null;
+    this.view.taskFlowPage = 1;
     this.renderPreserveScroll();
   },
   handleTaskFlowTextFilterKeydown(event, field, value) {
@@ -47,6 +60,7 @@ Object.assign(app, {
   },
   clearTaskFlowFilters() {
     this.view.taskFlowFilters = {};
+    this.view.taskFlowPage = 1;
     clearTimeout(this._taskFlowTextFilterTimer);
     this._taskFlowTextFilterTimer = null;
     this.renderPreserveScroll();

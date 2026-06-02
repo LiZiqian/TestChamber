@@ -13,6 +13,9 @@ const app = {
   _queuedRemark: "",
   _saveTimer: null,
   _baseData: null,
+  _statePartial: false,
+  _projectDetailPromises: {},
+  _sampleCategoryDetailPromises: {},
   _modalStack: [],
   _restoringModal: false,
   _currentModalOnOk: null,
@@ -25,11 +28,17 @@ const app = {
     selectedCategoryId: null,
     sampleKeyword: "",
     sampleStatusFilter: "",
+    sampleProblemFilter: "",
     sampleOwnerFilter: "",
     sampleBorrowerFilter: "",
+    samplePage: 1,
+    samplePageSize: 100,
     collapsed: {},
     progressFilters: {},
+    stageStrategyFilters: { includeKeyword: "", excludeKeyword: "" },
     taskFlowFilters: {},
+    taskFlowPage: 1,
+    taskFlowPageSize: 100,
     sidebarCollapsed: false
   },
 
@@ -48,18 +57,18 @@ const app = {
   // ---- 初始化 ----
   async init() {
     try {
-      const res = await fetch("/api/state", { cache: "no-store" });
-      const obj = await res.json();
-      if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
+      const obj = await this.fetchBootstrapState();
       this.data = obj.data || this.emptyData();
       this.serverRevision = obj.revision || 0;
       this.serverUpdatedAt = obj.updated_at || null;
       this.serverOnline = true;
+      this._statePartial = obj.partial !== false;
       this._baseData = this.cloneData(this.data);
     } catch (e) {
       console.error("服务器数据读取失败：", e);
       this.serverOnline = false;
       this.data = this.emptyData();
+      this._statePartial = false;
       setTimeout(() => alert("无法连接内网服务器 API，页面将以空白只读状态打开。请确认 server.py 正在运行。\n\n" + e.message), 50);
     }
     this.normalize();
@@ -70,7 +79,7 @@ const app = {
     this.render();
     this.applySidebarState();
     this.updateServerStatus();
-    if (this._normalizedChanged) {
+    if (this._normalizedChanged && !this._statePartial) {
       this._normalizedChanged = false;
       this.save({ silent: true, remark: "自动清理重复项目人员" });
     }

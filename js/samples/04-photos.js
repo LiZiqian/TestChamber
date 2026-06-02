@@ -59,6 +59,15 @@ Object.assign(app, {
 
   samplePhotosHtml(sample) {
     const photos = Array.isArray(sample?.photos) ? sample.photos : [];
+    if (sample?.photosLoaded !== true && Number(sample?.photoCount || 0) > 0) {
+      return `<div class="sample-photo-grid">
+        <div class="sample-photo-card sample-photo-add" onclick="app.uploadSamplePhotos('${sample.id}')">
+          <div class="add-card-plus" style="font-size:28px;margin-bottom:6px">+</div>
+          <div class="add-card-label">上传图片</div>
+        </div>
+        <div class="empty" style="grid-column:1 / -1">正在加载 ${Number(sample.photoCount || 0)} 张图片...</div>
+      </div>`;
+    }
     return `<div class="sample-photo-grid">
       <div class="sample-photo-card sample-photo-add" onclick="app.uploadSamplePhotos('${sample.id}')">
         <div class="add-card-plus" style="font-size:28px;margin-bottom:6px">+</div>
@@ -82,8 +91,11 @@ Object.assign(app, {
     </div>`;
   },
 
-  previewSamplePhoto(sampleId, photoId) {
-    const sample = this.findSample(sampleId)?.sample;
+  async previewSamplePhoto(sampleId, photoId) {
+    let sample = this.findSample(sampleId)?.sample;
+    if (sample && sample.photosLoaded !== true) {
+      sample = await this.ensureSampleDetailsLoaded(sampleId, { photos: true, events: false, renderPanels: true });
+    }
     const photo = (sample?.photos || []).find(x => x.id === photoId);
     if (!photo) return;
     const src = photo.url || photo.dataUrl || "";
@@ -186,6 +198,11 @@ Object.assign(app, {
         if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
         await this.syncAfterDirectMutation({ render: false, statusText: "已保存" });
         const latest = this.findSample(sampleId);
+        if (latest?.sample && Array.isArray(obj.photos)) {
+          latest.sample.photos = obj.photos;
+          latest.sample.photoCount = obj.photos.length;
+          latest.sample.photosLoaded = true;
+        }
         const panel = document.querySelector('[data-sample-archive-panel="photos"]');
         if (panel && latest?.sample) panel.innerHTML = this.samplePhotosHtml(latest.sample);
         Utils.toast(`已上传 ${files.length} 张外观照片。`);
@@ -212,7 +229,7 @@ Object.assign(app, {
 
     let committed = false;
 
-    const commit = () => {
+    const commit = async () => {
       if (committed) return;
       committed = true;
       const newName = input.value.trim();
@@ -225,9 +242,29 @@ Object.assign(app, {
       const found = this.findSample(sampleId);
       const photo = found?.sample?.photos?.find(x => x.id === photoId);
       if (found && photo) {
-        photo.name = newName;
-        found.sample.updatedAt = Utils.now();
-        this.save();
+        try {
+          this.updateServerStatus("同步中");
+          const resp = await fetch(`/api/samples/${encodeURIComponent(sampleId)}/photos/${encodeURIComponent(photoId)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: newName, user: "管理员" })
+          });
+          const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+          if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
+          this.serverRevision = json.revision || this.serverRevision;
+          this.serverUpdatedAt = json.updated_at || new Date().toISOString();
+          found.sample.photos = Array.isArray(json.photos) ? json.photos : found.sample.photos;
+          found.sample.photoCount = found.sample.photos.length;
+          found.sample.photosLoaded = true;
+          found.sample.updatedAt = Utils.now();
+          this._baseData = this.cloneData(this.data);
+          this.updateServerStatus("已保存");
+        } catch (e) {
+          this.updateServerStatus("保存失败");
+          alert("照片重命名失败：" + (e.message || e));
+          this.finishPhotoRename(nameRow, sampleId, photoId, originalName);
+          return;
+        }
       }
       this.finishPhotoRename(nameRow, sampleId, photoId, photo ? newName : originalName);
     };
@@ -265,6 +302,11 @@ Object.assign(app, {
         if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
         await this.syncAfterDirectMutation({ render: false, statusText: "已保存" });
         const latest = this.findSample(sampleId);
+        if (latest?.sample && Array.isArray(obj.photos)) {
+          latest.sample.photos = obj.photos;
+          latest.sample.photoCount = obj.photos.length;
+          latest.sample.photosLoaded = true;
+        }
         const panel = document.querySelector('[data-sample-archive-panel="photos"]');
         if (panel && latest?.sample) panel.innerHTML = this.samplePhotosHtml(latest.sample);
       } catch (e) {

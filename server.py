@@ -34,7 +34,7 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, unquote_to_bytes, urlparse
+from urllib.parse import parse_qs, quote, unquote, unquote_to_bytes, urlparse
 
 
 APP_VERSION = "V7"
@@ -308,6 +308,44 @@ def prune_backups() -> None:
             print(f"[WARN] 删除旧备份 {old.name} 失败：{e}")
 
 
+def ensure_table_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def backfill_query_state_columns(conn: sqlite3.Connection) -> None:
+    task_rows = conn.execute(
+        """
+        SELECT id, status, data_json
+        FROM project_tasks
+        WHERE COALESCE(flow_status, '') = ''
+        """
+    ).fetchall()
+    for row in task_rows:
+        task = json_obj(row["data_json"], {}) or {}
+        task["status"] = row["status"] or task.get("status") or ""
+        conn.execute(
+            "UPDATE project_tasks SET flow_status = ? WHERE id = ?",
+            (task_flow_status(task), row["id"]),
+        )
+
+    sample_rows = conn.execute(
+        """
+        SELECT id, status, data_json
+        FROM sample_records
+        WHERE COALESCE(effective_status, '') = ''
+        """
+    ).fetchall()
+    for row in sample_rows:
+        sample = json_obj(row["data_json"], {}) or {}
+        sample["status"] = row["status"] or sample.get("status") or ""
+        conn.execute(
+            "UPDATE sample_records SET has_problem = ?, effective_status = ? WHERE id = ?",
+            (1 if sample_has_problem(sample) else 0, sample_effective_status(sample), row["id"]),
+        )
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute(
@@ -357,6 +395,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             sn TEXT,
             imei TEXT,
             status TEXT,
+            has_problem INTEGER NOT NULL DEFAULT 0,
+            effective_status TEXT,
             location TEXT,
             owner TEXT,
             borrower TEXT,
@@ -368,10 +408,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    ensure_table_column(conn, "sample_records", "has_problem", "INTEGER NOT NULL DEFAULT 0")
+    ensure_table_column(conn, "sample_records", "effective_status", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category ON sample_records(category_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_sn ON sample_records(sn)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_imei ON sample_records(imei)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_status ON sample_records(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_active ON sample_records(category_id, deleted_at, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_created ON sample_records(category_id, deleted_at, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_effective_created ON sample_records(category_id, deleted_at, effective_status, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_problem_created ON sample_records(category_id, deleted_at, has_problem, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_owner_created ON sample_records(category_id, deleted_at, owner, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_borrower_created ON sample_records(category_id, deleted_at, borrower, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_owner ON sample_records(owner)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_borrower ON sample_records(borrower)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sample_assets (
@@ -450,6 +500,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             test_item TEXT,
             sku_index INTEGER,
             status TEXT,
+            flow_status TEXT,
             owner TEXT,
             sample_ids_json TEXT NOT NULL DEFAULT '[]',
             data_json TEXT NOT NULL,
@@ -462,9 +513,17 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    ensure_table_column(conn, "project_tasks", "flow_status", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage ON project_tasks(stage_id, deleted_at, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_progress ON project_tasks(progress_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_project ON project_tasks(project_id, deleted_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_sku ON project_tasks(stage_id, deleted_at, sku_index)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_owner ON project_tasks(stage_id, deleted_at, owner)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_updated ON project_tasks(stage_id, deleted_at, updated_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_created ON project_tasks(stage_id, deleted_at, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_flow_created ON project_tasks(stage_id, deleted_at, flow_status, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_sku_created ON project_tasks(stage_id, deleted_at, sku_index, created_at, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_project_created ON project_tasks(project_id, deleted_at, created_at, id)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS task_logs (
@@ -481,6 +540,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id, time)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_stage ON task_logs(stage_id, time)")
+    backfill_query_state_columns(conn)
 
 
 def normalize_photo_meta(sample_id: str, photo: dict) -> dict:
@@ -838,14 +899,16 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
             conn.execute(
                 """
                 INSERT INTO sample_records
-                (id, category_id, sample_no, sn, imei, status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                (id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(id) DO UPDATE SET
                     category_id = excluded.category_id,
                     sample_no = excluded.sample_no,
                     sn = excluded.sn,
                     imei = excluded.imei,
                     status = excluded.status,
+                    has_problem = excluded.has_problem,
+                    effective_status = excluded.effective_status,
                     location = excluded.location,
                     owner = excluded.owner,
                     borrower = excluded.borrower,
@@ -860,6 +923,8 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
                     str(sample.get("sn") or ""),
                     str(sample.get("imei") or ""),
                     str(sample.get("status") or ""),
+                    1 if sample_has_problem(sample) else 0,
+                    sample_effective_status(sample),
                     str(sample.get("location") or ""),
                     str(sample.get("owner") or ""),
                     str(sample.get("borrower") or ""),
@@ -978,7 +1043,37 @@ def load_sample_photos(conn: sqlite3.Connection, sample_id: str) -> list[dict]:
     return photos
 
 
-def load_sample_library(conn: sqlite3.Connection) -> dict:
+def load_sample_photo_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT sample_id, COUNT(*) AS count
+        FROM sample_assets
+        WHERE kind = 'photo' AND deleted_at IS NULL
+        GROUP BY sample_id
+        """
+    ).fetchall()
+    return {str(row["sample_id"]): int(row["count"] or 0) for row in rows}
+
+
+def load_sample_events(conn: sqlite3.Connection, sample_id: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT data_json
+        FROM sample_events
+        WHERE sample_id = ?
+        ORDER BY time, id
+        """,
+        (sample_id,),
+    ).fetchall()
+    logs = []
+    for row in rows:
+        log = json_obj(row["data_json"], None)
+        if isinstance(log, dict):
+            logs.append(log)
+    return logs
+
+
+def load_sample_library(conn: sqlite3.Connection, *, include_photos: bool = True, include_logs: bool = True) -> dict:
     category_rows = conn.execute(
         """
         SELECT id, name, description, data_json
@@ -1011,6 +1106,7 @@ def load_sample_library(conn: sqlite3.Connection) -> dict:
         ORDER BY created_at, id
         """
     ).fetchall()
+    photo_counts = load_sample_photo_counts(conn) if not include_photos else {}
     for row in sample_rows:
         try:
             sample = json.loads(row["data_json"] or "{}")
@@ -1026,18 +1122,30 @@ def load_sample_library(conn: sqlite3.Connection) -> dict:
             "location": row["location"] or sample.get("location") or "",
             "owner": row["owner"] or sample.get("owner") or "",
             "borrower": row["borrower"] or sample.get("borrower") or "",
-            "photos": load_sample_photos(conn, row["id"]),
         })
+        if include_photos:
+            sample["photos"] = load_sample_photos(conn, row["id"])
+            sample["photoCount"] = len(sample["photos"])
+            sample["photosLoaded"] = True
+        else:
+            sample["photos"] = []
+            sample["photoCount"] = photo_counts.get(str(row["id"]), 0)
+            sample["photosLoaded"] = False
         category_map.get(row["category_id"], {}).setdefault("samples", []).append(sample)
 
-    event_rows = conn.execute("SELECT data_json FROM sample_events ORDER BY time, id").fetchall()
     logs = []
-    for row in event_rows:
-        try:
-            logs.append(json.loads(row["data_json"]))
-        except Exception:
-            pass
-    return {"categories": categories, "logs": logs}
+    if include_logs:
+        event_rows = conn.execute("SELECT data_json FROM sample_events ORDER BY time, id").fetchall()
+        for row in event_rows:
+            log = json_obj(row["data_json"], None)
+            if isinstance(log, dict):
+                logs.append(log)
+    return {
+        "categories": categories,
+        "logs": logs,
+        "photosExternalized": not include_photos,
+        "eventsExternalized": not include_logs,
+    }
 
 
 def list_item_key(item: object, index: int) -> str:
@@ -1285,9 +1393,9 @@ def sync_project_library(conn: sqlite3.Connection, data: dict, *, allow_empty: b
                 conn.execute(
                     """
                     INSERT INTO project_tasks
-                    (id, project_id, stage_id, progress_id, category, test_item, sku_index, status, owner,
+                    (id, project_id, stage_id, progress_id, category, test_item, sku_index, status, flow_status, owner,
                      sample_ids_json, data_json, created_at, updated_at, completed_at, deleted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     ON CONFLICT(id) DO UPDATE SET
                         project_id = excluded.project_id,
                         stage_id = excluded.stage_id,
@@ -1296,6 +1404,7 @@ def sync_project_library(conn: sqlite3.Connection, data: dict, *, allow_empty: b
                         test_item = excluded.test_item,
                         sku_index = excluded.sku_index,
                         status = excluded.status,
+                        flow_status = excluded.flow_status,
                         owner = excluded.owner,
                         sample_ids_json = excluded.sample_ids_json,
                         data_json = excluded.data_json,
@@ -1312,6 +1421,7 @@ def sync_project_library(conn: sqlite3.Connection, data: dict, *, allow_empty: b
                         str(task.get("testItem") or ""),
                         to_int(task.get("skuIndex")),
                         str(task.get("status") or ""),
+                        task_flow_status(task),
                         str(task.get("owner") or ""),
                         json_dumps(sample_ids),
                         json_dumps(task_json),
@@ -1464,7 +1574,876 @@ def load_project_library(conn: sqlite3.Connection) -> list[dict]:
     return projects
 
 
-def compose_state(conn: sqlite3.Connection) -> tuple[dict, int, str]:
+def load_project_detail(conn: sqlite3.Connection, project_id: str, *, include_tasks: bool = False) -> dict | None:
+    project_row = conn.execute(
+        """
+        SELECT id, name, code, owner, data_json
+        FROM project_records
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (project_id,),
+    ).fetchone()
+    if not project_row:
+        return None
+
+    project = json_obj(project_row["data_json"], {}) or {}
+    project.update({
+        "id": project_row["id"],
+        "name": project_row["name"] or project.get("name") or "",
+        "code": project_row["code"] or project.get("code") or "",
+        "owner": project_row["owner"] or project.get("owner") or "",
+        "stages": [],
+    })
+
+    stage_rows = conn.execute(
+        """
+        SELECT id, project_id, name, data_json
+        FROM project_stages
+        WHERE project_id = ? AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        """,
+        (project_id,),
+    ).fetchall()
+    stage_map: dict[str, dict] = {}
+    for row in stage_rows:
+        stage = json_obj(row["data_json"], {}) or {}
+        stage.update({
+            "id": row["id"],
+            "projectId": row["project_id"],
+            "name": row["name"] or stage.get("name") or "",
+            "tasks": [],
+        })
+        project.setdefault("stages", []).append(stage)
+        stage_map[row["id"]] = stage
+
+    if not include_tasks or not stage_map:
+        return project
+
+    task_rows = conn.execute(
+        """
+        SELECT id, project_id, stage_id, progress_id, category, test_item, sku_index, status, owner,
+               sample_ids_json, data_json, completed_at
+        FROM project_tasks
+        WHERE project_id = ? AND deleted_at IS NULL
+        ORDER BY created_at, id
+        """,
+        (project_id,),
+    ).fetchall()
+    task_ids = [str(row["id"]) for row in task_rows]
+    logs_by_task = load_task_logs_for(conn, task_ids)
+    for row in task_rows:
+        stage = stage_map.get(row["stage_id"])
+        if not stage:
+            continue
+        task = json_obj(row["data_json"], {}) or {}
+        sample_ids = json_obj(row["sample_ids_json"], [])
+        if not isinstance(sample_ids, list):
+            sample_ids = []
+        task.update({
+            "id": row["id"],
+            "projectId": row["project_id"],
+            "stageId": row["stage_id"],
+            "progressId": row["progress_id"] or task.get("progressId") or "",
+            "category": row["category"] or task.get("category") or "",
+            "testItem": row["test_item"] or task.get("testItem") or "",
+            "skuIndex": to_int(row["sku_index"] if row["sku_index"] is not None else task.get("skuIndex")),
+            "status": row["status"] or task.get("status") or "",
+            "owner": row["owner"] or task.get("owner") or "",
+            "sampleIds": sample_ids,
+            "logs": logs_by_task.get(row["id"], []),
+        })
+        if row["completed_at"] and not task.get("completedAt"):
+            task["completedAt"] = row["completed_at"]
+        stage.setdefault("tasks", []).append(task)
+    return project
+
+
+def first_query_value(query: dict[str, list[str]], name: str, default: str = "") -> str:
+    values = query.get(name)
+    if not values:
+        return default
+    return str(values[0] if values[0] is not None else default)
+
+
+def parse_page_params(query: dict[str, list[str]], *, default_size: int = 100, max_size: int = 500) -> tuple[int, int]:
+    page = to_int(first_query_value(query, "page", "1"), 1)
+    page_size = to_int(first_query_value(query, "pageSize", str(default_size)), default_size)
+    page = max(1, page)
+    page_size = max(1, min(max_size, page_size))
+    return page, page_size
+
+
+def paginate_list(items: list[dict], page: int, page_size: int) -> tuple[list[dict], dict]:
+    total = len(items)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return items[start:end], {
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "totalPages": total_pages,
+    }
+
+
+def task_flow_status(task: dict) -> str:
+    status = str(task.get("status") or "").strip()
+    if status in ("异常完成", "异常终止", "失败", "Fail"):
+        return "异常终止"
+    if task.get("completed") or status in ("正常完成", "已完成", "通过", "Pass"):
+        return "正常完成"
+    if status in ("阻塞", "阻塞中"):
+        return "阻塞中"
+    if status in ("进行中", "Testing"):
+        return "进行中"
+    return "待下发"
+
+
+def person_name_from_text(text: object) -> str:
+    raw = str(text or "").strip()
+    if "/" in raw:
+        return raw.split("/", 1)[0].strip()
+    return raw
+
+
+def task_search_text(task: dict, progress: dict | None = None) -> str:
+    issue = task.get("issueRecord") if isinstance(task.get("issueRecord"), dict) else {}
+    chunks = [
+        task.get("category"),
+        task.get("testItem"),
+        task.get("owner"),
+        issue.get("dtsNo"),
+        issue.get("issueNote"),
+        task.get("result"),
+        task.get("resultSummary"),
+        task.get("completionType"),
+    ]
+    if progress:
+        chunks.extend([progress.get("category"), progress.get("testItem")])
+    for upload in task.get("resultUploads") or []:
+        if isinstance(upload, dict):
+            chunks.extend([upload.get("reason"), upload.get("summary"), upload.get("result")])
+    for fault in task.get("sampleFaultRecords") or []:
+        if isinstance(fault, dict):
+            chunks.extend([fault.get("problem"), fault.get("sampleNo"), fault.get("sn"), fault.get("imei")])
+    return " ".join(str(x or "") for x in chunks).lower()
+
+
+def task_matches_query(task: dict, progress: dict | None, query: dict[str, list[str]]) -> bool:
+    sku = first_query_value(query, "sku", "")
+    sku_index = str(task.get("skuIndex") or (progress or {}).get("skuIndex") or "")
+    if sku and sku != sku_index:
+        return False
+
+    flow_status = first_query_value(query, "flowStatus", "")
+    if flow_status and task_flow_status(task) != flow_status:
+        return False
+
+    owner_name = first_query_value(query, "ownerName", "")
+    if owner_name and person_name_from_text(task.get("owner")) != owner_name:
+        return False
+
+    category_kw = first_query_value(query, "categoryKeyword", "").strip().lower()
+    category = str(task.get("category") or (progress or {}).get("category") or "").lower()
+    if category_kw and category_kw not in category:
+        return False
+
+    case_kw = first_query_value(query, "caseKeyword", "").strip().lower()
+    test_item = str(task.get("testItem") or (progress or {}).get("testItem") or "").lower()
+    if case_kw and case_kw not in test_item:
+        return False
+
+    dts_kw = first_query_value(query, "dtsKeyword", "").strip().lower()
+    issue = task.get("issueRecord") if isinstance(task.get("issueRecord"), dict) else {}
+    if dts_kw and dts_kw not in str(issue.get("dtsNo") or "").lower():
+        return False
+
+    result_kw = first_query_value(query, "resultKeyword", "").strip().lower()
+    if result_kw and result_kw not in task_search_text(task, progress):
+        return False
+
+    return True
+
+
+def query_value_present(query: dict[str, list[str]], name: str) -> bool:
+    return bool(first_query_value(query, name, "").strip())
+
+
+def task_query_requires_python_scan(query: dict[str, list[str]]) -> bool:
+    return any(query_value_present(query, key) for key in ("categoryKeyword", "caseKeyword", "dtsKeyword", "resultKeyword"))
+
+
+def task_sql_filter_parts(stage_id: str, query: dict[str, list[str]], *, include_flow_status: bool = True) -> tuple[list[str], list[object]]:
+    where = ["stage_id = ?", "deleted_at IS NULL"]
+    args: list[object] = [stage_id]
+    sku = first_query_value(query, "sku", "")
+    if sku:
+        where.append("sku_index = ?")
+        args.append(to_int(sku, 0))
+    owner_name = first_query_value(query, "ownerName", "").strip()
+    if owner_name:
+        where.append("(owner = ? OR owner LIKE ?)")
+        args.extend([owner_name, f"{owner_name}/%"])
+    if include_flow_status:
+        flow_status = first_query_value(query, "flowStatus", "").strip()
+        if flow_status:
+            where.append("flow_status = ?")
+            args.append(flow_status)
+    return where, args
+
+
+def task_from_db_row(row: sqlite3.Row) -> dict:
+    task = json_obj(row["data_json"], {}) or {}
+    sample_ids = json_obj(row["sample_ids_json"], [])
+    if not isinstance(sample_ids, list):
+        sample_ids = []
+    task.update({
+        "id": row["id"],
+        "projectId": row["project_id"],
+        "stageId": row["stage_id"],
+        "progressId": row["progress_id"] or task.get("progressId") or "",
+        "category": row["category"] or task.get("category") or "",
+        "testItem": row["test_item"] or task.get("testItem") or "",
+        "skuIndex": to_int(row["sku_index"] if row["sku_index"] is not None else task.get("skuIndex")),
+        "status": row["status"] or task.get("status") or "",
+        "owner": row["owner"] or task.get("owner") or "",
+        "sampleIds": sample_ids,
+    })
+    if row["completed_at"] and not task.get("completedAt"):
+        task["completedAt"] = row["completed_at"]
+    return task
+
+
+def load_task_logs_for(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, list[dict]]:
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    rows = conn.execute(
+        f"""
+        SELECT task_id, data_json
+        FROM task_logs
+        WHERE task_id IN ({placeholders})
+        ORDER BY time, id
+        """,
+        task_ids,
+    ).fetchall()
+    logs_by_task: dict[str, list[dict]] = {}
+    for row in rows:
+        log = json_obj(row["data_json"], None)
+        if isinstance(log, dict):
+            logs_by_task.setdefault(row["task_id"], []).append(log)
+    return logs_by_task
+
+
+def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[str, list[str]]) -> dict:
+    page, page_size = parse_page_params(query, default_size=100, max_size=500)
+    stage_row = conn.execute(
+        """
+        SELECT id, project_id, name, data_json
+        FROM project_stages
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (stage_id,),
+    ).fetchone()
+    if not stage_row:
+        raise KeyError("阶段不存在")
+
+    stage = json_obj(stage_row["data_json"], {}) or {}
+    progress_items = stage.get("progress") if isinstance(stage.get("progress"), list) else []
+    progress_by_id = {str(p.get("id")): p for p in progress_items if isinstance(p, dict) and p.get("id")}
+
+    if not task_query_requires_python_scan(query):
+        where, args = task_sql_filter_parts(stage_id, query, include_flow_status=True)
+        base_where, base_args = task_sql_filter_parts(stage_id, query, include_flow_status=False)
+        total = int(conn.execute(
+            f"SELECT COUNT(*) AS count FROM project_tasks WHERE {' AND '.join(where)}",
+            args,
+        ).fetchone()["count"] or 0)
+        base_total = int(conn.execute(
+            f"SELECT COUNT(*) AS count FROM project_tasks WHERE {' AND '.join(base_where)}",
+            base_args,
+        ).fetchone()["count"] or 0)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(1, page), total_pages)
+        offset = (page - 1) * page_size
+
+        status_rows = conn.execute(
+            f"""
+            SELECT COALESCE(flow_status, '待下发') AS flow_status, COUNT(*) AS count
+            FROM project_tasks
+            WHERE {" AND ".join(base_where)}
+            GROUP BY flow_status
+            """,
+            base_args,
+        ).fetchall()
+        status_counts = {str(row["flow_status"] or "待下发"): int(row["count"] or 0) for row in status_rows}
+
+        rows = conn.execute(
+            f"""
+            SELECT id, project_id, stage_id, progress_id, category, test_item, sku_index, status, flow_status, owner,
+                   sample_ids_json, data_json, completed_at
+            FROM project_tasks
+            WHERE {" AND ".join(where)}
+            ORDER BY created_at, id
+            LIMIT ? OFFSET ?
+            """,
+            [*args, page_size, offset],
+        ).fetchall()
+
+        page_rows: list[dict] = []
+        for idx, row in enumerate(rows):
+            task = task_from_db_row(row)
+            progress = progress_by_id.get(str(task.get("progressId") or ""))
+            page_rows.append({
+                "key": task.get("id") or f"task_{idx}",
+                "task": task,
+                "progress": progress,
+                "flowStatus": row["flow_status"] or task_flow_status(task),
+            })
+
+        logs_by_task = load_task_logs_for(conn, [str(row["task"].get("id")) for row in page_rows if row.get("task")])
+        for row in page_rows:
+            task = row.get("task") or {}
+            task["logs"] = logs_by_task.get(str(task.get("id")), [])
+
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "totalPages": total_pages,
+            "stage": {
+                "id": stage_row["id"],
+                "projectId": stage_row["project_id"],
+                "name": stage_row["name"] or stage.get("name") or "",
+            },
+            "stats": {
+                "totalInStage": base_total,
+                "filtered": total,
+                "statusCounts": status_counts,
+            },
+            "rows": page_rows,
+        }
+
+    where = ["stage_id = ?", "deleted_at IS NULL"]
+    args: list[object] = [stage_id]
+    sku = first_query_value(query, "sku", "")
+    if sku:
+        where.append("sku_index = ?")
+        args.append(to_int(sku, 0))
+    category_kw = first_query_value(query, "categoryKeyword", "").strip().lower()
+    if category_kw:
+        where.append("(LOWER(category) LIKE ? OR LOWER(data_json) LIKE ?)")
+        like = f"%{category_kw}%"
+        args.extend([like, like])
+    case_kw = first_query_value(query, "caseKeyword", "").strip().lower()
+    if case_kw:
+        where.append("(LOWER(test_item) LIKE ? OR LOWER(data_json) LIKE ?)")
+        like = f"%{case_kw}%"
+        args.extend([like, like])
+    owner_name = first_query_value(query, "ownerName", "").strip().lower()
+    if owner_name:
+        where.append("LOWER(owner) LIKE ?")
+        args.append(f"%{owner_name}%")
+
+    rows = conn.execute(
+        f"""
+        SELECT id, project_id, stage_id, progress_id, category, test_item, sku_index, status, owner,
+               sample_ids_json, data_json, completed_at
+        FROM project_tasks
+        WHERE {" AND ".join(where)}
+        ORDER BY created_at, id
+        """,
+        args,
+    ).fetchall()
+
+    all_rows: list[dict] = []
+    status_counts: dict[str, int] = {}
+    for idx, row in enumerate(rows):
+        task = task_from_db_row(row)
+        progress = progress_by_id.get(str(task.get("progressId") or ""))
+        flow_status = task_flow_status(task)
+        status_counts[flow_status] = status_counts.get(flow_status, 0) + 1
+        if not task_matches_query(task, progress, query):
+            continue
+        all_rows.append({
+            "key": task.get("id") or f"task_{idx}",
+            "task": task,
+            "progress": progress,
+            "flowStatus": flow_status,
+        })
+
+    page_rows, meta = paginate_list(all_rows, page, page_size)
+    logs_by_task = load_task_logs_for(conn, [str(row["task"].get("id")) for row in page_rows if row.get("task")])
+    for row in page_rows:
+        task = row.get("task") or {}
+        task["logs"] = logs_by_task.get(str(task.get("id")), [])
+
+    return {
+        **meta,
+        "stage": {
+            "id": stage_row["id"],
+            "projectId": stage_row["project_id"],
+            "name": stage_row["name"] or stage.get("name") or "",
+        },
+        "stats": {
+            "totalInStage": len(rows),
+            "filtered": len(all_rows),
+            "statusCounts": status_counts,
+        },
+        "rows": page_rows,
+    }
+
+
+def load_sample_photo_counts_for(conn: sqlite3.Connection, sample_ids: list[str]) -> dict[str, int]:
+    if not sample_ids:
+        return {}
+    placeholders = ",".join("?" for _ in sample_ids)
+    rows = conn.execute(
+        f"""
+        SELECT sample_id, COUNT(*) AS count
+        FROM sample_assets
+        WHERE kind = 'photo' AND deleted_at IS NULL AND sample_id IN ({placeholders})
+        GROUP BY sample_id
+        """,
+        sample_ids,
+    ).fetchall()
+    return {str(row["sample_id"]): int(row["count"] or 0) for row in rows}
+
+
+def sample_has_problem(sample: dict) -> bool:
+    for record in sample.get("problemRecords") or []:
+        if isinstance(record, dict) and str(record.get("description") or "").strip():
+            return True
+        if isinstance(record, str) and record.strip():
+            return True
+    return False
+
+
+def sample_effective_status(sample: dict) -> str:
+    if sample_has_problem(sample):
+        return "故障"
+    return str(sample.get("status") or "闲置").strip() or "闲置"
+
+
+def sample_search_text(sample: dict) -> str:
+    chunks = [
+        sample.get("sampleNo"),
+        sample.get("sn"),
+        sample.get("imei"),
+        sample.get("boardSn"),
+        sample.get("model"),
+        sample.get("config"),
+        sample.get("tag"),
+        sample.get("schemeNo"),
+        sample.get("sourceStageName"),
+        sample.get("sourceSkuName"),
+        sample.get("notes"),
+        sample.get("owner"),
+        sample.get("borrower"),
+        sample.get("location"),
+    ]
+    for record in sample.get("problemRecords") or []:
+        if isinstance(record, dict):
+            chunks.extend([record.get("description"), record.get("source"), record.get("taskLabel")])
+        else:
+            chunks.append(record)
+    return " ".join(str(x or "") for x in chunks).lower()
+
+
+def sample_matches_query(sample: dict, query: dict[str, list[str]]) -> bool:
+    keyword = first_query_value(query, "keyword", "").strip().lower()
+    if keyword and keyword not in sample_search_text(sample):
+        return False
+    status = first_query_value(query, "status", "")
+    if status and sample_effective_status(sample) != status:
+        return False
+    problem_state = sample_problem_state(query)
+    if problem_state == "fault" and not sample_has_problem(sample):
+        return False
+    if problem_state == "ok" and sample_has_problem(sample):
+        return False
+    owner = first_query_value(query, "owner", "")
+    if owner and owner not in str(sample.get("owner") or ""):
+        return False
+    borrower = first_query_value(query, "borrower", "")
+    if borrower and borrower not in str(sample.get("borrower") or ""):
+        return False
+    return True
+
+
+def sample_query_requires_python_scan(query: dict[str, list[str]]) -> bool:
+    return query_value_present(query, "keyword")
+
+
+def sample_problem_state(query: dict[str, list[str]]) -> str:
+    value = first_query_value(query, "problemState", "").strip().lower()
+    if value in ("fault", "problem", "bad", "fail", "故障"):
+        return "fault"
+    if value in ("ok", "pass", "normal", "good", "无故障"):
+        return "ok"
+    return ""
+
+
+def sample_sql_filter_parts(category_id: str, query: dict[str, list[str]], *, include_status: bool = True) -> tuple[list[str], list[object]]:
+    where = ["category_id = ?", "deleted_at IS NULL"]
+    args: list[object] = [category_id]
+    if include_status:
+        status = first_query_value(query, "status", "").strip()
+        if status:
+            where.append("effective_status = ?")
+            args.append(status)
+    problem_state = sample_problem_state(query)
+    if problem_state == "fault":
+        where.append("has_problem = 1")
+    elif problem_state == "ok":
+        where.append("has_problem = 0")
+    owner = first_query_value(query, "owner", "").strip()
+    if owner:
+        where.append("owner LIKE ?")
+        args.append(f"%{owner}%")
+    borrower = first_query_value(query, "borrower", "").strip()
+    if borrower:
+        where.append("borrower LIKE ?")
+        args.append(f"%{borrower}%")
+    return where, args
+
+
+def sample_from_db_row(row: sqlite3.Row) -> dict:
+    sample = json_obj(row["data_json"], {}) or {}
+    sample.update({
+        "id": row["id"],
+        "categoryId": row["category_id"],
+        "sampleNo": row["sample_no"] or sample.get("sampleNo") or "",
+        "sn": row["sn"] or sample.get("sn") or "",
+        "imei": row["imei"] or sample.get("imei") or "",
+        "status": row["status"] or sample.get("status") or "",
+        "location": row["location"] or sample.get("location") or "",
+        "owner": row["owner"] or sample.get("owner") or "",
+        "borrower": row["borrower"] or sample.get("borrower") or "",
+        "photos": [],
+        "photosLoaded": False,
+    })
+    if "effective_status" in row.keys():
+        sample["effectiveStatus"] = row["effective_status"] or sample_effective_status(sample)
+    return sample
+
+
+def list_sample_categories_summary(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT c.id, c.name, c.description, c.data_json, COUNT(r.id) AS sample_count
+        FROM sample_categories c
+        LEFT JOIN sample_records r ON r.category_id = c.id AND r.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL
+        GROUP BY c.id
+        ORDER BY c.sort_order, c.id
+        """
+    ).fetchall()
+    status_rows = conn.execute(
+        """
+        SELECT category_id, effective_status, COUNT(*) AS count
+        FROM sample_records
+        WHERE deleted_at IS NULL
+        GROUP BY category_id, effective_status
+        """
+    ).fetchall()
+    status_by_category: dict[str, dict[str, int]] = {}
+    for row in status_rows:
+        status_by_category.setdefault(str(row["category_id"]), {})[str(row["effective_status"] or "闲置")] = int(row["count"] or 0)
+
+    result = []
+    for row in rows:
+        cat = json_obj(row["data_json"], {}) or {}
+        result.append({
+            "id": row["id"],
+            "name": row["name"] or cat.get("name") or "",
+            "description": row["description"] or cat.get("description") or "",
+            "sampleCount": int(row["sample_count"] or 0),
+            "statusCounts": status_by_category.get(str(row["id"]), {}),
+        })
+    return result
+
+
+def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[str, list[str]]) -> dict:
+    page, page_size = parse_page_params(query, default_size=100, max_size=500)
+    category_row = conn.execute(
+        """
+        SELECT id, name, description, data_json
+        FROM sample_categories
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (category_id,),
+    ).fetchone()
+    if not category_row:
+        raise KeyError("样机池不存在")
+
+    if not sample_query_requires_python_scan(query):
+        where, args = sample_sql_filter_parts(category_id, query, include_status=True)
+        status_where, status_args = sample_sql_filter_parts(category_id, query, include_status=False)
+        total_in_category = int(conn.execute(
+            "SELECT COUNT(*) AS count FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
+            (category_id,),
+        ).fetchone()["count"] or 0)
+        total = int(conn.execute(
+            f"SELECT COUNT(*) AS count FROM sample_records WHERE {' AND '.join(where)}",
+            args,
+        ).fetchone()["count"] or 0)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(1, page), total_pages)
+        offset = (page - 1) * page_size
+
+        status_rows = conn.execute(
+            f"""
+            SELECT COALESCE(effective_status, '闲置') AS effective_status, COUNT(*) AS count
+            FROM sample_records
+            WHERE {" AND ".join(status_where)}
+            GROUP BY effective_status
+            """,
+            status_args,
+        ).fetchall()
+        status_counts = {str(row["effective_status"] or "闲置"): int(row["count"] or 0) for row in status_rows}
+
+        rows = conn.execute(
+            f"""
+            SELECT id, category_id, sample_no, sn, imei, status, effective_status, location, owner, borrower, data_json
+            FROM sample_records
+            WHERE {" AND ".join(where)}
+            ORDER BY created_at, id
+            LIMIT ? OFFSET ?
+            """,
+            [*args, page_size, offset],
+        ).fetchall()
+
+        page_items = [sample_from_db_row(row) for row in rows]
+        photo_counts = load_sample_photo_counts_for(conn, [str(item.get("id")) for item in page_items])
+        for item in page_items:
+            item["photoCount"] = photo_counts.get(str(item.get("id")), 0)
+
+        cat = json_obj(category_row["data_json"], {}) or {}
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "totalPages": total_pages,
+            "category": {
+                "id": category_row["id"],
+                "name": category_row["name"] or cat.get("name") or "",
+                "description": category_row["description"] or cat.get("description") or "",
+            },
+            "stats": {
+                "totalInCategory": total_in_category,
+                "filtered": total,
+                "statusCounts": status_counts,
+            },
+            "items": page_items,
+        }
+
+    where = ["category_id = ?", "deleted_at IS NULL"]
+    args: list[object] = [category_id]
+    keyword = first_query_value(query, "keyword", "").strip().lower()
+    if keyword:
+        where.append(
+            """
+            (LOWER(sample_no) LIKE ? OR LOWER(sn) LIKE ? OR LOWER(imei) LIKE ?
+             OR LOWER(owner) LIKE ? OR LOWER(borrower) LIKE ? OR LOWER(location) LIKE ?
+             OR LOWER(data_json) LIKE ?)
+            """
+        )
+        like = f"%{keyword}%"
+        args.extend([like, like, like, like, like, like, like])
+    owner = first_query_value(query, "owner", "").strip().lower()
+    if owner:
+        where.append("LOWER(owner) LIKE ?")
+        args.append(f"%{owner}%")
+    borrower = first_query_value(query, "borrower", "").strip().lower()
+    if borrower:
+        where.append("LOWER(borrower) LIKE ?")
+        args.append(f"%{borrower}%")
+    problem_state = sample_problem_state(query)
+    if problem_state == "fault":
+        where.append("has_problem = 1")
+    elif problem_state == "ok":
+        where.append("has_problem = 0")
+
+    rows = conn.execute(
+        f"""
+        SELECT id, category_id, sample_no, sn, imei, status, location, owner, borrower, data_json
+        FROM sample_records
+        WHERE {" AND ".join(where)}
+        ORDER BY created_at, id
+        """,
+        args,
+    ).fetchall()
+
+    all_items: list[dict] = []
+    status_counts: dict[str, int] = {}
+    for row in rows:
+        sample = sample_from_db_row(row)
+        effective = sample_effective_status(sample)
+        status_counts[effective] = status_counts.get(effective, 0) + 1
+        if not sample_matches_query(sample, query):
+            continue
+        sample["effectiveStatus"] = effective
+        all_items.append(sample)
+
+    page_items, meta = paginate_list(all_items, page, page_size)
+    photo_counts = load_sample_photo_counts_for(conn, [str(item.get("id")) for item in page_items])
+    for item in page_items:
+        item["photoCount"] = photo_counts.get(str(item.get("id")), 0)
+
+    cat = json_obj(category_row["data_json"], {}) or {}
+    return {
+        **meta,
+        "category": {
+            "id": category_row["id"],
+            "name": category_row["name"] or cat.get("name") or "",
+            "description": category_row["description"] or cat.get("description") or "",
+        },
+        "stats": {
+            "totalInCategory": len(rows),
+            "filtered": len(all_items),
+            "statusCounts": status_counts,
+        },
+        "items": page_items,
+    }
+
+
+def load_sample_category_detail(conn: sqlite3.Connection, category_id: str, *, include_photos: bool = False) -> dict | None:
+    category_row = conn.execute(
+        """
+        SELECT id, name, description, data_json
+        FROM sample_categories
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (category_id,),
+    ).fetchone()
+    if not category_row:
+        return None
+
+    category = json_obj(category_row["data_json"], {}) or {}
+    category.update({
+        "id": category_row["id"],
+        "name": category_row["name"] or category.get("name") or "",
+        "description": category_row["description"] or category.get("description") or "",
+        "samples": [],
+    })
+
+    photo_counts = {} if include_photos else load_sample_photo_counts_for(conn, [])
+    sample_rows = conn.execute(
+        """
+        SELECT id, category_id, sample_no, sn, imei, status, location, owner, borrower, data_json
+        FROM sample_records
+        WHERE category_id = ? AND deleted_at IS NULL
+        ORDER BY created_at, id
+        """,
+        (category_id,),
+    ).fetchall()
+    if not include_photos:
+        photo_counts = load_sample_photo_counts_for(conn, [str(row["id"]) for row in sample_rows])
+    for row in sample_rows:
+        sample = json_obj(row["data_json"], {}) or {}
+        sample.update({
+            "id": row["id"],
+            "categoryId": row["category_id"],
+            "sampleNo": row["sample_no"] or sample.get("sampleNo") or "",
+            "sn": row["sn"] or sample.get("sn") or "",
+            "imei": row["imei"] or sample.get("imei") or "",
+            "status": row["status"] or sample.get("status") or "",
+            "location": row["location"] or sample.get("location") or "",
+            "owner": row["owner"] or sample.get("owner") or "",
+            "borrower": row["borrower"] or sample.get("borrower") or "",
+        })
+        if include_photos:
+            sample["photos"] = load_sample_photos(conn, row["id"])
+            sample["photoCount"] = len(sample["photos"])
+            sample["photosLoaded"] = True
+        else:
+            sample["photos"] = []
+            sample["photoCount"] = photo_counts.get(str(row["id"]), 0)
+            sample["photosLoaded"] = False
+        category["samples"].append(sample)
+    category["sampleCount"] = len(category["samples"])
+    category["samplesLoaded"] = True
+    return category
+
+
+def list_project_summary(conn: sqlite3.Connection) -> list[dict]:
+    project_rows = conn.execute(
+        """
+        SELECT id, name, code, owner, data_json
+        FROM project_records
+        WHERE deleted_at IS NULL
+        ORDER BY sort_order, id
+        """
+    ).fetchall()
+    stage_rows = conn.execute(
+        """
+        SELECT project_id, COUNT(*) AS count
+        FROM project_stages
+        WHERE deleted_at IS NULL
+        GROUP BY project_id
+        """
+    ).fetchall()
+    task_rows = conn.execute(
+        """
+        SELECT project_id, COUNT(*) AS count
+        FROM project_tasks
+        WHERE deleted_at IS NULL
+        GROUP BY project_id
+        """
+    ).fetchall()
+    stages_by_project = {str(row["project_id"]): int(row["count"] or 0) for row in stage_rows}
+    tasks_by_project = {str(row["project_id"]): int(row["count"] or 0) for row in task_rows}
+
+    projects = []
+    for row in project_rows:
+        project = json_obj(row["data_json"], {}) or {}
+        projects.append({
+            "id": row["id"],
+            "name": row["name"] or project.get("name") or "",
+            "code": row["code"] or project.get("code") or "",
+            "owner": row["owner"] or project.get("owner") or "",
+            "stageCount": stages_by_project.get(str(row["id"]), 0),
+            "taskCount": tasks_by_project.get(str(row["id"]), 0),
+        })
+    return projects
+
+
+def compose_bootstrap_state(conn: sqlite3.Connection) -> tuple[dict, int, str]:
+    row = conn.execute("SELECT data_json, revision, updated_at FROM app_state WHERE id = 1").fetchone()
+    if row is None:
+        data = empty_data()
+        revision = 1
+        updated_at = now_iso()
+    else:
+        stored = json_obj(row["data_json"], empty_data()) or empty_data()
+        data = empty_data()
+        data["currentProjectId"] = stored.get("currentProjectId")
+        data["currentStageId"] = stored.get("currentStageId")
+        data["eventSchema"] = stored.get("eventSchema") or "sample_events_v2"
+        data["users"] = stored.get("users") if isinstance(stored.get("users"), list) else []
+        revision = int(row["revision"])
+        updated_at = str(row["updated_at"])
+
+    data["projects"] = [
+        {**project, "stages": [], "_summaryOnly": True, "_detailLoaded": False}
+        for project in list_project_summary(conn)
+    ]
+    data["sampleLibrary"] = {
+        "categories": [
+            {**category, "samples": [], "_summaryOnly": True, "samplesLoaded": False}
+            for category in list_sample_categories_summary(conn)
+        ],
+        "logs": [],
+        "photosExternalized": True,
+        "eventsExternalized": True,
+    }
+    data["bootstrapMode"] = True
+    return data, revision, updated_at
+
+
+def compose_state(conn: sqlite3.Connection, *, include_sample_photos: bool = True, include_sample_logs: bool = True) -> tuple[dict, int, str]:
     row = conn.execute("SELECT data_json, revision, updated_at FROM app_state WHERE id = 1").fetchone()
     if row is None:
         return empty_data(), 1, now_iso()
@@ -1473,7 +2452,7 @@ def compose_state(conn: sqlite3.Connection) -> tuple[dict, int, str]:
     data.pop("peoplePool", None)
     data.pop("locationPool", None)
     data["projects"] = load_project_library(conn)
-    data["sampleLibrary"] = load_sample_library(conn)
+    data["sampleLibrary"] = load_sample_library(conn, include_photos=include_sample_photos, include_logs=include_sample_logs)
     return data, int(row["revision"]), str(row["updated_at"])
 
 
@@ -1510,10 +2489,50 @@ def init_db() -> None:
             conn.commit()
 
 
-def get_state() -> tuple[dict, int, str]:
+def get_state(*, compact: bool = False) -> tuple[dict, int, str]:
     with DB_LOCK:
         with connect_db() as conn:
-            return compose_state(conn)
+            return compose_state(conn, include_sample_photos=not compact, include_sample_logs=not compact)
+
+
+def hydrate_externalized_sample_fields(new_data: dict, current_data: dict) -> None:
+    """Preserve externally loaded sample photos/events when a compact client saves."""
+    library = new_data.get("sampleLibrary") or {}
+    current_library = current_data.get("sampleLibrary") or {}
+
+    if library.get("photosExternalized"):
+        current_samples = _sample_index_by_id(current_data)
+        for _, sample in iter_samples(new_data):
+            current_sample = current_samples.get(str(sample.get("id") or ""))
+            if not current_sample:
+                sample["photos"] = list(sample.get("photos") or [])
+                sample["photoCount"] = len(sample["photos"])
+                sample["photosLoaded"] = True
+                continue
+            if sample.get("photosLoaded") is True:
+                sample["photoCount"] = len(sample.get("photos") or [])
+                continue
+            preserved = copy.deepcopy(current_sample.get("photos") or [])
+            sample["photos"] = preserved
+            sample["photoCount"] = len(preserved)
+            sample["photosLoaded"] = True
+
+    if library.get("eventsExternalized"):
+        incoming_logs = [log for log in (library.get("logs") or []) if isinstance(log, dict)]
+        merged_logs = []
+        seen = set()
+        for log in [*(current_library.get("logs") or []), *incoming_logs]:
+            if not isinstance(log, dict):
+                continue
+            key = str(log.get("id") or "") or _content_hash(log)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_logs.append(copy.deepcopy(log))
+        library["logs"] = merged_logs
+
+    library.pop("photosExternalized", None)
+    library.pop("eventsExternalized", None)
 
 
 # ── 导出/导入 bundle ────────────────────────────────────────────
@@ -1865,7 +2884,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
         # 1) ID 相同
         if pid and pid in curr_projects:
             curr_p = curr_projects[pid]
-            field_diffs = _diff_fields(curr_p, proj, skip_keys={"stages", "tasks"})
+            field_diffs = _diff_fields(curr_p, proj, skip_keys={"stages", "tasks", "members", "locations"})
             if field_diffs:
                 conflicts.append({
                     "conflictId": _next_conflict_id(),
@@ -1937,7 +2956,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
             # 1) ID 相同
             if sid and sid in curr_samples_by_id:
                 curr_s = curr_samples_by_id[sid]
-                field_diffs = _diff_fields(curr_s, sample, skip_keys={"photos", "logs", "problemRecords", "photos", "_categoryName"})
+                field_diffs = _diff_fields(curr_s, sample, skip_keys={"photos", "logs", "problemRecords", "_categoryName"})
                 if field_diffs:
                     conflicts.append({
                         "conflictId": _next_conflict_id(),
@@ -1969,7 +2988,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                         "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
                         "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
                         "mergeableFields": mergeable,
-                        "autoMergeSubData": ["logs", "photos", "problemRecords"],
+                        "autoMergeSubData": ["photos", "problemRecords"],
                         "preferredMergeTarget": curr_s["id"],
                     })
                     continue
@@ -1990,7 +3009,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                         "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
                         "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
                         "mergeableFields": mergeable,
-                        "autoMergeSubData": ["logs", "photos", "problemRecords"],
+                        "autoMergeSubData": ["photos", "problemRecords"],
                         "preferredMergeTarget": curr_s["id"],
                     })
                     continue
@@ -2148,12 +3167,23 @@ def _diff_stages(curr_proj: dict, incoming_proj: dict, curr_proj_id: str, inc_pr
                 "projectId": curr_proj_id, "stageId": sid})
 
 
+IMPORT_DIFF_SYSTEM_SKIP_KEYS = {
+    "categoryId",
+    "photoCount",
+    "photosLoaded",
+    "eventsLoaded",
+    "effectiveStatus",
+    "logsLoaded",
+}
+
+
 def _diff_fields(current_item: dict, incoming_item: dict, skip_keys: set = set()) -> set:
     """返回两个字典中有差异的字段名集合（排除 skip_keys）"""
     diffs = set()
+    ignored = set(skip_keys) | IMPORT_DIFF_SYSTEM_SKIP_KEYS
     all_keys = set(current_item.keys()) | set(incoming_item.keys())
     for k in all_keys:
-        if k in skip_keys or k.startswith("_"):
+        if k in ignored or k.startswith("_"):
             continue
         cv = current_item.get(k)
         iv = incoming_item.get(k)
@@ -2206,6 +3236,9 @@ def commit_import_bundle(payload: dict) -> dict:
             new_sample_no = (d.get("newSampleNo") or "").strip()
             if not new_sn and not new_imei and not new_sample_no:
                 return {"ok": False, "error": f"冲突 {cid} 选择编辑标识导入但未提供新 SN/IMEI/编号", "status": 400}
+        elif action == "apply_field_choices":
+            if not isinstance(d.get("fieldChoices") or {}, dict):
+                return {"ok": False, "error": f"冲突 {cid} 的字段选择格式不正确", "status": 400}
 
     # 先备份
     current_data, current_revision, _ = get_state()
@@ -2228,13 +3261,14 @@ def commit_import_bundle(payload: dict) -> dict:
 
     stats = {"projectsAdded": 0, "projectsMerged": 0, "stagesAdded": 0, "stagesMerged": 0,
              "tasksAdded": 0, "tasksMerged": 0, "samplesAdded": 0, "samplesMerged": 0,
-             "photosAdded": 0, "skipped": 0}
+             "photosAdded": 0, "sampleEventsAdded": 0, "skipped": 0}
 
     # ── ID 映射表（incoming → target），所有写入必须经此重映射 ──
     project_id_map: dict[str, str] = {}  # incomingPID → targetPID
     stage_id_map: dict[str, str] = {}    # incomingSID → targetSID
     task_id_map: dict[str, str] = {}     # incomingTID → targetTID
     sample_id_map: dict[str, str] = {}   # incomingSampleID → targetSampleID
+    skipped_sample_ids: set[str] = set()
 
     for auto in result.get("autoApply") or []:
         atype = auto["type"]
@@ -2353,8 +3387,12 @@ def commit_import_bundle(payload: dict) -> dict:
                                         choice = field_choices.get(fname, "current")
                                         if choice == "incoming" and fname in inc_sample:
                                             cs[fname] = inc_sample[fname]
+                                sample_id_map[inc_id] = target_id
+                                stats["samplesMerged"] += 1
                                 break
             elif action == "skip":
+                if etype == "sample" and c.get("incomingId"):
+                    skipped_sample_ids.add(str(c.get("incomingId")))
                 stats["skipped"] += 1
             continue  # field_conflict 已处理，跳过后续 entity 特定逻辑
 
@@ -2553,12 +3591,6 @@ def commit_import_bundle(payload: dict) -> dict:
                                             if _content_hash(pr) not in existing_hashes:
                                                 cs.setdefault("problemRecords", []).append(copy.deepcopy(pr))
                                                 existing_hashes.add(_content_hash(pr))
-                                    elif subk == "logs":
-                                        existing_hashes = {_content_hash(log) for log in (cs.get("logs") or [])}
-                                        for log in inc_sample.get("logs") or []:
-                                            if _content_hash(log) not in existing_hashes:
-                                                cs.setdefault("logs", []).append(copy.deepcopy(log))
-                                                existing_hashes.add(_content_hash(log))
                                 stats["samplesMerged"] += 1
                                 sample_id_map[inc_id] = target_id
                                 break
@@ -2597,7 +3629,44 @@ def commit_import_bundle(payload: dict) -> dict:
                     stats["samplesAdded"] += 1
                     sample_id_map[inc_id] = inc_id
             elif action == "skip":
+                if c.get("incomingId"):
+                    skipped_sample_ids.add(str(c.get("incomingId")))
                 stats["skipped"] += 1
+
+    incoming_sample_ids = {
+        str(sample.get("id"))
+        for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []
+        for sample in (cat.get("samples") or [])
+        if sample.get("id")
+    }
+    current_sample_ids = {
+        str(sample.get("id"))
+        for cat in curr_categories.values()
+        for sample in (cat.get("samples") or [])
+        if sample.get("id")
+    }
+    for sid in incoming_sample_ids:
+        if sid in current_sample_ids and sid not in skipped_sample_ids:
+            sample_id_map.setdefault(sid, sid)
+
+    current_data["sampleLibrary"]["categories"] = list(curr_categories.values())
+    current_data["projects"] = list(curr_projects.values())
+
+    merged_photos, _ = _merge_import_sample_subrecords(current_data, incoming, sample_id_map)
+    stats["photosAdded"] += merged_photos
+    incoming_samples_by_id = _sample_index_by_id(incoming)
+    incoming_photo_ids_by_target: dict[str, set[str]] = {}
+    for inc_sid, target_sid in sample_id_map.items():
+        inc_sample = incoming_samples_by_id.get(inc_sid)
+        if not inc_sample:
+            continue
+        photo_ids = {
+            str(photo.get("id"))
+            for photo in (inc_sample.get("photos") or [])
+            if photo.get("id")
+        }
+        if photo_ids:
+            incoming_photo_ids_by_target.setdefault(target_sid, set()).update(photo_ids)
 
     # ── 复制照片资产文件（经 sample_id_map 定位源文件）──
     # 反向映射：target sample ID → incoming sample ID
@@ -2605,10 +3674,13 @@ def commit_import_bundle(payload: dict) -> dict:
     for cat in curr_categories.values():
         for sample in cat.get("samples") or []:
             target_sid = sample.get("id", "")
+            incoming_photo_ids = incoming_photo_ids_by_target.get(target_sid, set())
             # 查找照片在导入包中对应的 incoming 样机 ID
             inc_sid = target_to_incoming_sample.get(target_sid, target_sid)
             for photo in sample.get("photos") or []:
                 photo_id = photo.get("id", "")
+                if photo_id not in incoming_photo_ids:
+                    continue
                 # 原图：用 relativePath 获取真实文件名（含扩展名）
                 rel = photo.get("relativePath", "")
                 if rel:
@@ -2659,6 +3731,9 @@ def commit_import_bundle(payload: dict) -> dict:
 
     # ── 统一 ID 重映射：所有交叉引用经映射表重写 ──
     _apply_id_maps(current_data, project_id_map, stage_id_map, task_id_map, sample_id_map)
+    stats["sampleEventsAdded"] = _merge_import_sample_events(
+        current_data, incoming, project_id_map, stage_id_map, task_id_map, sample_id_map
+    )
 
     import_remark = f"导入数据包 (deployment={source_manifest.get('sourceDeploymentId','?')})"
     ok, resp = save_state(current_data, preview_revision, "import-bundle", remark=import_remark, user="数据导入")
@@ -2739,6 +3814,111 @@ def _remap_log_ids(log: dict, project_id_map: dict, stage_id_map: dict,
         old_val = log.get(field)
         if old_val and old_val in id_map:
             log[field] = id_map[old_val]
+
+
+def _sample_index_by_id(data: dict) -> dict[str, dict]:
+    samples: dict[str, dict] = {}
+    for cat in (data.get("sampleLibrary") or {}).get("categories") or []:
+        for sample in cat.get("samples") or []:
+            if isinstance(sample, dict) and sample.get("id"):
+                samples[str(sample.get("id"))] = sample
+    return samples
+
+
+def _merge_import_sample_subrecords(current_data: dict, incoming: dict,
+                                    sample_id_map: dict[str, str]) -> tuple[int, int]:
+    """Merge photo metadata and problem records for imported or mapped samples."""
+    current_samples = _sample_index_by_id(current_data)
+    incoming_samples = _sample_index_by_id(incoming)
+    photos_added = 0
+    problems_added = 0
+
+    for inc_sid, target_sid in sample_id_map.items():
+        inc_sample = incoming_samples.get(inc_sid)
+        target_sample = current_samples.get(target_sid)
+        if not inc_sample or not target_sample:
+            continue
+
+        existing_photo_ids = {
+            str(photo.get("id"))
+            for photo in (target_sample.get("photos") or [])
+            if isinstance(photo, dict) and photo.get("id")
+        }
+        existing_photo_hashes = {
+            _content_hash(photo)
+            for photo in (target_sample.get("photos") or [])
+            if isinstance(photo, dict)
+        }
+        for photo in inc_sample.get("photos") or []:
+            if not isinstance(photo, dict):
+                continue
+            photo_id = str(photo.get("id") or "")
+            photo_hash = _content_hash(photo)
+            if (photo_id and photo_id in existing_photo_ids) or photo_hash in existing_photo_hashes:
+                continue
+            target_sample.setdefault("photos", []).append(copy.deepcopy(photo))
+            if photo_id:
+                existing_photo_ids.add(photo_id)
+            existing_photo_hashes.add(photo_hash)
+            photos_added += 1
+
+        existing_problem_hashes = {
+            _content_hash(record)
+            for record in (target_sample.get("problemRecords") or [])
+            if isinstance(record, dict)
+        }
+        for record in inc_sample.get("problemRecords") or []:
+            if not isinstance(record, dict):
+                continue
+            record_hash = _content_hash(record)
+            if record_hash in existing_problem_hashes:
+                continue
+            target_sample.setdefault("problemRecords", []).append(copy.deepcopy(record))
+            existing_problem_hashes.add(record_hash)
+            problems_added += 1
+
+    return photos_added, problems_added
+
+
+def _merge_import_sample_events(current_data: dict, incoming: dict,
+                                project_id_map: dict[str, str], stage_id_map: dict[str, str],
+                                task_id_map: dict[str, str], sample_id_map: dict[str, str]) -> int:
+    """Merge library-level sample events after import ID maps are known."""
+    library = current_data.setdefault("sampleLibrary", {})
+    logs = library.get("logs")
+    if not isinstance(logs, list):
+        logs = []
+        library["logs"] = logs
+
+    target_sample_ids = set(_sample_index_by_id(current_data).keys())
+    existing_hashes = {
+        _content_hash(log)
+        for log in logs
+        if isinstance(log, dict)
+    }
+    added = 0
+
+    for raw in (incoming.get("sampleLibrary") or {}).get("logs") or []:
+        if not isinstance(raw, dict):
+            continue
+        inc_sid = str(raw.get("sampleId") or "")
+        if inc_sid and inc_sid not in sample_id_map:
+            continue
+
+        log = copy.deepcopy(raw)
+        _remap_log_ids(log, project_id_map, stage_id_map, task_id_map, sample_id_map)
+        target_sid = str(log.get("sampleId") or "")
+        if target_sid and target_sid not in target_sample_ids:
+            continue
+
+        event_hash = _content_hash(log)
+        if event_hash in existing_hashes:
+            continue
+        logs.append(log)
+        existing_hashes.add(event_hash)
+        added += 1
+
+    return added
 
 
 def _merge_project_sub_data(target: dict, source: dict) -> None:
@@ -2858,6 +4038,7 @@ def save_state(
             new_revision = current_revision + 1
             updated_at = now_iso()
             new_data["version"] = APP_VERSION
+            hydrate_externalized_sample_fields(new_data, current_data)
 
             sync_project_library(conn, new_data, allow_empty=True)
             sync_sample_library(conn, new_data, allow_empty=True)
@@ -2949,6 +4130,935 @@ def commit_data_mutation(conn: sqlite3.Connection, data: dict, action: str, rema
     return {"revision": new_revision, "updated_at": updated_at}
 
 
+def write_task_logs(conn: sqlite3.Connection, task: dict, project_id: str, stage_id: str) -> None:
+    task_id = str(task.get("id") or "")
+    conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+    seen_log_ids: set[str] = set()
+    for log in task.get("logs", []) or []:
+        if not isinstance(log, dict):
+            continue
+        log_id = str(log.get("id") or f"tasklog_{uuid.uuid4().hex}")
+        if log_id in seen_log_ids:
+            continue
+        seen_log_ids.add(log_id)
+        log["id"] = log_id
+        log["taskId"] = task_id
+        log["projectId"] = project_id
+        log["stageId"] = stage_id
+        conn.execute(
+            """
+            INSERT INTO task_logs
+            (id, task_id, project_id, stage_id, time, action, user, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                log_id,
+                task_id,
+                project_id,
+                stage_id,
+                str(log.get("time") or ""),
+                str(log.get("action") or ""),
+                str(log.get("user") or ""),
+                json_dumps(log),
+            ),
+        )
+
+
+def upsert_task_record(conn: sqlite3.Connection, task: dict, project_id: str, stage_id: str, *, create_if_missing: bool = False) -> None:
+    task_id = str(task.get("id") or "")
+    existing = conn.execute(
+        "SELECT id FROM project_tasks WHERE id = ? AND deleted_at IS NULL",
+        (task_id,),
+    ).fetchone()
+    if not existing and not create_if_missing:
+        raise KeyError("任务不存在")
+    sample_ids = [str(x) for x in (task.get("sampleIds") or [])]
+    task_json = copy.deepcopy(task)
+    task_json.pop("logs", None)
+    if existing:
+        conn.execute(
+            """
+            UPDATE project_tasks
+            SET project_id = ?, stage_id = ?, progress_id = ?, category = ?, test_item = ?,
+                sku_index = ?, status = ?, flow_status = ?, owner = ?, sample_ids_json = ?, data_json = ?,
+                updated_at = ?, completed_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (
+                project_id,
+                stage_id,
+                str(task.get("progressId") or ""),
+                str(task.get("category") or ""),
+                str(task.get("testItem") or ""),
+                to_int(task.get("skuIndex")),
+                str(task.get("status") or ""),
+                task_flow_status(task),
+                str(task.get("owner") or ""),
+                json_dumps(sample_ids),
+                json_dumps(task_json),
+                str(task.get("updatedAt") or now_iso()),
+                str(task.get("completedAt") or task.get("endDate") or ""),
+                task_id,
+            ),
+        )
+    else:
+        ts = now_iso()
+        conn.execute(
+            """
+            INSERT INTO project_tasks
+            (id, project_id, stage_id, progress_id, category, test_item, sku_index, status, flow_status, owner,
+             sample_ids_json, data_json, created_at, updated_at, completed_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                task_id,
+                project_id,
+                stage_id,
+                str(task.get("progressId") or ""),
+                str(task.get("category") or ""),
+                str(task.get("testItem") or ""),
+                to_int(task.get("skuIndex")),
+                str(task.get("status") or ""),
+                task_flow_status(task),
+                str(task.get("owner") or ""),
+                json_dumps(sample_ids),
+                json_dumps(task_json),
+                str(task.get("createdAt") or ts),
+                str(task.get("updatedAt") or ts),
+                str(task.get("completedAt") or task.get("endDate") or ""),
+            ),
+        )
+    write_task_logs(conn, task, project_id, stage_id)
+
+
+def delete_task_record(conn: sqlite3.Connection, task_id: str) -> None:
+    conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM project_tasks WHERE id = ?", (task_id,))
+
+
+def update_project_record(conn: sqlite3.Connection, project: dict, *, create_if_missing: bool = False, sort_order: int | None = None) -> None:
+    if not isinstance(project, dict) or not project:
+        return
+    project_id = str(project.get("id") or "")
+    if not project_id:
+        return
+    existing = conn.execute(
+        "SELECT id, sort_order FROM project_records WHERE id = ? AND deleted_at IS NULL",
+        (project_id,),
+    ).fetchone()
+    if not existing and not create_if_missing:
+        raise KeyError(f"项目不存在: {project_id}")
+    if sort_order is None:
+        if existing:
+            sort_order = int(existing["sort_order"] or 0)
+        else:
+            row = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_records").fetchone()
+            sort_order = int(row["next_order"] or 0)
+    project_json = copy.deepcopy(project)
+    project_json["id"] = project_id
+    project_json.pop("stages", None)
+    if existing:
+        conn.execute(
+            """
+            UPDATE project_records
+            SET name = ?, code = ?, owner = ?, sort_order = ?, data_json = ?, updated_at = ?, deleted_at = NULL
+            WHERE id = ?
+            """,
+            (
+                str(project.get("name") or "Untitled Project"),
+                str(project.get("code") or ""),
+                str(project.get("owner") or project.get("leader") or project.get("manager") or ""),
+                sort_order,
+                json_dumps(project_json),
+                str(project.get("updatedAt") or now_iso()),
+                project_id,
+            ),
+        )
+    else:
+        ts = now_iso()
+        conn.execute(
+            """
+            INSERT INTO project_records
+            (id, name, code, owner, sort_order, data_json, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                project_id,
+                str(project.get("name") or "Untitled Project"),
+                str(project.get("code") or ""),
+                str(project.get("owner") or project.get("leader") or project.get("manager") or ""),
+                sort_order,
+                json_dumps(project_json),
+                str(project.get("createdAt") or ts),
+                str(project.get("updatedAt") or ts),
+            ),
+        )
+
+
+def delete_project_record(conn: sqlite3.Connection, project_id: str) -> None:
+    row = conn.execute(
+        "SELECT id FROM project_records WHERE id = ? AND deleted_at IS NULL",
+        (project_id,),
+    ).fetchone()
+    if not row:
+        raise KeyError(f"项目不存在: {project_id}")
+    task_rows = conn.execute("SELECT id FROM project_tasks WHERE project_id = ?", (project_id,)).fetchall()
+    task_ids = [str(row["id"] or "") for row in task_rows if row["id"]]
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({placeholders})", task_ids)
+    conn.execute("DELETE FROM project_tasks WHERE project_id = ?", (project_id,))
+    conn.execute("DELETE FROM project_stages WHERE project_id = ?", (project_id,))
+    conn.execute("DELETE FROM project_records WHERE id = ?", (project_id,))
+
+
+def update_stage_record(conn: sqlite3.Connection, stage: dict, project_id: str, stage_id: str, *, create_if_missing: bool = False, sort_order: int | None = None) -> None:
+    if not isinstance(stage, dict) or not stage:
+        return
+    existing = conn.execute(
+        "SELECT id, sort_order FROM project_stages WHERE id = ? AND deleted_at IS NULL",
+        (stage_id,),
+    ).fetchone()
+    if not existing and not create_if_missing:
+        raise KeyError(f"阶段不存在: {stage_id}")
+    if sort_order is None:
+        if existing:
+            sort_order = int(existing["sort_order"] or 0)
+        else:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM project_stages WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+            sort_order = int(row["next_order"] or 0)
+    stage_json = copy.deepcopy(stage)
+    stage_json["id"] = stage_id
+    stage_json["projectId"] = project_id
+    stage_json.pop("tasks", None)
+    if existing:
+        conn.execute(
+            """
+            UPDATE project_stages
+            SET project_id = ?, name = ?, sort_order = ?, data_json = ?, updated_at = ?, deleted_at = NULL
+            WHERE id = ?
+            """,
+            (
+                project_id,
+                str(stage.get("name") or "Untitled Stage"),
+                sort_order,
+                json_dumps(stage_json),
+                str(stage.get("updatedAt") or now_iso()),
+                stage_id,
+            ),
+        )
+    else:
+        ts = now_iso()
+        conn.execute(
+            """
+            INSERT INTO project_stages
+            (id, project_id, name, sort_order, data_json, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                stage_id,
+                project_id,
+                str(stage.get("name") or "Untitled Stage"),
+                sort_order,
+                json_dumps(stage_json),
+                str(stage.get("createdAt") or ts),
+                str(stage.get("updatedAt") or ts),
+            ),
+        )
+
+
+def delete_stage_record(conn: sqlite3.Connection, stage_id: str) -> None:
+    row = conn.execute(
+        "SELECT id FROM project_stages WHERE id = ? AND deleted_at IS NULL",
+        (stage_id,),
+    ).fetchone()
+    if not row:
+        raise KeyError(f"阶段不存在: {stage_id}")
+    task_rows = conn.execute("SELECT id FROM project_tasks WHERE stage_id = ?", (stage_id,)).fetchall()
+    task_ids = [str(row["id"] or "") for row in task_rows if row["id"]]
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({placeholders})", task_ids)
+    conn.execute("DELETE FROM project_tasks WHERE stage_id = ?", (stage_id,))
+    conn.execute("DELETE FROM project_stages WHERE id = ?", (stage_id,))
+
+
+def update_sample_category_record(conn: sqlite3.Connection, category: dict, *, create_if_missing: bool = False, sort_order: int | None = None) -> None:
+    if not isinstance(category, dict) or not category:
+        return
+    category_id = str(category.get("id") or "")
+    if not category_id:
+        return
+    existing = conn.execute(
+        "SELECT id, sort_order FROM sample_categories WHERE id = ? AND deleted_at IS NULL",
+        (category_id,),
+    ).fetchone()
+    if not existing and not create_if_missing:
+        raise KeyError(f"样机池不存在: {category_id}")
+    if sort_order is None:
+        if existing:
+            sort_order = int(existing["sort_order"] or 0)
+        else:
+            row = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM sample_categories").fetchone()
+            sort_order = int(row["next_order"] or 0)
+    category_json = copy.deepcopy(category)
+    category_json["id"] = category_id
+    category_json.pop("samples", None)
+    if existing:
+        conn.execute(
+            """
+            UPDATE sample_categories
+            SET name = ?, description = ?, sort_order = ?, data_json = ?, updated_at = ?, deleted_at = NULL
+            WHERE id = ?
+            """,
+            (
+                str(category.get("name") or "未命名样机池"),
+                str(category.get("description") or ""),
+                sort_order,
+                json_dumps(category_json),
+                str(category.get("updatedAt") or now_iso()),
+                category_id,
+            ),
+        )
+    else:
+        ts = now_iso()
+        conn.execute(
+            """
+            INSERT INTO sample_categories
+            (id, name, description, sort_order, data_json, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                category_id,
+                str(category.get("name") or "未命名样机池"),
+                str(category.get("description") or ""),
+                sort_order,
+                json_dumps(category_json),
+                str(category.get("createdAt") or ts),
+                str(category.get("updatedAt") or ts),
+            ),
+        )
+
+
+def update_sample_record(conn: sqlite3.Connection, sample: dict, *, create_if_missing: bool = False) -> None:
+    sample_id = str(sample.get("id") or "")
+    if not sample_id:
+        return
+    row = conn.execute(
+        "SELECT category_id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+        (sample_id,),
+    ).fetchone()
+    if not row and not create_if_missing:
+        raise KeyError(f"样机不存在: {sample_id}")
+    category_id = str((row["category_id"] if row else None) or sample.get("categoryId") or "")
+    if not category_id:
+        raise KeyError(f"样机缺少 categoryId: {sample_id}")
+    sample_json = copy.deepcopy(sample)
+    sample_json["id"] = sample_id
+    sample_json["categoryId"] = category_id
+    sample_json.pop("photos", None)
+    sample_json.pop("logs", None)
+    for key in ("photosLoaded", "eventsLoaded", "photoCount", "effectiveStatus"):
+        sample_json.pop(key, None)
+    if row:
+        conn.execute(
+            """
+            UPDATE sample_records
+            SET category_id = ?, sample_no = ?, sn = ?, imei = ?, status = ?, has_problem = ?, effective_status = ?, location = ?,
+                owner = ?, borrower = ?, data_json = ?, updated_at = ?, deleted_at = NULL
+            WHERE id = ?
+            """,
+            (
+                category_id,
+                str(sample.get("sampleNo") or ""),
+                str(sample.get("sn") or ""),
+                str(sample.get("imei") or ""),
+                str(sample.get("status") or ""),
+                1 if sample_has_problem(sample) else 0,
+                sample_effective_status(sample),
+                str(sample.get("location") or ""),
+                str(sample.get("owner") or ""),
+                str(sample.get("borrower") or ""),
+                json_dumps(sample_json),
+                str(sample.get("updatedAt") or now_iso()),
+                sample_id,
+            ),
+        )
+    else:
+        ts = now_iso()
+        conn.execute(
+            """
+            INSERT INTO sample_records
+            (id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                sample_id,
+                category_id,
+                str(sample.get("sampleNo") or ""),
+                str(sample.get("sn") or ""),
+                str(sample.get("imei") or ""),
+                str(sample.get("status") or ""),
+                1 if sample_has_problem(sample) else 0,
+                sample_effective_status(sample),
+                str(sample.get("location") or ""),
+                str(sample.get("owner") or ""),
+                str(sample.get("borrower") or ""),
+                json_dumps(sample_json),
+                str(sample.get("createdAt") or ts),
+                str(sample.get("updatedAt") or ts),
+            ),
+        )
+
+
+def upsert_sample_events(conn: sqlite3.Connection, sample_events: list[dict]) -> None:
+    seen: set[str] = set()
+    for log in sample_events or []:
+        if not isinstance(log, dict):
+            continue
+        event_id = str(log.get("id") or f"event_{uuid.uuid4().hex}")
+        if event_id in seen:
+            continue
+        seen.add(event_id)
+        log["id"] = event_id
+        conn.execute(
+            """
+            INSERT INTO sample_events
+            (id, sample_id, time, event_type, project_id, stage_id, task_id, test_item, user, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                sample_id = excluded.sample_id,
+                time = excluded.time,
+                event_type = excluded.event_type,
+                project_id = excluded.project_id,
+                stage_id = excluded.stage_id,
+                task_id = excluded.task_id,
+                test_item = excluded.test_item,
+                user = excluded.user,
+                data_json = excluded.data_json
+            """,
+            (
+                event_id,
+                str(log.get("sampleId") or ""),
+                str(log.get("time") or ""),
+                str(log.get("source") or log.get("eventType") or "sample_log"),
+                str(log.get("projectId") or ""),
+                str(log.get("stageId") or ""),
+                str(log.get("taskId") or ""),
+                str(log.get("testItem") or ""),
+                str(log.get("user") or ""),
+                json_dumps(log),
+            ),
+        )
+
+
+def detect_task_mutation_occupancy_conflicts(
+    conn: sqlite3.Connection,
+    task_id: str,
+    task: dict,
+    project_id: str,
+    stage_id: str,
+) -> list[dict]:
+    if task_flow_status(task) in ("正常完成", "异常终止"):
+        return []
+    target_sample_ids = {str(x) for x in (task.get("sampleIds") or []) if str(x)}
+    if not target_sample_ids:
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, project_id, stage_id, test_item, status, sample_ids_json, data_json
+        FROM project_tasks
+        WHERE deleted_at IS NULL AND id != ?
+        """,
+        (task_id,),
+    ).fetchall()
+    conflicts_by_sample: dict[str, list[dict]] = {}
+    for row in rows:
+        other = json_obj(row["data_json"], {}) or {}
+        other["id"] = row["id"]
+        other["status"] = row["status"] or other.get("status") or ""
+        if task_flow_status(other) in ("正常完成", "异常终止"):
+            continue
+        sample_ids = json_obj(row["sample_ids_json"], [])
+        if not isinstance(sample_ids, list):
+            sample_ids = []
+        for sid in target_sample_ids.intersection({str(x) for x in sample_ids}):
+            conflicts_by_sample.setdefault(sid, []).append({
+                "taskId": str(row["id"] or ""),
+                "projectId": str(row["project_id"] or ""),
+                "stageId": str(row["stage_id"] or ""),
+                "testItem": str(row["test_item"] or other.get("testItem") or ""),
+                "status": str(row["status"] or other.get("status") or ""),
+            })
+    conflicts = []
+    for sid, tasks in conflicts_by_sample.items():
+        conflicts.append({
+            "sampleId": sid,
+            "tasks": [
+                {
+                    "taskId": task_id,
+                    "projectId": project_id,
+                    "stageId": stage_id,
+                    "testItem": str(task.get("testItem") or ""),
+                    "status": str(task.get("status") or ""),
+                },
+                *tasks,
+            ],
+        })
+    return conflicts
+
+
+def commit_task_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
+    task = payload.get("task")
+    if not isinstance(task, dict):
+        return False, {"status": 400, "error": "task 必须是 JSON 对象"}
+    task_id = str(payload.get("taskId") or task.get("id") or "")
+    project_id = str(payload.get("projectId") or task.get("projectId") or "")
+    stage_id = str(payload.get("stageId") or task.get("stageId") or "")
+    if not task_id or not project_id or not stage_id:
+        return False, {"status": 400, "error": "缺少 projectId/stageId/taskId"}
+    task["id"] = task_id
+    task["projectId"] = project_id
+    task["stageId"] = stage_id
+
+    with DB_LOCK:
+        with connect_db() as conn:
+            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+            current_revision = int(row["revision"]) if row else 1
+            is_delete = str(payload.get("deleteMode") or "") == "delete"
+            if not is_delete:
+                conflicts = detect_task_mutation_occupancy_conflicts(conn, task_id, task, project_id, stage_id)
+                if conflicts:
+                    return False, {
+                        "status": 409,
+                        "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
+                        "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
+                        "conflicts": conflicts,
+                        "server_revision": current_revision,
+                    }
+
+            update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
+            for sample in payload.get("samples") or []:
+                if isinstance(sample, dict):
+                    update_sample_record(conn, sample)
+            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+            if is_delete:
+                delete_task_record(conn, task_id)
+            else:
+                upsert_task_record(
+                    conn,
+                    task,
+                    project_id,
+                    stage_id,
+                    create_if_missing=bool(payload.get("createIfMissing")),
+                )
+
+            new_revision = current_revision + 1
+            updated_at = now_iso()
+            action = str(payload.get("action") or "task_mutation")
+            remark = str(payload.get("remark") or "任务增量变更")
+            user = str(payload.get("user") or "")
+            conn.execute(
+                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+                (new_revision, updated_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log
+                (time, user, action, remark, revision_before, revision_after, client_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+            )
+            conn.commit()
+
+    if _should_backup(action, new_revision):
+        try:
+            with DB_LOCK:
+                with connect_db() as conn:
+                    data, _, _ = compose_state(conn, include_sample_photos=False, include_sample_logs=False)
+            write_backup(data, new_revision)
+        except Exception as e:
+            print(f"[WARN] 写入任务增量备份失败：{e}")
+
+    return True, {"revision": new_revision, "updated_at": updated_at}
+
+
+def commit_task_batch_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return False, {"status": 400, "error": "tasks 必须是非空数组"}
+    project_id = str(payload.get("projectId") or "")
+    stage_id = str(payload.get("stageId") or "")
+    if not project_id or not stage_id:
+        return False, {"status": 400, "error": "缺少 projectId/stageId"}
+
+    normalized_tasks: list[dict] = []
+    seen_task_ids: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            return False, {"status": 400, "error": "tasks 中每一项都必须是 JSON 对象"}
+        task_id = str(task.get("id") or "")
+        if not task_id:
+            return False, {"status": 400, "error": "任务缺少 id"}
+        if task_id in seen_task_ids:
+            return False, {"status": 400, "error": f"任务 id 重复: {task_id}"}
+        seen_task_ids.add(task_id)
+        task["id"] = task_id
+        task["projectId"] = project_id
+        task["stageId"] = stage_id
+        normalized_tasks.append(task)
+
+    with DB_LOCK:
+        with connect_db() as conn:
+            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+            current_revision = int(row["revision"]) if row else 1
+            stage_row = conn.execute(
+                """
+                SELECT id
+                FROM project_stages
+                WHERE id = ? AND project_id = ? AND deleted_at IS NULL
+                """,
+                (stage_id, project_id),
+            ).fetchone()
+            if not stage_row:
+                return False, {"status": 404, "error": f"阶段不存在: {stage_id}"}
+
+            update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
+            create_if_missing = bool(payload.get("createIfMissing"))
+            for task in normalized_tasks:
+                upsert_task_record(
+                    conn,
+                    task,
+                    project_id,
+                    stage_id,
+                    create_if_missing=create_if_missing,
+                )
+
+            new_revision = current_revision + 1
+            updated_at = now_iso()
+            action = str(payload.get("action") or "task_batch_mutation")
+            remark = str(payload.get("remark") or f"批量任务增量变更：{len(normalized_tasks)} 个")
+            user = str(payload.get("user") or "")
+            conn.execute(
+                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+                (new_revision, updated_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log
+                (time, user, action, remark, revision_before, revision_after, client_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+            )
+            conn.commit()
+
+    if _should_backup(action, new_revision):
+        try:
+            with DB_LOCK:
+                with connect_db() as conn:
+                    data, _, _ = compose_state(conn, include_sample_photos=False, include_sample_logs=False)
+            write_backup(data, new_revision)
+        except Exception as e:
+            print(f"[WARN] 写入批量任务增量备份失败：{e}")
+
+    return True, {"revision": new_revision, "updated_at": updated_at, "count": len(normalized_tasks)}
+
+
+def commit_sample_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
+    sample_id = str(payload.get("sampleId") or (payload.get("sample") or {}).get("id") or "")
+    if not sample_id:
+        return False, {"status": 400, "error": "缺少 sampleId"}
+    delete_sample = bool(payload.get("deleteSample"))
+
+    with DB_LOCK:
+        with connect_db() as conn:
+            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+            current_revision = int(row["revision"]) if row else 1
+
+            for item in payload.get("taskMutations") or []:
+                if not isinstance(item, dict):
+                    continue
+                task = item.get("task")
+                if not isinstance(task, dict):
+                    continue
+                project_id = str(item.get("projectId") or task.get("projectId") or "")
+                stage_id = str(item.get("stageId") or task.get("stageId") or "")
+                task_id = str(item.get("taskId") or task.get("id") or "")
+                if not project_id or not stage_id or not task_id:
+                    continue
+                update_stage_record(conn, item.get("stage") or {}, project_id, stage_id)
+                upsert_task_record(
+                    conn,
+                    task,
+                    project_id,
+                    stage_id,
+                    create_if_missing=bool(item.get("createIfMissing")),
+                )
+
+            for sample in payload.get("samples") or []:
+                if isinstance(sample, dict) and str(sample.get("id") or "") != sample_id:
+                    update_sample_record(conn, sample)
+
+            sample = payload.get("sample")
+            if isinstance(sample, dict) and not delete_sample:
+                update_sample_record(conn, sample)
+
+            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+
+            if delete_sample:
+                cleanup_sample_asset_files(conn, [sample_id])
+                conn.execute("DELETE FROM sample_assets WHERE sample_id = ?", (sample_id,))
+                conn.execute("DELETE FROM sample_events WHERE sample_id = ?", (sample_id,))
+                conn.execute("DELETE FROM sample_records WHERE id = ?", (sample_id,))
+
+            new_revision = current_revision + 1
+            updated_at = now_iso()
+            action = str(payload.get("action") or ("destroy_sample" if delete_sample else "sample_mutation"))
+            remark = str(payload.get("remark") or ("样机档案销毁" if delete_sample else "样机增量变更"))
+            user = str(payload.get("user") or "")
+            conn.execute(
+                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+                (new_revision, updated_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log
+                (time, user, action, remark, revision_before, revision_after, client_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+            )
+            conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at}
+
+
+def commit_project_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
+    project = payload.get("project")
+    project_id = str(payload.get("projectId") or (project or {}).get("id") or "")
+    if not project_id:
+        return False, {"status": 400, "error": "缺少 projectId"}
+    delete_project = bool(payload.get("deleteProject"))
+
+    with DB_LOCK:
+        with connect_db() as conn:
+            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+            current_revision = int(row["revision"]) if row else 1
+
+            for sample in payload.get("samples") or []:
+                if isinstance(sample, dict):
+                    update_sample_record(conn, sample)
+            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+
+            if delete_project:
+                delete_project_record(conn, project_id)
+            else:
+                if not isinstance(project, dict):
+                    return False, {"status": 400, "error": "project 必须是 JSON 对象"}
+                project["id"] = project_id
+                update_project_record(
+                    conn,
+                    project,
+                    create_if_missing=bool(payload.get("createIfMissing")),
+                    sort_order=to_int(payload.get("sortOrder")) if payload.get("sortOrder") is not None else None,
+                )
+
+            new_revision = current_revision + 1
+            updated_at = now_iso()
+            action = str(payload.get("action") or ("delete_project" if delete_project else "project_mutation"))
+            remark = str(payload.get("remark") or ("删除项目" if delete_project else "项目增量变更"))
+            user = str(payload.get("user") or "")
+            conn.execute(
+                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+                (new_revision, updated_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log
+                (time, user, action, remark, revision_before, revision_after, client_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+            )
+            conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at}
+
+
+def commit_stage_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
+    stage = payload.get("stage")
+    stage_id = str(payload.get("stageId") or (stage or {}).get("id") or "")
+    project_id = str(payload.get("projectId") or (stage or {}).get("projectId") or "")
+    if not stage_id or not project_id:
+        return False, {"status": 400, "error": "缺少 projectId/stageId"}
+    delete_stage = bool(payload.get("deleteStage"))
+
+    with DB_LOCK:
+        with connect_db() as conn:
+            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+            current_revision = int(row["revision"]) if row else 1
+
+            project = payload.get("project")
+            if isinstance(project, dict):
+                project["id"] = project_id
+                update_project_record(conn, project)
+
+            for sample in payload.get("samples") or []:
+                if isinstance(sample, dict):
+                    update_sample_record(conn, sample)
+            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+
+            if delete_stage:
+                delete_stage_record(conn, stage_id)
+                for idx, sibling in enumerate(payload.get("stages") or []):
+                    if isinstance(sibling, dict) and str(sibling.get("id") or "") != stage_id:
+                        update_stage_record(conn, sibling, project_id, str(sibling.get("id") or ""), sort_order=idx)
+            else:
+                if not isinstance(stage, dict):
+                    return False, {"status": 400, "error": "stage 必须是 JSON 对象"}
+                stage["id"] = stage_id
+                stage["projectId"] = project_id
+                sibling_ids = [str(s.get("id") or "") for s in (payload.get("stages") or []) if isinstance(s, dict)]
+                sort_order = sibling_ids.index(stage_id) if stage_id in sibling_ids else None
+                update_stage_record(
+                    conn,
+                    stage,
+                    project_id,
+                    stage_id,
+                    create_if_missing=bool(payload.get("createIfMissing")),
+                    sort_order=sort_order,
+                )
+                for idx, sibling in enumerate(payload.get("stages") or []):
+                    if isinstance(sibling, dict) and str(sibling.get("id") or "") != stage_id:
+                        sid = str(sibling.get("id") or "")
+                        if sid:
+                            update_stage_record(conn, sibling, project_id, sid, sort_order=idx)
+
+            new_revision = current_revision + 1
+            updated_at = now_iso()
+            action = str(payload.get("action") or ("delete_stage" if delete_stage else "stage_mutation"))
+            remark = str(payload.get("remark") or ("删除阶段" if delete_stage else "阶段增量变更"))
+            user = str(payload.get("user") or "")
+            conn.execute(
+                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+                (new_revision, updated_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log
+                (time, user, action, remark, revision_before, revision_after, client_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+            )
+            conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at}
+
+
+def delete_sample_category_record(conn: sqlite3.Connection, category_id: str) -> None:
+    row = conn.execute(
+        "SELECT id FROM sample_categories WHERE id = ? AND deleted_at IS NULL",
+        (category_id,),
+    ).fetchone()
+    if not row:
+        raise KeyError(f"样机池不存在: {category_id}")
+    sample_rows = conn.execute(
+        "SELECT id FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
+        (category_id,),
+    ).fetchall()
+    sample_ids = [str(row["id"] or "") for row in sample_rows if row["id"]]
+    cleanup_sample_asset_files(conn, sample_ids)
+    if sample_ids:
+        placeholders = ",".join("?" for _ in sample_ids)
+        conn.execute(f"DELETE FROM sample_assets WHERE sample_id IN ({placeholders})", sample_ids)
+        conn.execute(f"DELETE FROM sample_events WHERE sample_id IN ({placeholders})", sample_ids)
+        conn.execute(f"DELETE FROM sample_records WHERE id IN ({placeholders})", sample_ids)
+    conn.execute("DELETE FROM sample_categories WHERE id = ?", (category_id,))
+
+
+def commit_sample_category_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
+    category_id = str(payload.get("categoryId") or (payload.get("category") or {}).get("id") or "")
+    if not category_id:
+        return False, {"status": 400, "error": "缺少 categoryId"}
+    delete_category = bool(payload.get("deleteCategory"))
+
+    with DB_LOCK:
+        with connect_db() as conn:
+            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+            current_revision = int(row["revision"]) if row else 1
+
+            if not delete_category:
+                category = payload.get("category")
+                if not isinstance(category, dict):
+                    return False, {"status": 400, "error": "category 必须是 JSON 对象"}
+                category["id"] = category_id
+                update_sample_category_record(
+                    conn,
+                    category,
+                    create_if_missing=bool(payload.get("createIfMissing")),
+                    sort_order=to_int(payload.get("sortOrder")) if payload.get("sortOrder") is not None else None,
+                )
+
+            for item in payload.get("taskMutations") or []:
+                if not isinstance(item, dict):
+                    continue
+                task = item.get("task")
+                if not isinstance(task, dict):
+                    continue
+                project_id = str(item.get("projectId") or task.get("projectId") or "")
+                stage_id = str(item.get("stageId") or task.get("stageId") or "")
+                task_id = str(item.get("taskId") or task.get("id") or "")
+                if not project_id or not stage_id or not task_id:
+                    continue
+                update_stage_record(conn, item.get("stage") or {}, project_id, stage_id)
+                upsert_task_record(
+                    conn,
+                    task,
+                    project_id,
+                    stage_id,
+                    create_if_missing=bool(item.get("createIfMissing")),
+                )
+
+            for sample in payload.get("samples") or []:
+                if isinstance(sample, dict):
+                    update_sample_record(
+                        conn,
+                        sample,
+                        create_if_missing=bool(payload.get("createSamples") or payload.get("createIfMissing")),
+                    )
+            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+
+            if delete_category:
+                delete_sample_category_record(conn, category_id)
+
+            new_revision = current_revision + 1
+            updated_at = now_iso()
+            action = str(payload.get("action") or ("destroy_sample_category" if delete_category else "sample_category_mutation"))
+            remark = str(payload.get("remark") or ("样机池档案销毁" if delete_category else "样机池增量变更"))
+            user = str(payload.get("user") or "")
+            conn.execute(
+                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+                (new_revision, updated_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log
+                (time, user, action, remark, revision_before, revision_after, client_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+            )
+            conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = SERVER_VERSION
 
@@ -2972,6 +5082,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, target: Path, content_type: str, *, cache: str = "public, max-age=86400, must-revalidate") -> None:
+        stat = target.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", cache)
+            self.end_headers()
+            return
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("ETag", etag)
+        self.end_headers()
+        self.wfile.write(data)
+
     def _read_body(self, max_bytes: int = MAX_UPLOAD_BYTES) -> bytes:
         length = int(self.headers.get("Content-Length", "0"))
         if length > max_bytes:
@@ -2984,6 +5112,72 @@ class Handler(BaseHTTPRequestHandler):
             sample_id = unquote(parts[2])
             photo_id = unquote(parts[4]) if len(parts) >= 5 else None
             return sample_id, photo_id
+        return None
+
+    def _sample_events_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "samples" and parts[3] == "events":
+            return unquote(parts[2])
+        return None
+
+    def _stage_tasks_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "stages" and parts[3] == "tasks":
+            return unquote(parts[2])
+        return None
+
+    def _stage_tasks_batch_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 5 and parts[0] == "api" and parts[1] == "stages" and parts[3] == "tasks" and parts[4] == "batch":
+            return unquote(parts[2])
+        return None
+
+    def _project_detail_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "projects" and parts[2] != "summary":
+            return unquote(parts[2])
+        return None
+
+    def _project_mutation_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "projects" and parts[3] == "mutation":
+            return unquote(parts[2])
+        return None
+
+    def _stage_mutation_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "stages" and parts[3] == "mutation":
+            return unquote(parts[2])
+        return None
+
+    def _sample_category_samples_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "sample-categories" and parts[3] == "samples":
+            return unquote(parts[2])
+        return None
+
+    def _sample_category_detail_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "sample-categories":
+            return unquote(parts[2])
+        return None
+
+    def _task_mutation_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "tasks" and parts[3] == "mutation":
+            return unquote(parts[2])
+        return None
+
+    def _sample_mutation_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "samples" and parts[3] == "mutation":
+            return unquote(parts[2])
+        return None
+
+    def _sample_category_mutation_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "sample-categories" and parts[3] == "mutation":
+            return unquote(parts[2])
         return None
 
     # ---- 静态文件白名单 ----
@@ -3012,6 +5206,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
+        query = parse_qs(parsed.query, keep_blank_values=True)
 
         if path == "/api/health":
             self._send_json({"ok": True, "version": APP_VERSION, "time": now_iso(), "data_dir": str(DATA_DIR), "deploymentId": load_deployment_id()})
@@ -3034,13 +5229,110 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/state":
             try:
-                data, revision, updated_at = get_state()
+                data, revision, updated_at = get_state(compact=True)
                 self._send_json({"ok": True, "revision": revision, "updated_at": updated_at, "data": data})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
+        if path == "/api/bootstrap":
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        data, revision, updated_at = compose_bootstrap_state(conn)
+                self._send_json({"ok": True, "revision": revision, "updated_at": updated_at, "data": data, "partial": True})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/projects/summary":
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        projects = list_project_summary(conn)
+                self._send_json({"ok": True, "projects": projects, "count": len(projects)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        project_detail_id = self._project_detail_route(path)
+        if project_detail_id:
+            try:
+                include_tasks = first_query_value(query, "includeTasks", "") in ("1", "true", "yes")
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        project = load_project_detail(conn, project_detail_id, include_tasks=include_tasks)
+                if not project:
+                    self._send_json({"ok": False, "error": "项目不存在"}, 404)
+                    return
+                self._send_json({"ok": True, "project": project, "includeTasks": include_tasks})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/sample-categories":
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        categories = list_sample_categories_summary(conn)
+                self._send_json({"ok": True, "categories": categories, "count": len(categories)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        sample_category_detail_id = self._sample_category_detail_route(path)
+        if sample_category_detail_id:
+            try:
+                include_photos = first_query_value(query, "includePhotos", "") in ("1", "true", "yes")
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        category = load_sample_category_detail(conn, sample_category_detail_id, include_photos=include_photos)
+                if not category:
+                    self._send_json({"ok": False, "error": "样机池不存在"}, 404)
+                    return
+                self._send_json({"ok": True, "category": category, "includePhotos": include_photos})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        stage_tasks_id = self._stage_tasks_route(path)
+        if stage_tasks_id:
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        result = list_stage_tasks_page(conn, stage_tasks_id, query)
+                self._send_json({"ok": True, **result})
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, 404)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        sample_category_id = self._sample_category_samples_route(path)
+        if sample_category_id:
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        result = list_samples_page(conn, sample_category_id, query)
+                self._send_json({"ok": True, **result})
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, 404)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         photo_route = self._sample_photo_route(path)
+        if photo_route and photo_route[1] is None:
+            sample_id, _ = photo_route
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        photos = load_sample_photos(conn, sample_id)
+                self._send_json({"ok": True, "sampleId": sample_id, "photos": photos, "photoCount": len(photos)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         if photo_route and photo_route[1]:
             sample_id, photo_id = photo_route
             try:
@@ -3066,11 +5358,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
+        event_sample_id = self._sample_events_route(path)
+        if event_sample_id:
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        logs = load_sample_events(conn, event_sample_id)
+                self._send_json({"ok": True, "sampleId": event_sample_id, "logs": logs, "count": len(logs)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         if path in ("/", "/index.html"):
             if not INDEX_PATH.exists():
                 self._send_json({"ok": False, "error": "index.html 不存在"}, 404)
                 return
-            self._send_bytes(INDEX_PATH.read_bytes(), "text/html; charset=utf-8")
+            self._send_file(INDEX_PATH, "text/html; charset=utf-8", cache="no-cache")
             return
 
         # 静态文件服务 — 白名单模式，禁止访问敏感路径
@@ -3086,7 +5389,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if target.is_file():
             content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            self._send_bytes(target.read_bytes(), content_type)
+            self._send_file(target, content_type)
             return
 
         self._send_json({"ok": False, "error": "Not Found"}, 404)
@@ -3220,6 +5523,108 @@ class Handler(BaseHTTPRequestHandler):
                     sample["updatedAt"] = now_iso()
                     result = commit_data_mutation(conn, data, "delete_sample_photo", "删除样机外观照片", self.client_address[0])
                     self._send_json({"ok": True, **result, "photos": sample["photos"]})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)}, 500)
+
+    def do_PATCH(self) -> None:
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        photo_route = self._sample_photo_route(path)
+        if photo_route and photo_route[1]:
+            sample_id, photo_id = photo_route
+            try:
+                payload = json.loads(self._read_body(max_bytes=MAX_UPLOAD_BYTES).decode("utf-8") or "{}")
+                name = str(payload.get("name") or "").strip()
+                if not name:
+                    self._send_json({"ok": False, "error": "照片名称不能为空"}, 400)
+                    return
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        row = conn.execute(
+                            """
+                            SELECT id
+                            FROM sample_assets
+                            WHERE sample_id = ? AND id = ? AND kind = 'photo' AND deleted_at IS NULL
+                            """,
+                            (sample_id, photo_id),
+                        ).fetchone()
+                        if not row:
+                            self._send_json({"ok": False, "error": "照片不存在"}, 404)
+                            return
+                        ts = now_iso()
+                        conn.execute(
+                            "UPDATE sample_assets SET original_name = ? WHERE sample_id = ? AND id = ? AND kind = 'photo'",
+                            (name, sample_id, photo_id),
+                        )
+                        sample_row = conn.execute("SELECT data_json FROM sample_records WHERE id = ?", (sample_id,)).fetchone()
+                        if sample_row:
+                            sample = json_obj(sample_row["data_json"], {}) or {}
+                            sample["updatedAt"] = ts
+                            conn.execute(
+                                "UPDATE sample_records SET data_json = ?, updated_at = ? WHERE id = ?",
+                                (json_dumps(sample), ts, sample_id),
+                            )
+                        state_row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+                        current_revision = int(state_row["revision"] or 1) if state_row else 1
+                        new_revision = current_revision + 1
+                        conn.execute("UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1", (new_revision, ts))
+                        conn.execute(
+                            """
+                            INSERT INTO change_log (time, user, action, remark, base_revision, new_revision, client_ip)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (ts, str(payload.get("user") or "管理员"), "rename_sample_photo", f"重命名样机照片：{name}", current_revision, new_revision, self.client_address[0]),
+                        )
+                        photos = load_sample_photos(conn, sample_id)
+                        conn.commit()
+                self._send_json({"ok": True, "revision": new_revision, "updated_at": ts, "sampleId": sample_id, "photos": photos})
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体不是有效 JSON"}, 400)
+            except Exception as e:
+                traceback.print_exc()
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        project_id = self._project_mutation_route(path)
+        stage_mutation_id = self._stage_mutation_route(path)
+        stage_tasks_batch_id = self._stage_tasks_batch_route(path)
+        task_id = self._task_mutation_route(path)
+        sample_id = self._sample_mutation_route(path)
+        category_id = self._sample_category_mutation_route(path)
+        if not project_id and not stage_mutation_id and not stage_tasks_batch_id and not task_id and not sample_id and not category_id:
+            self._send_json({"ok": False, "error": "Not Found"}, 404)
+            return
+
+        try:
+            payload = json.loads(self._read_body(max_bytes=MAX_UPLOAD_BYTES).decode("utf-8"))
+            if project_id:
+                payload["projectId"] = project_id
+                ok, result = commit_project_mutation(payload, self.client_address[0])
+            elif stage_mutation_id:
+                payload["stageId"] = stage_mutation_id
+                ok, result = commit_stage_mutation(payload, self.client_address[0])
+            elif stage_tasks_batch_id:
+                payload["stageId"] = stage_tasks_batch_id
+                ok, result = commit_task_batch_mutation(payload, self.client_address[0])
+            elif task_id:
+                payload["taskId"] = task_id
+                ok, result = commit_task_mutation(payload, self.client_address[0])
+            elif sample_id:
+                payload["sampleId"] = sample_id
+                ok, result = commit_sample_mutation(payload, self.client_address[0])
+            else:
+                payload["categoryId"] = category_id
+                ok, result = commit_sample_category_mutation(payload, self.client_address[0])
+            if not ok:
+                self._send_json({"ok": False, **result}, int(result.get("status", 400)))
+                return
+            self._send_json({"ok": True, **result})
+        except json.JSONDecodeError:
+            self._send_json({"ok": False, "error": "请求体不是有效 JSON"}, 400)
+        except KeyError as e:
+            self._send_json({"ok": False, "error": str(e)}, 404)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, 400)
         except Exception as e:
             self._send_json({"ok": False, "error": str(e)}, 500)
 

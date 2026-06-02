@@ -44,6 +44,93 @@ Object.assign(app, {
     };
   },
 
+  boundedListPageSize(value, fallback = 100) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(500, Math.max(20, n));
+  },
+
+  taskFlowPagerHtml(page, totalPages, total, pageSize) {
+    const start = total ? (page - 1) * pageSize + 1 : 0;
+    const end = total ? Math.min(total, page * pageSize) : 0;
+    const pageBtn = (label, target, disabled = false) => `
+      <button type="button" class="btn btn-sm btn-outline" ${disabled ? "disabled" : `onclick="app.setTaskFlowPage(${target})"`}>${label}</button>`;
+    return `
+      <div class="list-pager task-flow-pager">
+        <span class="path">显示 ${start}-${end} / ${total} 条</span>
+        <div class="list-pager-controls">
+          ${pageBtn("上一页", page - 1, page <= 1)}
+          <span class="path">第 ${page} / ${totalPages} 页</span>
+          ${pageBtn("下一页", page + 1, page >= totalPages)}
+          <select onchange="app.setTaskFlowPageSize(this.value)">
+            ${[50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
+          </select>
+        </div>
+      </div>`;
+  },
+
+  setTaskFlowPage(page) {
+    this.view.taskFlowPage = Math.max(1, Number.parseInt(page, 10) || 1);
+    this.renderPreserveScroll();
+  },
+
+  setTaskFlowPageSize(size) {
+    this.view.taskFlowPageSize = this.boundedListPageSize(size, 100);
+    this.view.taskFlowPage = 1;
+    this.renderPreserveScroll();
+  },
+
+  taskFlowQueryParams(stage) {
+    const f = this.view.taskFlowFilters || {};
+    const params = {
+      page: Math.max(1, Number.parseInt(this.view.taskFlowPage, 10) || 1),
+      pageSize: this.boundedListPageSize(this.view.taskFlowPageSize, 100)
+    };
+    ["sku", "flowStatus", "ownerName", "categoryKeyword", "caseKeyword", "dtsKeyword", "resultKeyword"].forEach(key => {
+      const value = String(f[key] || "").trim();
+      if (value) params[key] = value;
+    });
+    params.stageId = stage?.id || "";
+    return params;
+  },
+
+  taskFlowCacheKey(stage, params) {
+    return JSON.stringify({ stageId: stage?.id || "", ...params });
+  },
+
+  loadTaskFlowPage(project, stage, key, params) {
+    if (!stage?.id || this._taskFlowLoadingKey === key) return;
+    this._taskFlowLoadingKey = key;
+    this.fetchStageTasksPage(stage.id, params)
+      .then(result => {
+        this._taskFlowLoadingKey = "";
+        const rows = result.rows || [];
+        const byId = new Map((stage.tasks || []).map(task => [String(task.id || ""), task]));
+        rows.forEach(row => {
+          const task = row.task;
+          if (!task?.id) return;
+          const existing = byId.get(String(task.id));
+          if (existing) Object.assign(existing, task);
+          else {
+            if (!Array.isArray(stage.tasks)) stage.tasks = [];
+            stage.tasks.push(task);
+          }
+        });
+        this._taskFlowPageCache = { key, stageId: stage.id, ...result, rows };
+        if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
+          this.renderPreserveScroll();
+        }
+      })
+      .catch(e => {
+        this._taskFlowLoadingKey = "";
+        this._taskFlowPageCache = { key, stageId: stage.id, error: e.message, rows: [] };
+        console.error("任务分页加载失败：", e);
+        if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
+          this.renderPreserveScroll();
+        }
+      });
+  },
+
   workspaceTaskFlowHtml(project, stage) {
     const f = this.view.taskFlowFilters || {};
     const allRows = this.taskRowsForStage(stage);
@@ -54,7 +141,7 @@ Object.assign(app, {
     const resultKw = String(f.resultKeyword || "").trim().toLowerCase();
     const filtered = allRows.filter(row => {
       const i = this.taskInfoForRow(stage, row);
-      if (!match(i.sku, f.sku)) return false;
+      if (f.sku && String(i.skuIndex || "") !== String(f.sku)) return false;
       if (catKw && !i.category.toLowerCase().includes(catKw)) return false;
       if (caseKw && !i.testItem.toLowerCase().includes(caseKw)) return false;
       if (!match(i.ownerName, f.ownerName)) return false;
@@ -69,19 +156,38 @@ Object.assign(app, {
       }
       return true;
     });
-    const rows = filtered;
+    const params = this.taskFlowQueryParams(stage);
+    const cacheKey = this.taskFlowCacheKey(stage, params);
+    const cached = this._taskFlowPageCache?.key === cacheKey ? this._taskFlowPageCache : null;
+    if (!cached) this.loadTaskFlowPage(project, stage, cacheKey, params);
+    const pageSize = params.pageSize;
+    const total = cached?.total ?? filtered.length;
+    const totalPages = cached?.totalPages ?? Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(Math.max(1, cached?.page || params.page), totalPages);
+    this.view.taskFlowPage = page;
+    const rows = cached?.rows || [];
+    const pagerHtml = this.taskFlowPagerHtml(page, totalPages, total, pageSize);
 
-    const pendingTasks = allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "待下发").length;
-    const runningTasks = allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "进行中").length;
-    const blockedTasks = allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "阻塞中").length;
-    const abnormalTasks = allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "异常终止").length;
-    const finishedTasks = allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "正常完成").length;
+    const statusCounts = cached?.stats?.statusCounts || {};
+    const pendingTasks = cached ? (statusCounts["待下发"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "待下发").length;
+    const runningTasks = cached ? (statusCounts["进行中"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "进行中").length;
+    const blockedTasks = cached ? (statusCounts["阻塞中"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "阻塞中").length;
+    const abnormalTasks = cached ? (statusCounts["异常终止"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "异常终止").length;
+    const finishedTasks = cached ? (statusCounts["正常完成"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "正常完成").length;
+    const totalTasks = cached?.stats?.totalInStage ?? allRows.length;
 
     const infos = allRows.map(row => this.taskInfoForRow(stage, row));
     const optHtml = (values, cur) => {
       const arr = [...new Set((values || []).map(v => String(v ?? "").trim()).filter(v => v))].sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
       return `<option value="">全部</option>` + arr.map(v => `<option value="${Utils.esc(v)}" ${String(cur || "") === v ? 'selected' : ''}>${Utils.esc(v)}</option>`).join("");
     };
+    const skuOptions = `<option value="">全部</option>` + (stage.skuNames || []).map((name, idx) => {
+      const value = String(idx + 1);
+      return `<option value="${value}" ${String(f.sku || "") === value ? "selected" : ""}>${Utils.esc(name || `SKU${idx + 1}`)}</option>`;
+    }).join("");
+    const loadingRow = !cached
+      ? `<tr><td colspan="9" class="empty">正在加载服务器分页数据...</td></tr>`
+      : (cached.error ? `<tr><td colspan="9" class="empty">任务分页加载失败：${Utils.esc(cached.error)}</td></tr>` : "");
 
     return `
       <div class="section-head">
@@ -93,7 +199,7 @@ Object.assign(app, {
       </div>
       <div class="section-body">
         <div class="task-flow-summary">
-          <div class="task-flow-stat stat-total"><b>${allRows.length}</b><span>总任务数</span></div>
+          <div class="task-flow-stat stat-total"><b>${totalTasks}</b><span>总任务数</span></div>
           <div class="task-flow-stat stat-pending"><b>${pendingTasks}</b><span>待下发</span></div>
           <div class="task-flow-stat stat-running"><b>${runningTasks}</b><span>进行中</span></div>
           <div class="task-flow-stat stat-blocked"><b>${blockedTasks}</b><span>阻塞中</span></div>
@@ -103,7 +209,7 @@ Object.assign(app, {
         <div class="task-filter-bar">
           <div class="task-filter-item">
             <label>方案(SKU)</label>
-            <select onchange="app.setTaskFlowFilter('sku',this.value)">${optHtml(infos.map(i => i.sku), f.sku)}</select>
+            <select onchange="app.setTaskFlowFilter('sku',this.value)">${skuOptions}</select>
           </div>
           <div class="task-filter-item">
             <label>类别搜索</label>
@@ -133,11 +239,12 @@ Object.assign(app, {
             <button class="btn btn-sm btn-outline" onclick="app.clearTaskFlowFilters()">清空筛选</button>
           </div>
         </div>
+        ${pagerHtml}
         <div class="table-wrap task-flow-table"><table>
           <thead>
 <tr><th style="font-weight:700">方案(SKU)</th><th style="font-weight:700">类别/用例</th><th style="font-weight:700">执行人</th><th style="font-weight:700">启动/完成时间</th><th style="font-weight:700">样机</th><th style="font-weight:700">测试结果</th><th style="font-weight:700">问题单</th><th style="font-weight:700">状态</th><th style="font-weight:700">操作</th></tr>
           </thead>
-          <tbody>${rows.map(row => {
+          <tbody>${loadingRow || rows.map(row => {
       const t = row.task;
       const progressId = row.progress?.id || t?.progressId || "";
       const taskId = t?.id || "";
@@ -176,6 +283,7 @@ Object.assign(app, {
     }).join("") || `<tr><td colspan="9" class="empty">暂无任务。请点击"新增任务"，从阶段配置的测试池中选择测试项。</td></tr>`}
       ${rows.length ? `<tr class="task-flow-buffer-row" aria-hidden="true"><td colspan="9"></td></tr>` : ""}</tbody>
         </table></div>
+        ${filtered.length > pageSize ? pagerHtml : ""}
         <div class="task-add-footer">
           <button class="task-add-main" onclick="app.openAddTasksFromPoolModal()">
             <span class="row-action-btn row-add-btn"></span>
@@ -257,7 +365,7 @@ Object.assign(app, {
         input?.focus();
         return true;
       }
-      onConfirm?.();
+      return onConfirm?.();
     }, "确认删除", { okClass: "btn btn-danger" });
     document.getElementById("deleteKeywordInput")?.focus();
   },

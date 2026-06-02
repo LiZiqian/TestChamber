@@ -27,11 +27,16 @@ Object.assign(app, {
       <button type="button" class="icon-btn" onclick="app.removeInlineSku(this)">−</button>
     </div>`;
   },
+  persistCurrentStageMutation(action = "update_stage_inline", remark = "阶段内联编辑", { render = false } = {}) {
+    const p = this.currentProject();
+    const s = this.currentStage();
+    if (!p || !s) return Promise.resolve(false);
+    return this.commitStageMutation(p, s, { action, remark, user: "管理员", render });
+  },
   updateInlineStageName(value) {
     const s = this.currentStage();
     if (!s) return;
     s.name = String(value || "").trim();
-    this.scheduleSave();
     this.renderHeader();
   },
   normalizeInlineStageName(input) {
@@ -43,7 +48,7 @@ Object.assign(app, {
       return;
     }
     s.name = name;
-    this.save();
+    this.persistCurrentStageMutation("update_stage_name_inline", "内联编辑阶段名称");
     this.renderHeader();
   },
   readInlineSkuInputs() {
@@ -57,7 +62,6 @@ Object.assign(app, {
     const names = this.readInlineSkuInputs();
     if (!names.length) return;
     s.skuNames = names;
-    this.scheduleSave();
   },
   normalizeInlineSkus() {
     const s = this.currentStage();
@@ -69,7 +73,7 @@ Object.assign(app, {
       return;
     }
     s.skuNames = names;
-    this.save();
+    this.persistCurrentStageMutation("update_stage_skus_inline", "内联编辑阶段 SKU", { render: true });
     this.render();
   },
   addInlineSku(value = "") {
@@ -86,7 +90,7 @@ Object.assign(app, {
     }
     if (!Array.isArray(s.skuNames) || !s.skuNames.length) s.skuNames = [];
     if (value) s.skuNames.push(value);
-    this.save();
+    this.persistCurrentStageMutation("update_stage_skus_inline", "内联新增阶段 SKU", { render: true });
     this.render();
   },
   removeInlineSku(btn) {
@@ -99,7 +103,7 @@ Object.assign(app, {
     row?.remove();
     const names = this.readInlineSkuInputs();
     s.skuNames = names.length ? names : (s.skuNames.length ? s.skuNames : ["SKU1"]);
-    this.save();
+    this.persistCurrentStageMutation("update_stage_skus_inline", "内联删除阶段 SKU", { render: true });
     this.render();
   },
   refreshInlineSkuIndexes() {
@@ -146,9 +150,11 @@ Object.assign(app, {
     this.showModal("新建阶段", `
       <div class="form-group"><label class="req modal-field-title">阶段名称</label><input id="stageName" placeholder="输入阶段名称，如：V1、V3-1、VN1、VN2"></div>
       <div class="form-group"><label class="req modal-field-title">方案（SKU）设置</label>${this.skuEditorHtml(["", ""], { placeholder: "输入方案名，如：主方案、A1、B7" })}</div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
+      if (!p) return;
+      const snapshot = this.cloneData(this.data);
       const stageNameEl = document.getElementById("stageName");
       const name = stageNameEl.value.trim();
       if (!name) { this.markFieldInvalid(stageNameEl, "阶段名称不能为空"); return true; }
@@ -166,7 +172,15 @@ Object.assign(app, {
       const s = { id: Utils.id("stage_"), name, skuNames, bom: [], strategy: [], progress: [], tasks: [] };
       p.stages.push(s);
       this.view.selectedStageId = s.id;
-      this.save(); this.render();
+      const saved = await this.commitStageMutation(p, s, {
+        action: "create_stage",
+        remark: "新建阶段",
+        user: "管理员",
+        createIfMissing: true
+      });
+      if (!saved) { this.data = snapshot; return true; }
+      Utils.toast("阶段已新建");
+      return false;
     });
   },
 
@@ -176,8 +190,10 @@ Object.assign(app, {
     this.showModal("编辑阶段与 SKU", `
       <div class="form-group"><label class="req modal-field-title">阶段名称</label><input id="stageName" value="${Utils.esc(s.name)}"></div>
       <div class="form-group"><label class="req modal-field-title">方案（SKU）设置</label>${this.skuEditorHtml(s.skuNames?.length ? s.skuNames : ["SKU1"], { placeholder: "输入方案名" })}</div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
+      const p = this.currentProject();
+      const snapshot = this.cloneData(this.data);
       const stageNameEl = document.getElementById("stageName");
       const name = stageNameEl.value.trim();
       if (!name) { this.markFieldInvalid(stageNameEl, "阶段名称不能为空"); return true; }
@@ -188,13 +204,21 @@ Object.assign(app, {
         return true;
       }
       s.name = name; s.skuNames = skuNames;
-      this.save(); this.render();
+      const saved = await this.commitStageMutation(p, s, {
+        action: "update_stage",
+        remark: "编辑阶段",
+        user: "管理员"
+      });
+      if (!saved) { this.data = snapshot; return true; }
+      Utils.toast("阶段已保存");
+      return false;
     });
   },
 
-  deleteStage(id) {
-    const p = this.currentProject();
+  async deleteStage(id) {
+    let p = this.currentProject();
     if (!p) return;
+    p = await this.ensureProjectLoaded(p.id, { includeTasks: true, render: false }) || p;
     const stage = (p.stages || []).find(s => s.id === id);
     if (!stage) return;
     // 安全机制：阶段下存在「进行中/未完成」任务且占用样机时，禁止直接删除，避免样机占用状态丢失
@@ -210,7 +234,8 @@ Object.assign(app, {
     const extraWarn = taskCount
       ? `\n\n该阶段含 ${taskCount} 个任务及其测试履历/日志，删除后不可恢复。`
       : "";
-    this.showConfirm(`确认删除阶段「${stage.name}」？${extraWarn}`, () => {
+    this.showConfirm(`确认删除阶段「${stage.name}」？${extraWarn}`, async () => {
+      const snapshot = this.cloneData(this.data);
       // 只释放未完成任务占用的样机；已完成任务的样机状态不变。
       const affectedSampleIds = new Set();
       activeTasks.forEach(t => (t.sampleIds || []).forEach(id => affectedSampleIds.add(id)));
@@ -223,7 +248,20 @@ Object.assign(app, {
           this.changeSampleStatus(id, "闲置", { user: "管理员", source: "删除阶段", reason: `删除阶段「${stage.name}」回收样机` });
         }
       });
-      this.save(); this.render();
+      const affectedSamples = [...affectedSampleIds].map(sampleId => this.findSample(sampleId)?.sample).filter(Boolean);
+      const sampleEvents = (this.data.sampleLibrary.logs || []).filter(log => affectedSampleIds.has(String(log?.sampleId || "")));
+      const saved = await this.commitStageMutation(p, stage, {
+        action: "delete_stage",
+        remark: "删除阶段",
+        user: "管理员",
+        deleteStage: true,
+        samples: affectedSamples,
+        sampleEvents,
+        render: false
+      });
+      if (!saved) { this.data = snapshot; return; }
+      this.render();
+      Utils.toast("阶段已删除");
     }, { title: "删除阶段", okText: "删除", okClass: "btn btn-danger" });
   },
   copyStage(id) {
@@ -235,8 +273,9 @@ Object.assign(app, {
         <label class="req modal-field-title">新阶段名称</label>
         <input id="copyStageName" placeholder="可自定义阶段名称，如：V2-1，V3 等">
       </div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
+      const snapshot = this.cloneData(this.data);
       const copyNameEl = document.getElementById("copyStageName");
       const name = copyNameEl.value.trim();
       if (!name) { this.markFieldInvalid(copyNameEl, "阶段名称不能为空"); return true; }
@@ -268,8 +307,15 @@ Object.assign(app, {
       const sourceIdx = p.stages.findIndex(s => s.id === id);
       p.stages.splice(sourceIdx + 1, 0, cloned);
       this.view.selectedStageId = cloned.id;
-      this.save(); this.render();
+      const saved = await this.commitStageMutation(p, cloned, {
+        action: "copy_stage",
+        remark: "复制阶段",
+        user: "管理员",
+        createIfMissing: true
+      });
+      if (!saved) { this.data = snapshot; return true; }
       Utils.toast(`已复制阶段：${name}`);
+      return false;
     });
   },
 

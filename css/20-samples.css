@@ -195,36 +195,89 @@
   font-weight: 900;
 }
 /* .add-card sizing overrides per context are handled inline or via grid */
-.sample-pool-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
+.sample-pool-toolbar {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
-  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 14px 16px;
 }
-.sample-pool-left {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  flex-wrap: wrap;
+.sample-pool-toolbar-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
 }
 .sample-pool-code {
   font-size: 20px;
   font-weight: 900;
+  white-space: nowrap;
 }
 .sample-pool-desc {
-  margin-left: 12px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.sample-pool-actions {
+.sample-pool-toolbar-filters {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+.sample-pool-toolbar-filters input,
+.sample-pool-toolbar-filters select {
+  height: 34px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+.sample-pool-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 280px;
+}
+.sample-pool-filter-status { flex: 0 0 150px }
+.sample-pool-filter-result { flex: 0 0 130px }
+.sample-pool-filter-person { flex: 0 0 145px }
+.sample-pool-clear-btn {
+  height: 34px;
+  white-space: nowrap;
+}
+.sample-pool-count {
+  white-space: nowrap;
+}
+.sample-pool-toolbar-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 .sample-pool-main-btn {
-  padding: 10px 15px;
-  font-size: 14px;
+  height: 34px;
+  padding: 7px 12px;
+  font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
+}
+@media (max-width: 1280px) {
+  .sample-pool-toolbar {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+  .sample-pool-toolbar-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 900px) {
+  .sample-pool-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .sample-pool-toolbar-actions {
+    grid-column: auto;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }
 .detail-return-btn {
   padding: 9px 14px;
@@ -233,6 +286,22 @@
 }
 .sample-pool-grid {
   align-items: stretch;
+}
+.sample-pager {
+  justify-content: flex-start;
+}
+.sample-pager-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.sample-pager .sample-page-size-select {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 108px;
+  max-width: 120px;
 }
 .sample-pool-grid > .sample-card,
 .sample-pool-grid > .add-card {

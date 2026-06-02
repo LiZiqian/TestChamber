@@ -22,6 +22,19 @@ Object.assign(app, {
     };
     const hint = document.getElementById("sampleArchiveFooterHint");
     if (hint) hint.textContent = hints[tab] || "";
+    if ((tab === "photos" || tab === "history") && this._activeSampleDetailId) {
+      const sample = this.findSample(this._activeSampleDetailId)?.sample;
+      if (sample && ((tab === "photos" && sample.photosLoaded !== true) || (tab === "history" && sample.eventsLoaded !== true))) {
+        this.ensureSampleDetailsLoaded(this._activeSampleDetailId, {
+          photos: tab === "photos",
+          events: tab === "history",
+          renderPanels: true
+        }).catch(e => {
+          console.error("加载样机详情数据失败：", e);
+          Utils.toast("样机详情数据加载失败：" + (e.message || e));
+        });
+      }
+    }
   },
 
   sampleTaskResultPhotos(task, sampleId) {
@@ -78,6 +91,10 @@ Object.assign(app, {
   },
 
   sampleTestHistoryHtml(sampleId) {
+    const sample = this.findSample(sampleId)?.sample;
+    if (sample && sample.eventsLoaded !== true) {
+      return this.sampleArchivePlaceholder("正在加载测试履历", "样机状态事件已按需外置，打开履历时从服务器读取。");
+    }
     const sampleLogsAll = this.sampleEventLogsForSample(sampleId);
     const rows = new Map();
     sampleLogsAll.forEach(log => {

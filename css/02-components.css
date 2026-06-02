@@ -70,6 +70,28 @@
 .s-已完成, .s-正常完成 { background: #d1d5db; color: #111827; border: 1px solid #9ca3af }
 .s-异常完成 { background: #fecaca; color: #991b1b; border: 1px solid #f87171 }
 
+/* ---- Pagers ---- */
+.list-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.list-pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.list-pager select {
+  width: auto;
+  min-width: 108px;
+  height: 32px;
+  padding: 4px 8px;
+}
+
 /* ---- Progress Bar ---- */
 .progress-bar-wrap {
   height: 8px; background: #e5e7eb; border-radius: 10px; overflow: hidden; margin-top: 6px;

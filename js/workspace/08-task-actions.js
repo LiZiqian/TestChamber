@@ -17,7 +17,8 @@ Object.assign(app, {
       executed
         ? "该任务已经执行过，删除后会从任务管理中隐藏并归档，历史数据继续保留。"
         : "该任务尚未执行，删除后会从任务管理中物理移除。",
-      () => {
+      async () => {
+        const dataSnapshot = this.cloneData(this.data);
         this.releaseTaskSamples(t, {
           user: "管理员",
           source: executed ? "任务归档删除" : "任务删除",
@@ -33,8 +34,18 @@ Object.assign(app, {
         } else {
           s.tasks = s.tasks.filter(x => x.id !== taskId);
         }
-        this.save(); this.render();
+        const saved = await this.commitTaskMutation(p, s, t, {
+          action: executed ? "archive_task_delete" : "delete_task",
+          remark: executed ? "任务归档删除" : "未执行任务删除",
+          user: "管理员",
+          deleteMode: executed ? "" : "delete"
+        });
+        if (!saved) {
+          this.data = dataSnapshot;
+          return true;
+        }
         Utils.toast(executed ? "任务已归档隐藏，样机履历已保留。" : "任务已删除。");
+        return false;
       },
       detailsHtml
     );
@@ -56,7 +67,7 @@ Object.assign(app, {
       alert("计划终止时间不能早于计划开始时间。请先修改计划。");
       return;
     }
-    this.showConfirm("开始测试？", () => {
+    this.showConfirm("开始测试？", async () => {
       const user = t.owner;
       const reason = isRestart ? "恢复测试" : "开始测试";
       const transition = this.transitionTaskStatus(s, t, "进行中", {
@@ -66,7 +77,11 @@ Object.assign(app, {
       });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "测试中", { user, source: isRestart ? "任务重启" : "任务启动", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
       this.addTaskLog(t, isRestart ? "重启任务" : "启动任务", { user, reason, fromStatus: transition.fromStatus, toStatus: transition.toStatus });
-      this.save(); this.render();
+      await this.commitTaskMutation(p, s, t, {
+        action: isRestart ? "restart_task" : "start_task",
+        remark: reason,
+        user
+      });
     }, { title: "启动任务", okText: "开始测试", okClass: "btn btn-pass" });
   },
 
@@ -259,7 +274,7 @@ Object.assign(app, {
       <div class="temp-change-sample-section">
         <div class="form-group"><label>样机逐台变更</label><div class="dispatch-sample-select">${sampleCards}</div></div>
       </div>
-    `, () => {
+    `, async () => {
       const user = document.getElementById("tempUser").value.trim();
       const owner = document.getElementById("tempOwner").value.trim();
       const reason = document.getElementById("tempReason").value.trim();
@@ -377,7 +392,12 @@ Object.assign(app, {
         detailLines: detailParts
       });
 
-      this.save(); this.render();
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: "temp_change_task",
+        remark: changeReason,
+        user
+      });
+      return !saved;
     }, "确认", { className: "temp-change-modal", headerHint: `任务：${Utils.esc(t.testItem || "-")}` });
   },
 
@@ -392,7 +412,7 @@ Object.assign(app, {
       <div class="task-block-task-desc">阻塞只记录任务无法继续，样机失效请通过"上传结果"追加到档案。</div>
       <div class="form-group"><label class="req">状态变更人</label>${this.projectMemberSelectHtml("user", "", "请选择状态变更人")}</div>
       <div class="form-group"><label class="req">阻塞原因说明</label><textarea id="reason" rows="3" placeholder="必须填写，如：设备故障暂停"></textarea></div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
       const user = document.getElementById("user").value.trim();
       const reason = document.getElementById("reason").value.trim();
@@ -401,7 +421,12 @@ Object.assign(app, {
       const transition = this.transitionTaskStatus(s, t, "阻塞中", { reason, issue: reason });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "在位等待", { user, source: "任务阻塞", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
       this.addTaskLog(t, "阻塞任务", { user, reason, fromStatus: transition.fromStatus, toStatus: transition.toStatus });
-      this.save(); this.render();
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: "block_task",
+        remark: reason,
+        user
+      });
+      return !saved;
     });
   },
 

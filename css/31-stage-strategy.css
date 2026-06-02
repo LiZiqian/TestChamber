@@ -68,10 +68,57 @@
 }
 .case-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
 
-/* ---- 测试策略配置表格：增加可视高度 + 表头冻结 ---- */
+/* ---- 策略表正向/反向搜索 ---- */
+.strategy-search-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(220px, 320px) max-content max-content;
+  align-items: end;
+  column-gap: 10px;
+  row-gap: 8px;
+  padding: 10px 0 12px;
+}
+.strategy-search-field {
+  display: grid;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+.strategy-search-field span {
+  font-size: 12px;
+  font-weight: 800;
+  color: #475569;
+}
+.strategy-search-field input {
+  height: 34px;
+  font-size: 13px;
+}
+.strategy-search-count {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.strategy-search-bar .btn {
+  height: 34px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .strategy-search-bar {
+    grid-template-columns: 1fr;
+  }
+  .strategy-search-count {
+    justify-content: flex-start;
+  }
+}
+
+/* ---- 测试策略配置表格：自适应高度 + 表头冻结 ---- */
 .strategy-table {
-  height: clamp(600px, 60vh, 900px);
-  max-height: none;
+  max-height: clamp(280px, 60vh, 900px);
   overflow: auto;
   position: relative;
   scrollbar-gutter: stable;

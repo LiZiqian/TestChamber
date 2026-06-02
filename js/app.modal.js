@@ -64,11 +64,19 @@ Object.assign(app, {
     if (!ok) { console.error("modalOk not found in DOM"); return; }
     ok.className = options.okClass || "btn";
     ok.innerText = okText;
-    ok.onclick = () => {
+    ok.onclick = async () => {
       try {
         const keepOpen = onOk && onOk();
+        if (keepOpen && typeof keepOpen.then === "function") {
+          ok.disabled = true;
+          const resolved = await keepOpen;
+          ok.disabled = false;
+          if (!resolved) this.closeModal();
+          return;
+        }
         if (!keepOpen) this.closeModal();
       } catch (e) {
+        ok.disabled = false;
         console.error("[showModal] onOk 异常：", e);
         alert("操作失败：" + (e.message || e));
       }
@@ -101,9 +109,18 @@ Object.assign(app, {
     cancel.onclick = () => this.closeConfirm();
     ok.innerText = options.okText || "确认";
     ok.className = options.okClass || "btn";
-    ok.onclick = () => {
-      this.closeConfirm();
-      if (typeof onOk === "function") onOk();
+    ok.onclick = async () => {
+      ok.disabled = true;
+      try {
+        const result = typeof onOk === "function" ? onOk() : null;
+        if (result && typeof result.then === "function") await result;
+        this.closeConfirm();
+      } catch (e) {
+        console.error("[showConfirm] onOk 异常：", e);
+        alert("操作失败：" + (e.message || e));
+      } finally {
+        ok.disabled = false;
+      }
     };
     mask.style.display = "flex";
   },
@@ -190,7 +207,7 @@ Object.assign(app, {
         input?.focus();
         return true;
       }
-      onConfirm?.();
+      return onConfirm?.();
     }, options.okText || "确认", {
       okClass: options.okClass || "btn btn-danger",
       hideCancel: false,

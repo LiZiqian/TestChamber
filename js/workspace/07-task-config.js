@@ -66,8 +66,9 @@ Object.assign(app, {
   },
 
   openAddTasksFromPoolModal() {
+    const project = this.currentProject();
     const stage = this.currentStage();
-    if (!stage) return;
+    if (!project || !stage) return;
     const pool = (stage.progress || []).filter(p => p && p.testItem);
     if (!pool.length) {
       alert("当前阶段测试池为空。请先在「配置测试用例集」的测试策略配置中新增测试项。");
@@ -102,26 +103,39 @@ Object.assign(app, {
         <thead><tr><th style="width:46px"></th><th>方案(SKU)</th><th>类别/用例</th><th>样机数</th><th>已有任务</th><th>新增次数</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
-    `, () => {
-      let added = 0;
+    `, async () => {
       const selected = [...document.querySelectorAll(".task-pool-check:checked")];
       if (!selected.length) {
         this.clearFieldValidationMarks();
         this.markFieldInvalid(document.getElementById("taskPoolSelectionHint"), "请至少选择一个测试项。");
         return true;
       }
+      const queue = [];
       selected.forEach(cb => {
         const idx = Number(cb.dataset.index);
         const progress = pool[idx];
         const input = document.querySelector(`.task-pool-count[data-index="${idx}"]`);
         const count = Math.max(1, Utils.parsePositiveInt(input?.value) || 1);
         for (let i = 0; i < count; i++) {
-          this.createTaskFromProgress(stage, progress, { status: "待下发" });
-          added++;
+          queue.push(progress);
         }
       });
-      this.save(); this.render();
-      Utils.toast(`已新增 ${added} 个待下发任务。`);
+      const newTasks = queue
+        .map(progress => this.createTaskFromProgress(stage, progress, { status: "待下发" }))
+        .filter(Boolean);
+      const newTaskIds = new Set(newTasks.map(task => task.id));
+      const saved = await this.commitTaskBatchMutation(project, stage, newTasks, {
+        action: "create_tasks_batch",
+        remark: `从测试池批量新增任务：${newTasks.length} 个`,
+        user: "管理员",
+        createIfMissing: true
+      });
+      if (!saved) {
+        stage.tasks = (stage.tasks || []).filter(task => !newTaskIds.has(task.id));
+        return true;
+      }
+      Utils.toast(`已新增 ${newTasks.length} 个待下发任务。`);
+      return false;
     });
     setTimeout(() => this.updateTaskPoolSelectionCount(), 0);
   },
@@ -188,17 +202,17 @@ Object.assign(app, {
       <div class="path">计划任务：${Utils.esc(this.getProgressDisplayName(s, progress))}</div>
       <div id="assignSampleLimitHint" class="sample-limit-hint"></div>
       <div class="form-group"><label class="req">选择样机</label><div class="dispatch-sample-select">${sampleCards}</div></div>
-    `, () => {
+    `, async () => {
       const operator = t?.owner || "管理员";
       const sampleIds = this.getSelectedTaskSampleIds("assignSamplePick");
       const check = this.validateTaskSampleSelection(progress, sampleIds, "样机分配");
       if (t && !this.isTaskChangePayloadChanged(t, { owner: t.owner, planStartDate: t.planStartDate || t.planDate || "", planEndDate: t.planEndDate || "", sampleIds })) {
         Utils.toast("未检测到变更");
-        this.closeModal();
-        return;
+        return false;
       }
       if (!check.ok) { alert(check.msg); return true; }
       const oldSampleIds = [...(t?.sampleIds || [])];
+      const wasNew = !t;
       t = t || this.ensurePlanTask(s, progress);
       const removed = oldSampleIds.filter(id => !sampleIds.includes(id));
       const added = sampleIds.filter(id => !oldSampleIds.includes(id));
@@ -212,7 +226,14 @@ Object.assign(app, {
       });
       added.forEach(id => this.changeSampleStatus(id, "在位等待", { user: operator, source: "任务样机分配", reason: "未下发任务分配样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
       this.addTaskLog(t, oldSampleIds.length ? "重新分配样机" : "分配样机", { user: operator, reason: "未下发任务样机配置", detail: `样机：${sampleIds.map(id => this.findSample(id)?.sample.sampleNo || id).join(", ")}` });
-      this.save(); this.render();
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: oldSampleIds.length ? "reassign_task_samples" : "assign_task_samples",
+        remark: "未下发任务样机配置",
+        user: operator,
+        createIfMissing: wasNew
+      });
+      if (saved) Utils.toast(oldSampleIds.length ? "样机已重新分配" : "样机已分配");
+      return !saved;
     }, "确认", { className: "assign-sample-modal" });
     setTimeout(() => this.updateTaskSampleLimitUI('assignProgress', 'assignSamplePick', 'assignSampleLimitHint'), 0);
   },
@@ -246,7 +267,7 @@ Object.assign(app, {
         <div class="form-group"><label class="req" style="color:var(--muted);font-weight:700">计划开始时间<span class="req-star">*</span></label><input type="date" id="planStartDate" value="${Utils.esc(planStartDate)}"></div>
         <div class="form-group"><label class="req" style="color:var(--muted);font-weight:700">计划终止时间<span class="req-star">*</span></label><input type="date" id="planEndDate" value="${Utils.esc(planEndDate)}"></div>
       </div>
-    `, () => {
+    `, async () => {
       const owner = document.getElementById("planOwner").value.trim();
       const start = document.getElementById("planStartDate").value;
       const end = document.getElementById("planEndDate").value;
@@ -263,9 +284,9 @@ Object.assign(app, {
       }
       if (t && !this.isTaskChangePayloadChanged(t, { owner, planStartDate: start, planEndDate: end })) {
         Utils.toast("未检测到变更");
-        this.closeModal();
-        return;
+        return false;
       }
+      const wasNew = !t;
       t = t || this.ensurePlanTask(s, progress, { owner, planStartDate: start, planEndDate: end });
       t.owner = owner;
       t.planStartDate = start;
@@ -273,7 +294,14 @@ Object.assign(app, {
       t.planDate = start;
       if (!t.status) this.repairTaskStatus(t, "待下发");
       this.addTaskLog(t, "设置计划时间", { user: owner, reason: `计划开始 ${start}，计划终止 ${end}` });
-      this.save(); this.render();
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: "set_task_plan",
+        remark: "设置任务计划时间",
+        user: owner,
+        createIfMissing: wasNew
+      });
+      if (saved) Utils.toast("计划配置已保存");
+      return !saved;
     });
   },
 
@@ -395,7 +423,7 @@ Object.assign(app, {
   },
 
 
-  saveTaskConfigAll(projectId, stageId, progressId, taskId) {
+  async saveTaskConfigAll(projectId, stageId, progressId, taskId) {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
@@ -429,10 +457,10 @@ Object.assign(app, {
     // 变更检测（合并 payload）
     if (t && !this.isTaskChangePayloadChanged(t, { owner, planStartDate: start, planEndDate: end, sampleIds })) {
       Utils.toast("未检测到变更");
-      this.closeModal();
-      return;
+      return false;
     }
     // ensure（task 已存在，仅防御）
+    const wasNew = !t;
     t = t || this.ensurePlanTask(s, progress);
     // 检测各维度变更
     const planChanged = (t.owner || "") !== owner
@@ -474,11 +502,17 @@ Object.assign(app, {
       });
     }
     // 统一持久化
-    this.save(); this.render();
+    const saved = await this.commitTaskMutation(p, s, t, {
+      action: wasNew ? "create_task_config" : "save_task_config",
+      remark: "保存任务配置",
+      user: owner || t.owner || "管理员",
+      createIfMissing: wasNew
+    });
+    if (!saved) return true;
     if (planChanged && sampleChanged) Utils.toast("任务配置已保存");
     else if (planChanged) Utils.toast("计划配置已保存");
     else Utils.toast("样机配置已保存");
-    this.closeModal();
+    return false;
   },
 
   hasUnsavedTaskConfigChanges(projectId, stageId, progressId, taskId) {

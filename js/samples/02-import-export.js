@@ -5,7 +5,8 @@
 
 Object.assign(app, {
 
-  importSampleBatch(catId) {
+  async importSampleBatch(catId) {
+    if (!await this.ensureFullStateLoaded({ render: false })) return;
     const input = document.createElement("input");
     input.type = "file"; input.accept = ".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv";
     input.onchange = e => {
@@ -21,7 +22,9 @@ Object.assign(app, {
         if (!category) return;
         if (!Array.isArray(category.samples)) category.samples = [];
 
+        const snapshot = this.cloneData(this.data);
         let imported = 0, skippedDup = 0, skippedGlobal = 0;
+        const importedSamples = [];
         result.rows.forEach((row, idx) => {
           // 用 IMEI 或 SN 作为样机编号
           const sampleNo = row.sn || row.imei || row.boardSn || this.nextSampleNo(category, row.stage || "CSV", idx);
@@ -33,7 +36,7 @@ Object.assign(app, {
           const location = String(row.location || "").trim();
           const initialResults = Utils.parseSampleIssueText(row.initialResult);
           const normalizedStatus = row.status === "已借出" || row.status === "借出" ? "取走分析" : row.status;
-          category.samples.push(this.newSample(catId, sampleNo, row.sn, row.imei, {
+          const sample = this.newSample(catId, sampleNo, row.sn, row.imei, {
             stage: row.stage,
             boardSn: row.boardSn,
             skuName: row.standard || "Unknown",
@@ -52,11 +55,27 @@ Object.assign(app, {
             notes: row.notes,
             importDate: row.importDate,
             sourceType: isXlsx ? "xlsx_import" : "csv_import"
-          }));
+          });
+          category.samples.push(sample);
+          importedSamples.push(sample);
           imported++;
         });
 
-        this.save(); this.renderSamples();
+        if (importedSamples.length) {
+          const saved = await this.commitSampleCategoryMutation(category, {
+            action: "import_samples",
+            remark: "批量导入样机",
+            user: "管理员",
+            createSamples: true,
+            samples: importedSamples,
+            render: false
+          });
+          if (!saved) {
+            this.data = snapshot;
+            return;
+          }
+        }
+        this.renderSamples();
         const warn = result.invalidPersonCount
           ? `；其中 ${result.invalidPersonCount} 条挂账人字段格式不合法，已按空处理`
           : "";

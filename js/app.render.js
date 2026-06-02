@@ -8,7 +8,11 @@ Object.assign(app, {
   render() {
     this.renderNav();
     this.renderHeader();
-    // 全局页脚默认隐藏，各页面按需开启
+    this.renderContent();
+  },
+
+  /** 只刷新内容区（nav/header 不变时使用，避免不必要的 DOM 重建） */
+  renderContent() {
     const ft = document.getElementById("pageFooter");
     if (ft) ft.style.display = "none";
     const fn = {
@@ -25,7 +29,8 @@ Object.assign(app, {
   renderHome() {
     const projectCount = this.data.projects.length;
     const samplePoolCount = this.data.sampleLibrary.categories.length;
-    const sampleCount = this.allSamples().length;
+    const sampleCount = (this.data.sampleLibrary.categories || [])
+      .reduce((sum, c) => sum + (Number(c.sampleCount) || (c.samples || []).length || 0), 0);
     document.getElementById("content").innerHTML = `
       <section class="home-shell">
         <h1 class="home-title">终端硬件测试数字治理平台 <span>V7</span></h1>
@@ -73,6 +78,17 @@ Object.assign(app, {
     // 默认展开（首次加载 _navExpanded 为 undefined 时）
     if (!this.view._navExpanded) this.view._navExpanded = { projects: true, samples: true };
     const expanded = this.view._navExpanded;
+
+    // 指纹缓存：nav 数据未变时跳过 DOM 重建，避免慢机器上点击丢失
+    const fp = JSON.stringify([
+      this.view.module, this.view.selectedProjectId, this.view.selectedCategoryId,
+      expanded.projects, expanded.samples,
+      projects.map(p => [p.id, p.name]),
+      pools.map(c => [c.id, c.name])
+    ]);
+    if (fp === this._navFingerprint) return;
+    this._navFingerprint = fp;
+
     const isActive = (id) => {
       if (id === "projects" && this.view.module === "projectWorkspace") return true;
       return this.view.module === id;
@@ -122,24 +138,22 @@ Object.assign(app, {
   _navToggle(id) {
     if (!this.view._navExpanded) this.view._navExpanded = {};
     this.view._navExpanded[id] = !this.view._navExpanded[id];
-    this.save({ silent: true });
+    this._navFingerprint = null;  // invalidate cache so expand/collapse renders
     this.renderNav();
   },
 
-  _navGoSub(subId) {
+  async _navGoSub(subId) {
     const sep = subId.indexOf("_");
     const type = subId.slice(0, sep);
     const id = subId.slice(sep + 1);
     if (type === "proj") {
-      this.view.selectedProjectId = id;
-      const p = this.currentProject();
-      this.view.selectedStageId = p?.stages?.[0]?.id || null;
-      this.view.module = "projectWorkspace";
+      await this.selectProject(id);
+      return;
     } else if (type === "cat") {
       this.view.selectedCategoryId = id;
+      this.view.samplePage = 1;
       this.view.module = "samples";
     }
-    this.save();
     this.render();
   },
 
@@ -177,11 +191,11 @@ Object.assign(app, {
     if (this.view.stageStrategyId && typeof this.autoSyncProgress === "function") {
       this.autoSyncProgress();
       this.view.stageStrategyId = null;
-      this.save();
     }
     this.view.module = module;
     if (module !== "projectWorkspace") this.view.stageStrategyId = null;
     if (module === "samples") this.view.selectedCategoryId = null;
+    if (module === "samples") this.view.samplePage = 1;
     if (module === "home") this.view.selectedCategoryId = null;
     this.render();
   },
@@ -221,7 +235,7 @@ Object.assign(app, {
   toggleSection(sectionId) {
     if (!this.view.collapsed) this.view.collapsed = {};
     this.view.collapsed[sectionId] = !this.view.collapsed[sectionId];
-    this.render();
+    this.renderContent();
   },
 
   updateSelectPlaceholderState(root = document) {

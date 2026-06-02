@@ -53,7 +53,7 @@ Object.assign(app, {
       const pct = x.total ? ((x.pass / x.total) * 100).toFixed(0) : 0;
       const cardAttrs = sortMode
         ? `data-stage-id="${x.stage.id}" draggable="true" ondragstart="app.onStageDragStart(event,'${x.stage.id}')" ondragover="app.onStageDragOver(event,'${x.stage.id}')" ondragleave="app.onStageDragLeave(event)" ondrop="app.onStageDrop(event,'${x.stage.id}')" ondragend="app.onStageDragEnd(event)"`
-        : `onclick="app.view.selectedStageId='${x.stage.id}';app.save();app.render()"`;
+        : `onclick="app.view.selectedStageId='${x.stage.id}';app.render()"`;
       return `
       <div class="stage-summary-card ${x.stage.id === s?.id ? 'active' : ''} ${sortMode ? 'is-sorting' : ''}" ${cardAttrs}>
         <div class="stage-summary-title">
@@ -195,17 +195,21 @@ Object.assign(app, {
   addProjectLocation() {
     this.showModal("新增项目位置", `
       <div class="form-group"><label class="req modal-field-title">位置名称</label><input id="projectLocationName" placeholder="如：溪村-D8-B1F-A08 / 武汉-A3-1F-03R"></div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
       if (!p) return;
+      const snapshot = this.cloneData(this.data);
       if (!Array.isArray(p.locations)) p.locations = [];
       const el = document.getElementById("projectLocationName");
       const name = el.value.trim();
       if (!name) { this.markFieldInvalid(el, "位置名称不能为空"); return true; }
       if (p.locations.some(x => String(x).trim() === name)) { this.markFieldInvalid(el, "该位置已存在。"); return true; }
       p.locations.push(name);
-      this.save(); this.render();
+      const saved = await this.commitProjectMutation(p, { action: "add_project_location", remark: "新增项目位置", user: "管理员" });
+      if (!saved) { this.data = snapshot; return true; }
+      Utils.toast("位置已新增");
+      return false;
     }, "确认", { className: "modal-sm" });
   },
 
@@ -215,8 +219,9 @@ Object.assign(app, {
     const currentName = p.locations[index];
     this.showModal("编辑项目位置", `
       <div class="form-group"><label class="req modal-field-title">位置名称</label><input id="projectLocationName" value="${Utils.esc(currentName)}" placeholder="如：溪村-D8-B1F-A08 / 武汉-A3-1F-03R"></div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
+      const snapshot = this.cloneData(this.data);
       const el = document.getElementById("projectLocationName");
       const name = el.value.trim();
       if (!name) { this.markFieldInvalid(el, "位置名称不能为空"); return true; }
@@ -224,15 +229,22 @@ Object.assign(app, {
         this.markFieldInvalid(el, "该位置已存在。"); return true;
       }
       p.locations[index] = name;
-      this.save(); this.render();
+      const saved = await this.commitProjectMutation(p, { action: "update_project_location", remark: "编辑项目位置", user: "管理员" });
+      if (!saved) { this.data = snapshot; return true; }
+      Utils.toast("位置已保存");
+      return false;
     }, "确认", { className: "modal-sm" });
   },
   removeProjectLocation(index) {
     const p = this.currentProject();
     if (!p || !Array.isArray(p.locations) || !p.locations[index]) return;
-    this.showConfirm(`确认删除位置 ${p.locations[index]}？`, () => {
+    this.showConfirm(`确认删除位置 ${p.locations[index]}？`, async () => {
+      const snapshot = this.cloneData(this.data);
       p.locations.splice(index, 1);
-      this.save(); this.render();
+      const saved = await this.commitProjectMutation(p, { action: "remove_project_location", remark: "删除项目位置", user: "管理员" });
+      if (!saved) { this.data = snapshot; return; }
+      this.render();
+      Utils.toast("位置已删除");
     }, { title: "删除位置", okText: "删除", okClass: "btn btn-danger" });
   },
 
@@ -266,10 +278,11 @@ Object.assign(app, {
     this.showModal("新增项目人员", `
       <div class="form-group"><label class="req modal-field-title">人员</label><input id="memberText" placeholder="姓名/工号，如：张三/00609513"></div>
       <div class="form-hint">人员必须按「姓名/工号」填写，姓名和工号都不能为空。</div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
       if (!p) return;
+      const snapshot = this.cloneData(this.data);
       if (!Array.isArray(p.members)) p.members = [];
       const memberEl = document.getElementById("memberText");
       const check = this.validateProjectMember(memberEl.value);
@@ -287,7 +300,10 @@ Object.assign(app, {
       } else {
         p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, active: true });
       }
-      this.save(); this.render();
+      const saved = await this.commitProjectMutation(p, { action: "add_project_member", remark: "新增项目人员", user: Utils.personText(check.name, check.employeeNo) });
+      if (!saved) { this.data = snapshot; return true; }
+      Utils.toast("人员已新增");
+      return false;
     }, "确认", { className: "modal-sm" });
   },
   editProjectMember(memberId) {
@@ -298,8 +314,9 @@ Object.assign(app, {
     this.showModal("编辑项目人员", `
       <div class="form-group"><label class="req modal-field-title">人员</label><input id="memberText" value="${Utils.esc(currentIdentity)}" placeholder="姓名/工号，如：张三/00609513"></div>
       <div class="form-hint">人员必须按「姓名/工号」填写，姓名和工号都不能为空。</div>
-    `, () => {
+    `, async () => {
       this.clearFieldValidationMarks();
+      const snapshot = this.cloneData(this.data);
       const memberEl = document.getElementById("memberText");
       const check = this.validateProjectMember(memberEl.value);
       if (!check.ok) { this.markFieldInvalid(memberEl, check.msg); return true; }
@@ -314,7 +331,10 @@ Object.assign(app, {
       }
       m.name = check.name;
       m.employeeNo = check.employeeNo;
-      this.save(); this.render();
+      const saved = await this.commitProjectMutation(p, { action: "update_project_member", remark: "编辑项目人员", user: Utils.personText(check.name, check.employeeNo) });
+      if (!saved) { this.data = snapshot; return true; }
+      Utils.toast("人员已保存");
+      return false;
     }, "确认", { className: "modal-sm" });
   },
   downloadProjectMembersTemplate() {
@@ -331,7 +351,7 @@ Object.assign(app, {
     input.onchange = () => {
       const file = input.files?.[0]; if (!file) return;
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         const result = Utils.parseProjectMembersCsv(reader.result);
         if (result.error) { alert("人员名单导入失败：" + result.error); return; }
         const p = this.currentProject();
@@ -339,6 +359,7 @@ Object.assign(app, {
         if (!Array.isArray(p.members)) p.members = [];
         let added = 0, restored = 0, skippedDup = 0;
         let skippedNameConflict = 0;
+        const snapshot = this.cloneData(this.data);
         result.rows.forEach(row => {
           const check = this.validateProjectMember(Utils.personText(row.name, row.employeeNo));
           if (!check.ok) { skippedNameConflict++; return; }
@@ -361,7 +382,9 @@ Object.assign(app, {
             added++;
           }
         });
-        this.save(); this.render();
+        const saved = await this.commitProjectMutation(p, { action: "import_project_members", remark: "批量导入项目人员", user: "管理员" });
+        if (!saved) { this.data = snapshot; return; }
+        this.render();
         Utils.toast(`人员名单导入完成：新增 ${added} 人，恢复 ${restored} 人，重复跳过 ${skippedDup} 人，格式错误跳过 ${skippedNameConflict + (result.skipped || 0)} 行。`);
       };
       reader.readAsText(file, "utf-8");
@@ -372,9 +395,13 @@ Object.assign(app, {
     const p = this.currentProject();
     const m = p?.members?.find(x => x.id === memberId);
     if (!m) return;
-    this.showConfirm(`确认将 ${Utils.personText(m.name, m.employeeNo)} 移出项目人员名单？`, () => {
+    this.showConfirm(`确认将 ${Utils.personText(m.name, m.employeeNo)} 移出项目人员名单？`, async () => {
+      const snapshot = this.cloneData(this.data);
       m.active = false;
-      this.save(); this.render();
+      const saved = await this.commitProjectMutation(p, { action: "remove_project_member", remark: "移出项目人员", user: "管理员" });
+      if (!saved) { this.data = snapshot; return; }
+      this.render();
+      Utils.toast("人员已移出");
     }, { title: "移出人员", okText: "移出", okClass: "btn btn-danger" });
   },
   memberWorkStats(project, member) {
@@ -438,7 +465,14 @@ Object.assign(app, {
     if (fromIdx < insertIdx) insertIdx -= 1;
     p.stages.splice(insertIdx, 0, moved);
     this._dragStageId = null;
-    this.save();
+    this.commitStageMutation(p, moved, {
+      action: "reorder_stages",
+      remark: "阶段排序",
+      user: "管理员",
+      render: false
+    }).then(saved => {
+      if (!saved) this.reloadFromServer();
+    });
     this.render();
   },
   onStageDragEnd() {
