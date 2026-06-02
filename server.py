@@ -1941,7 +1941,7 @@ def main() -> None:
     print(f"数据库: {DB_PATH}")
     print(f"样机文件目录: {SAMPLE_DATA_DIR}")
     print(f"备份目录: {BACKUP_DIR}")
-    print(f"监听: http://{args.host}:{args.port}/")
+    print(f"监听: http://localhost:{args.port}/")
     print("同事访问时请使用这台电脑的内网 IP，例如：http://10.31.118.61:9398/")
     print("停止服务：在此窗口按 Ctrl+C")
     print("=" * 70)
