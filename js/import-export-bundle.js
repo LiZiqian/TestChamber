@@ -320,6 +320,7 @@ Object.assign(app, {
       <div class="conflict-rename-row" id="rename_row_${cid}" style="display:none; margin-left:24px">
         SN：<input type="text" id="rename_sn_${cid}" placeholder="修改 SN" style="width:160px">
         IMEI：<input type="text" id="rename_imei_${cid}" placeholder="修改 IMEI" style="width:160px">
+        主板SN：<input type="text" id="rename_board_sn_${cid}" placeholder="修改主板SN" style="width:160px">
         编号：<input type="text" id="rename_sno_${cid}" placeholder="修改编号" style="width:160px">
       </div>
       <label><input type="radio" name="action_${cid}" value="skip"> 跳过</label>
@@ -463,8 +464,9 @@ Object.assign(app, {
         // 样机标识编辑导入
         decision.newSN = (document.getElementById(`rename_sn_${cid}`) || {}).value || "";
         decision.newIMEI = (document.getElementById(`rename_imei_${cid}`) || {}).value || "";
+        decision.newBoardSn = (document.getElementById(`rename_board_sn_${cid}`) || {}).value || "";
         decision.newSampleNo = (document.getElementById(`rename_sno_${cid}`) || {}).value || "";
-        if (!decision.newSN && !decision.newIMEI && !decision.newSampleNo) continue;
+        if (!decision.newSN && !decision.newIMEI && !decision.newBoardSn && !decision.newSampleNo) continue;
       }
 
       if (action === "merge_into_existing") {

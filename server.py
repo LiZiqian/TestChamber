@@ -332,18 +332,21 @@ def backfill_query_state_columns(conn: sqlite3.Connection) -> None:
 
     sample_rows = conn.execute(
         """
-        SELECT id, status, data_json
+        SELECT id, status, has_problem, effective_status, data_json
         FROM sample_records
-        WHERE COALESCE(effective_status, '') = ''
+        WHERE deleted_at IS NULL
         """
     ).fetchall()
     for row in sample_rows:
         sample = json_obj(row["data_json"], {}) or {}
         sample["status"] = row["status"] or sample.get("status") or ""
-        conn.execute(
-            "UPDATE sample_records SET has_problem = ?, effective_status = ? WHERE id = ?",
-            (1 if sample_has_problem(sample) else 0, sample_effective_status(sample), row["id"]),
-        )
+        has_problem = 1 if sample_has_problem(sample) else 0
+        effective_status = sample_effective_status(sample)
+        if int(row["has_problem"] or 0) != has_problem or str(row["effective_status"] or "") != effective_status:
+            conn.execute(
+                "UPDATE sample_records SET has_problem = ?, effective_status = ? WHERE id = ?",
+                (has_problem, effective_status, row["id"]),
+            )
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -2012,6 +2015,8 @@ def load_sample_photo_counts_for(conn: sqlite3.Connection, sample_ids: list[str]
 
 
 def sample_has_problem(sample: dict) -> bool:
+    if sample.get("hasProblem") in (True, 1, "1"):
+        return True
     for record in sample.get("problemRecords") or []:
         if isinstance(record, dict) and str(record.get("description") or "").strip():
             return True
@@ -2020,10 +2025,47 @@ def sample_has_problem(sample: dict) -> bool:
     return False
 
 
+def sample_is_reassembled(sample: dict) -> bool:
+    raw = sample.get("isReassembled") if isinstance(sample, dict) else False
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw == 1
+    text = str(raw or "").strip().lower()
+    return text in {"是", "yes", "y", "true", "1", "重组", "reassembled"}
+
+
+def sample_usage_status(sample: dict) -> str:
+    raw = str(sample.get("status") or "").strip()
+    aliases = {
+        "已分配": "在位等待",
+        "进入测试任务": "测试中",
+        "已归还": "闲置",
+        "借出": "取走分析",
+        "已借出": "取走分析",
+        "待维修": "闲置",
+        "报废": "闲置",
+        "故障": "闲置",
+    }
+    status = aliases.get(raw, raw or "闲置")
+    return status if status in {"测试中", "闲置", "在位等待", "已退库", "取走分析"} else "闲置"
+
+
 def sample_effective_status(sample: dict) -> str:
-    if sample_has_problem(sample):
-        return "故障"
-    return str(sample.get("status") or "闲置").strip() or "闲置"
+    return sample_usage_status(sample)
+
+
+def sample_usage_status_sql_expr(column: str = "status") -> str:
+    value = f"TRIM(COALESCE({column}, ''))"
+    return f"""
+        CASE
+            WHEN {value} IN ('测试中', '闲置', '在位等待', '已退库', '取走分析') THEN {value}
+            WHEN {value} IN ('已分配') THEN '在位等待'
+            WHEN {value} IN ('进入测试任务') THEN '测试中'
+            WHEN {value} IN ('借出', '已借出') THEN '取走分析'
+            ELSE '闲置'
+        END
+    """
 
 
 def sample_search_text(sample: dict) -> str:
@@ -2085,19 +2127,20 @@ def sample_problem_state(query: dict[str, list[str]]) -> str:
     return ""
 
 
-def sample_sql_filter_parts(category_id: str, query: dict[str, list[str]], *, include_status: bool = True) -> tuple[list[str], list[object]]:
+def sample_sql_filter_parts(category_id: str, query: dict[str, list[str]], *, include_status: bool = True, include_problem: bool = True) -> tuple[list[str], list[object]]:
     where = ["category_id = ?", "deleted_at IS NULL"]
     args: list[object] = [category_id]
     if include_status:
         status = first_query_value(query, "status", "").strip()
         if status:
-            where.append("effective_status = ?")
+            where.append(f"{sample_usage_status_sql_expr()} = ?")
             args.append(status)
-    problem_state = sample_problem_state(query)
-    if problem_state == "fault":
-        where.append("has_problem = 1")
-    elif problem_state == "ok":
-        where.append("has_problem = 0")
+    if include_problem:
+        problem_state = sample_problem_state(query)
+        if problem_state == "fault":
+            where.append("has_problem = 1")
+        elif problem_state == "ok":
+            where.append("has_problem = 0")
     owner = first_query_value(query, "owner", "").strip()
     if owner:
         where.append("owner LIKE ?")
@@ -2125,7 +2168,9 @@ def sample_from_db_row(row: sqlite3.Row) -> dict:
         "photosLoaded": False,
     })
     if "effective_status" in row.keys():
-        sample["effectiveStatus"] = row["effective_status"] or sample_effective_status(sample)
+        sample["effectiveStatus"] = sample_effective_status(sample)
+    if "has_problem" in row.keys():
+        sample["hasProblem"] = bool(row["has_problem"])
     return sample
 
 
@@ -2140,17 +2185,30 @@ def list_sample_categories_summary(conn: sqlite3.Connection) -> list[dict]:
         ORDER BY c.sort_order, c.id
         """
     ).fetchall()
+    usage_status_expr = sample_usage_status_sql_expr("status")
     status_rows = conn.execute(
         """
-        SELECT category_id, effective_status, COUNT(*) AS count
+        SELECT category_id, {usage_status_expr} AS effective_status, COUNT(*) AS count
         FROM sample_records
         WHERE deleted_at IS NULL
         GROUP BY category_id, effective_status
-        """
+        """.format(usage_status_expr=usage_status_expr)
     ).fetchall()
     status_by_category: dict[str, dict[str, int]] = {}
     for row in status_rows:
         status_by_category.setdefault(str(row["category_id"]), {})[str(row["effective_status"] or "闲置")] = int(row["count"] or 0)
+    problem_rows = conn.execute(
+        """
+        SELECT category_id, has_problem, COUNT(*) AS count
+        FROM sample_records
+        WHERE deleted_at IS NULL
+        GROUP BY category_id, has_problem
+        """
+    ).fetchall()
+    problem_by_category: dict[str, dict[str, int]] = {}
+    for row in problem_rows:
+        key = "fault" if int(row["has_problem"] or 0) else "ok"
+        problem_by_category.setdefault(str(row["category_id"]), {})[key] = int(row["count"] or 0)
 
     result = []
     for row in rows:
@@ -2161,6 +2219,7 @@ def list_sample_categories_summary(conn: sqlite3.Connection) -> list[dict]:
             "description": row["description"] or cat.get("description") or "",
             "sampleCount": int(row["sample_count"] or 0),
             "statusCounts": status_by_category.get(str(row["id"]), {}),
+            "problemCounts": problem_by_category.get(str(row["id"]), {}),
         })
     return result
 
@@ -2181,6 +2240,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
     if not sample_query_requires_python_scan(query):
         where, args = sample_sql_filter_parts(category_id, query, include_status=True)
         status_where, status_args = sample_sql_filter_parts(category_id, query, include_status=False)
+        problem_where, problem_args = sample_sql_filter_parts(category_id, query, include_problem=False)
         total_in_category = int(conn.execute(
             "SELECT COUNT(*) AS count FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
             (category_id,),
@@ -2193,9 +2253,10 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
         page = min(max(1, page), total_pages)
         offset = (page - 1) * page_size
 
+        usage_status_expr = sample_usage_status_sql_expr("status")
         status_rows = conn.execute(
             f"""
-            SELECT COALESCE(effective_status, '闲置') AS effective_status, COUNT(*) AS count
+            SELECT {usage_status_expr} AS effective_status, COUNT(*) AS count
             FROM sample_records
             WHERE {" AND ".join(status_where)}
             GROUP BY effective_status
@@ -2203,10 +2264,23 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
             status_args,
         ).fetchall()
         status_counts = {str(row["effective_status"] or "闲置"): int(row["count"] or 0) for row in status_rows}
+        problem_rows = conn.execute(
+            f"""
+            SELECT has_problem, COUNT(*) AS count
+            FROM sample_records
+            WHERE {" AND ".join(problem_where)}
+            GROUP BY has_problem
+            """,
+            problem_args,
+        ).fetchall()
+        problem_counts = {
+            ("fault" if int(row["has_problem"] or 0) else "ok"): int(row["count"] or 0)
+            for row in problem_rows
+        }
 
         rows = conn.execute(
             f"""
-            SELECT id, category_id, sample_no, sn, imei, status, effective_status, location, owner, borrower, data_json
+            SELECT id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json
             FROM sample_records
             WHERE {" AND ".join(where)}
             ORDER BY created_at, id
@@ -2235,6 +2309,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
                 "totalInCategory": total_in_category,
                 "filtered": total,
                 "statusCounts": status_counts,
+                "problemCounts": problem_counts,
             },
             "items": page_items,
         }
@@ -2268,7 +2343,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
 
     rows = conn.execute(
         f"""
-        SELECT id, category_id, sample_no, sn, imei, status, location, owner, borrower, data_json
+        SELECT id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json
         FROM sample_records
         WHERE {" AND ".join(where)}
         ORDER BY created_at, id
@@ -2278,10 +2353,15 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
 
     all_items: list[dict] = []
     status_counts: dict[str, int] = {}
+    problem_counts = {"ok": 0, "fault": 0}
     for row in rows:
         sample = sample_from_db_row(row)
         effective = sample_effective_status(sample)
         status_counts[effective] = status_counts.get(effective, 0) + 1
+        if sample_has_problem(sample):
+            problem_counts["fault"] = problem_counts.get("fault", 0) + 1
+        else:
+            problem_counts["ok"] = problem_counts.get("ok", 0) + 1
         if not sample_matches_query(sample, query):
             continue
         sample["effectiveStatus"] = effective
@@ -2304,6 +2384,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
             "totalInCategory": len(rows),
             "filtered": len(all_items),
             "statusCounts": status_counts,
+            "problemCounts": problem_counts,
         },
         "items": page_items,
     }
@@ -2839,14 +2920,18 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
     curr_samples_by_id = {s["id"]: s for s in curr_samples}
     curr_samples_by_sn = {}
     curr_samples_by_imei = {}
+    curr_samples_by_board_sn = {}
     for s in curr_samples:
         sn = (s.get("sn") or "").strip()
         imei = (s.get("imei") or "").strip()
+        board_sn = (s.get("boardSn") or "").strip()
         sno = (s.get("sampleNo") or "").strip()
         if sn:
             curr_samples_by_sn.setdefault(sn, []).append(s)
         if imei:
             curr_samples_by_imei.setdefault(imei, []).append(s)
+        if board_sn:
+            curr_samples_by_board_sn.setdefault(board_sn, []).append(s)
         if sno and not sn:
             curr_samples_by_sn.setdefault(sno, []).append(s)
 
@@ -2944,6 +3029,34 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                     "label": f"{task.get('category','')}-{task.get('testItem','')}",
                     "projectId": pid, "stageId": stage.get("id")})
 
+    def _blocking_sample_identity_match(index: dict, value: str, incoming_sample: dict, incoming_id: str) -> dict | None:
+        if not value:
+            return None
+        for current_sample in index.get(value, []) or []:
+            if current_sample.get("id") == incoming_id:
+                continue
+            if sample_is_reassembled(incoming_sample) or sample_is_reassembled(current_sample):
+                continue
+            return current_sample
+        return None
+
+    def _append_sample_identity_conflict(curr_s: dict, sample: dict, sid: str, match_by: str, label: str) -> None:
+        mergeable = ["location", "owner", "status", "borrower", "sourceStageName", "sourceSkuName"]
+        conflicts.append({
+            "conflictId": _next_conflict_id(),
+            "type": "sample_identity_conflict",
+            "entity": "sample",
+            "currentId": curr_s["id"], "incomingId": sid,
+            "matchBy": match_by,
+            "label": label,
+            "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
+            "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
+            "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
+            "mergeableFields": mergeable,
+            "autoMergeSubData": ["photos", "problemRecords"],
+            "preferredMergeTarget": curr_s["id"],
+        })
+
     # ── 样机匹配 ──
     for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
         cat_name = cat.get("name", "")
@@ -2951,6 +3064,7 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
             sid = sample.get("id", "")
             sn = (sample.get("sn") or "").strip()
             imei = (sample.get("imei") or "").strip()
+            board_sn = (sample.get("boardSn") or "").strip()
             sno = (sample.get("sampleNo") or "").strip()
 
             # 1) ID 相同
@@ -2972,49 +3086,22 @@ def _diff_import_bundle(current: dict, incoming: dict, manifest: dict, _tmp_path
                     })
                 continue
 
-            # 2) SN 相同
-            if sn and sn in curr_samples_by_sn:
-                curr_s = curr_samples_by_sn[sn][0]
-                if curr_s["id"] != sid:
-                    mergeable = ["location", "owner", "status", "borrower", "sourceStageName", "sourceSkuName"]
-                    conflicts.append({
-                        "conflictId": _next_conflict_id(),
-                        "type": "sample_identity_conflict",
-                        "entity": "sample",
-                        "currentId": curr_s["id"], "incomingId": sid,
-                        "matchBy": "sn",
-                        "label": f"SN: {sn}",
-                        "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
-                        "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
-                        "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
-                        "mergeableFields": mergeable,
-                        "autoMergeSubData": ["photos", "problemRecords"],
-                        "preferredMergeTarget": curr_s["id"],
-                    })
-                    continue
+            identity_checks = [
+                ("sn", sn, f"SN: {sn}", curr_samples_by_sn),
+                ("imei", imei, f"IMEI: {imei}", curr_samples_by_imei),
+                ("boardSn", board_sn, f"主板SN: {board_sn}", curr_samples_by_board_sn),
+            ]
+            identity_conflicted = False
+            for match_by, value, label, index in identity_checks:
+                curr_s = _blocking_sample_identity_match(index, value, sample, sid)
+                if curr_s:
+                    _append_sample_identity_conflict(curr_s, sample, sid, match_by, label)
+                    identity_conflicted = True
+                    break
+            if identity_conflicted:
+                continue
 
-            # 3) IMEI 相同
-            if imei and imei in curr_samples_by_imei:
-                curr_s = curr_samples_by_imei[imei][0]
-                if curr_s["id"] != sid:
-                    mergeable = ["location", "owner", "status", "borrower", "sourceStageName", "sourceSkuName"]
-                    conflicts.append({
-                        "conflictId": _next_conflict_id(),
-                        "type": "sample_identity_conflict",
-                        "entity": "sample",
-                        "currentId": curr_s["id"], "incomingId": sid,
-                        "matchBy": "imei",
-                        "label": f"IMEI: {imei}",
-                        "current": {k: curr_s.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
-                        "incoming": {k: sample.get(k) for k in mergeable if curr_s.get(k) != sample.get(k)},
-                        "allowedActions": ["merge_into_existing", "import_as_new_with_identity_edit", "skip"],
-                        "mergeableFields": mergeable,
-                        "autoMergeSubData": ["photos", "problemRecords"],
-                        "preferredMergeTarget": curr_s["id"],
-                    })
-                    continue
-
-            # 4) 新增样机
+            # 2) 新增样机
             auto_apply.append({"type": "new_sample", "id": sid, "sn": sn, "label": _entity_label_for_conflict("sample", sample), "categoryName": cat_name})
 
     # 任务占用冲突检测
@@ -3233,9 +3320,10 @@ def commit_import_bundle(payload: dict) -> dict:
             # 样机标识编辑导入：必须有至少一个新标识字段
             new_sn = (d.get("newSN") or "").strip()
             new_imei = (d.get("newIMEI") or "").strip()
+            new_board_sn = (d.get("newBoardSn") or "").strip()
             new_sample_no = (d.get("newSampleNo") or "").strip()
-            if not new_sn and not new_imei and not new_sample_no:
-                return {"ok": False, "error": f"冲突 {cid} 选择编辑标识导入但未提供新 SN/IMEI/编号", "status": 400}
+            if not new_sn and not new_imei and not new_board_sn and not new_sample_no:
+                return {"ok": False, "error": f"冲突 {cid} 选择编辑标识导入但未提供新 SN/IMEI/主板SN/编号", "status": 400}
         elif action == "apply_field_choices":
             if not isinstance(d.get("fieldChoices") or {}, dict):
                 return {"ok": False, "error": f"冲突 {cid} 的字段选择格式不正确", "status": 400}
@@ -3269,42 +3357,65 @@ def commit_import_bundle(payload: dict) -> dict:
     task_id_map: dict[str, str] = {}     # incomingTID → targetTID
     sample_id_map: dict[str, str] = {}   # incomingSampleID → targetSampleID
     skipped_sample_ids: set[str] = set()
+    fully_imported_project_ids: set[str] = set()
+    fully_imported_stage_ids: set[str] = set()
+    touched_structure_project_ids: set[str] = set()
 
     for auto in result.get("autoApply") or []:
         atype = auto["type"]
         if atype == "new_project":
             pid = auto["id"]
             if pid not in curr_projects and pid in incoming_projects_by_id:
-                curr_projects[pid] = _normalize_project(incoming_projects_by_id[pid])
+                project = _normalize_project(incoming_projects_by_id[pid])
+                curr_projects[pid] = project
                 stats["projectsAdded"] += 1
                 project_id_map[pid] = pid
+                stage_count, task_count, stage_ids = _register_imported_project_tree(project, stage_id_map, task_id_map)
+                stats["stagesAdded"] += stage_count
+                stats["tasksAdded"] += task_count
+                fully_imported_project_ids.add(pid)
+                fully_imported_stage_ids.update(stage_ids)
+                touched_structure_project_ids.add(pid)
         elif atype == "new_stage":
             proj_id = auto.get("projectId", "")
             sid = auto["id"]
-            if proj_id in curr_projects and proj_id in incoming_projects_by_id:
+            target_project_id = project_id_map.get(proj_id, proj_id)
+            if proj_id in fully_imported_project_ids or sid in fully_imported_stage_ids:
+                continue
+            if target_project_id in curr_projects and proj_id in incoming_projects_by_id:
                 inc_proj = incoming_projects_by_id[proj_id]
                 for inc_stage in inc_proj.get("stages") or []:
                     if inc_stage.get("id") == sid:
-                        curr_projects[proj_id].setdefault("stages", []).append(copy.deepcopy(inc_stage))
+                        stage = copy.deepcopy(inc_stage)
+                        curr_projects[target_project_id].setdefault("stages", []).append(stage)
                         stats["stagesAdded"] += 1
-                        stage_id_map[sid] = sid
+                        _, task_count, stage_id = _register_imported_stage_tree(stage, stage_id_map, task_id_map)
+                        stats["tasksAdded"] += task_count
+                        if stage_id:
+                            fully_imported_stage_ids.add(stage_id)
+                        touched_structure_project_ids.add(target_project_id)
                         break
         elif atype == "new_task":
             proj_id = auto.get("projectId", "")
             stage_id = auto.get("stageId", "")
             tid = auto["id"]
-            if proj_id in curr_projects and proj_id in incoming_projects_by_id:
+            target_project_id = project_id_map.get(proj_id, proj_id)
+            target_stage_id = stage_id_map.get(stage_id, stage_id)
+            if proj_id in fully_imported_project_ids or stage_id in fully_imported_stage_ids:
+                continue
+            if target_project_id in curr_projects and proj_id in incoming_projects_by_id:
                 inc_proj = incoming_projects_by_id[proj_id]
                 for inc_stage in inc_proj.get("stages") or []:
                     if inc_stage.get("id") == stage_id:
                         for inc_task in inc_stage.get("tasks") or []:
                             if inc_task.get("id") == tid:
-                                curr_stages = curr_projects[proj_id].setdefault("stages", [])
+                                curr_stages = curr_projects[target_project_id].setdefault("stages", [])
                                 for cs in curr_stages:
-                                    if cs.get("id") == stage_id:
+                                    if cs.get("id") == target_stage_id:
                                         cs.setdefault("tasks", []).append(copy.deepcopy(inc_task))
                                         stats["tasksAdded"] += 1
                                         task_id_map[tid] = tid
+                                        touched_structure_project_ids.add(target_project_id)
                                         break
                                 break
                         break
@@ -3407,14 +3518,21 @@ def commit_import_bundle(payload: dict) -> dict:
                     _merge_project_sub_data(curr_proj, inc_proj)
                     stats["projectsMerged"] += 1
                     project_id_map[ipid] = target_id
+                    touched_structure_project_ids.add(target_id)
             elif action == "rename_import":
                 new_name = d.get("newName", "").strip()
                 if new_name and ipid in incoming_projects_by_id:
                     inc_proj = incoming_projects_by_id[ipid]
                     inc_proj["name"] = new_name
-                    curr_projects[ipid] = _normalize_project(inc_proj)
+                    project = _normalize_project(inc_proj)
+                    curr_projects[ipid] = project
                     stats["projectsAdded"] += 1
                     project_id_map[ipid] = ipid
+                    stage_count, task_count, stage_ids = _register_imported_project_tree(project, stage_id_map, task_id_map)
+                    stats["stagesAdded"] += stage_count
+                    stats["tasksAdded"] += task_count
+                    fully_imported_stage_ids.update(stage_ids)
+                    touched_structure_project_ids.add(ipid)
             elif action == "skip":
                 stats["skipped"] += 1
 
@@ -3437,6 +3555,7 @@ def commit_import_bundle(payload: dict) -> dict:
                                         existing_task_ids.add(tid)
                                 stats["stagesMerged"] += 1
                                 stage_id_map[inc_sid] = target_id
+                                touched_structure_project_ids.add(proj_id)
                                 break
             elif action == "rename_import":
                 new_name = d.get("newName", "").strip()
@@ -3448,8 +3567,14 @@ def commit_import_bundle(payload: dict) -> dict:
                         if found:
                             target_pid = project_id_map.get(inc_pid, inc_pid)
                             if target_pid in curr_projects:
-                                curr_projects[target_pid].setdefault("stages", []).append(copy.deepcopy(inc_stage))
+                                stage = copy.deepcopy(inc_stage)
+                                curr_projects[target_pid].setdefault("stages", []).append(stage)
                                 stats["stagesAdded"] += 1
+                                _, task_count, stage_id = _register_imported_stage_tree(stage, stage_id_map, task_id_map)
+                                stats["tasksAdded"] += task_count
+                                if stage_id:
+                                    fully_imported_stage_ids.add(stage_id)
+                                touched_structure_project_ids.add(target_pid)
                                 stage_id_map[inc_sid] = inc_sid
                             break
             elif action == "skip":
@@ -3493,6 +3618,7 @@ def commit_import_bundle(payload: dict) -> dict:
                                                 cs.setdefault("tasks", []).append(copy.deepcopy(inc_task))
                                                 stats["tasksAdded"] += 1
                                                 task_id_map[inc_tid] = inc_tid
+                                                touched_structure_project_ids.add(target_pid)
                                                 break
                                     break
             elif action == "skip":
@@ -3598,6 +3724,7 @@ def commit_import_bundle(payload: dict) -> dict:
                 inc_id = c.get("incomingId")
                 new_sn = d.get("newSN", "").strip()
                 new_imei = d.get("newIMEI", "").strip()
+                new_board_sn = d.get("newBoardSn", "").strip()
                 new_sample_no = d.get("newSampleNo", "").strip()
                 # 找到导入样机
                 inc_sample = None
@@ -3613,6 +3740,8 @@ def commit_import_bundle(payload: dict) -> dict:
                         inc_sample["sn"] = new_sn
                     if new_imei:
                         inc_sample["imei"] = new_imei
+                    if new_board_sn:
+                        inc_sample["boardSn"] = new_board_sn
                     if new_sample_no:
                         inc_sample["sampleNo"] = new_sample_no
                     # 添加到类别
@@ -3734,6 +3863,17 @@ def commit_import_bundle(payload: dict) -> dict:
     stats["sampleEventsAdded"] = _merge_import_sample_events(
         current_data, incoming, project_id_map, stage_id_map, task_id_map, sample_id_map
     )
+    validation_errors = _validate_import_commit_state(current_data, touched_structure_project_ids)
+    if validation_errors:
+        _cleanup_preview_temp(preview_id)
+        del _IMPORT_PREVIEWS[preview_id]
+        return {
+            "ok": False,
+            "error": "导入后数据一致性校验失败：" + "；".join(validation_errors[:3]),
+            "error_code": "IMPORT_STATE_VALIDATION_FAILED",
+            "validationErrors": validation_errors,
+            "status": 400,
+        }
 
     import_remark = f"导入数据包 (deployment={source_manifest.get('sourceDeploymentId','?')})"
     ok, resp = save_state(current_data, preview_revision, "import-bundle", remark=import_remark, user="数据导入")
@@ -3766,6 +3906,40 @@ def _find_incoming_task(incoming_projects_by_id: dict, task_id: str) -> dict | N
                 if task.get("id") == task_id:
                     return task
     return None
+
+
+def _register_imported_stage_tree(stage: dict, stage_id_map: dict[str, str],
+                                  task_id_map: dict[str, str]) -> tuple[int, int, str | None]:
+    """Register IDs for an imported full stage subtree."""
+    sid = str(stage.get("id") or "")
+    if sid:
+        stage_id_map[sid] = sid
+    task_count = 0
+    for task in stage.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        task_count += 1
+        tid = str(task.get("id") or "")
+        if tid:
+            task_id_map[tid] = tid
+    return 1, task_count, sid or None
+
+
+def _register_imported_project_tree(project: dict, stage_id_map: dict[str, str],
+                                    task_id_map: dict[str, str]) -> tuple[int, int, set[str]]:
+    """Register IDs for an imported full project subtree."""
+    stage_count = 0
+    task_count = 0
+    stage_ids: set[str] = set()
+    for stage in project.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        added_stage_count, added_task_count, sid = _register_imported_stage_tree(stage, stage_id_map, task_id_map)
+        stage_count += added_stage_count
+        task_count += added_task_count
+        if sid:
+            stage_ids.add(sid)
+    return stage_count, task_count, stage_ids
 
 
 def _apply_id_maps(data: dict, project_id_map: dict, stage_id_map: dict,
@@ -3804,6 +3978,52 @@ def _apply_id_maps(data: dict, project_id_map: dict, stage_id_map: dict,
             ct = sample.get("currentTaskId")
             if ct and ct in task_id_map:
                 sample["currentTaskId"] = task_id_map[ct]
+
+
+def _validate_import_commit_state(data: dict, project_ids: set[str]) -> list[str]:
+    """Validate imported project subtrees before writing them to storage."""
+    if not project_ids:
+        return []
+    target_project_ids = {str(pid) for pid in project_ids if pid}
+    sample_ids = {
+        str(sample.get("id"))
+        for cat in (data.get("sampleLibrary") or {}).get("categories") or []
+        for sample in (cat.get("samples") or [])
+        if isinstance(sample, dict) and sample.get("id")
+    }
+    errors: list[str] = []
+
+    for project in data.get("projects") or []:
+        if not isinstance(project, dict):
+            continue
+        project_id = str(project.get("id") or "")
+        if project_id not in target_project_ids:
+            continue
+        seen_stage_ids: set[str] = set()
+        for stage in project.get("stages") or []:
+            if not isinstance(stage, dict):
+                continue
+            stage_id = str(stage.get("id") or "")
+            if stage_id:
+                if stage_id in seen_stage_ids:
+                    errors.append(f"项目 {project_id} 内阶段 ID 重复: {stage_id}")
+                seen_stage_ids.add(stage_id)
+            seen_task_ids: set[str] = set()
+            for task in stage.get("tasks") or []:
+                if not isinstance(task, dict):
+                    continue
+                task_id = str(task.get("id") or "")
+                if task_id:
+                    if task_id in seen_task_ids:
+                        errors.append(f"阶段 {stage_id or '(无ID)'} 内任务 ID 重复: {task_id}")
+                    seen_task_ids.add(task_id)
+                for sample_id in task.get("sampleIds") or []:
+                    sid = str(sample_id or "")
+                    if sid and sid not in sample_ids:
+                        errors.append(f"任务 {task_id or '(无ID)'} 引用不存在的样机: {sid}")
+                if len(errors) >= 20:
+                    return errors
+    return errors
 
 
 def _remap_log_ids(log: dict, project_id_map: dict, stage_id_map: dict,
@@ -4611,6 +4831,90 @@ def detect_task_mutation_occupancy_conflicts(
     return conflicts
 
 
+def task_sample_ids(task: dict) -> set[str]:
+    return {str(x) for x in (task.get("sampleIds") or []) if str(x)}
+
+
+def existing_task_sample_ids(conn: sqlite3.Connection, task_id: str) -> set[str]:
+    row = conn.execute(
+        "SELECT sample_ids_json FROM project_tasks WHERE id = ? AND deleted_at IS NULL",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        return set()
+    sample_ids = json_obj(row["sample_ids_json"], [])
+    if not isinstance(sample_ids, list):
+        return set()
+    return {str(x) for x in sample_ids if str(x)}
+
+
+def existing_finished_task(conn: sqlite3.Connection, task_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT id, status, data_json FROM project_tasks WHERE id = ? AND deleted_at IS NULL",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        return None
+    task = json_obj(row["data_json"], {}) or {}
+    task["id"] = row["id"]
+    task["status"] = row["status"] or task.get("status") or ""
+    if task_flow_status(task) in ("正常完成", "异常终止"):
+        return task
+    return None
+
+
+def sample_record_status(sample: dict) -> str:
+    return str(sample.get("status") or "闲置").strip() or "闲置"
+
+
+def detect_task_mutation_sample_status_blockers(
+    conn: sqlite3.Connection,
+    tasks: list[tuple[str, dict]],
+) -> list[dict]:
+    added_by_sample: dict[str, list[dict]] = {}
+    for task_id, task in tasks:
+        if task_flow_status(task) in ("正常完成", "异常终止"):
+            continue
+        added_ids = task_sample_ids(task) - existing_task_sample_ids(conn, task_id)
+        for sample_id in added_ids:
+            added_by_sample.setdefault(sample_id, []).append({
+                "taskId": task_id,
+                "testItem": str(task.get("testItem") or ""),
+                "status": str(task.get("status") or ""),
+            })
+    if not added_by_sample:
+        return []
+    placeholders = ",".join("?" for _ in added_by_sample)
+    rows = conn.execute(
+        f"""
+        SELECT id, sample_no, sn, imei, status, data_json
+        FROM sample_records
+        WHERE deleted_at IS NULL AND id IN ({placeholders})
+        """,
+        tuple(added_by_sample.keys()),
+    ).fetchall()
+    blockers = []
+    for row in rows:
+        sample = json_obj(row["data_json"], {}) or {}
+        sample["id"] = row["id"]
+        sample["sampleNo"] = row["sample_no"] or sample.get("sampleNo") or ""
+        sample["sn"] = row["sn"] or sample.get("sn") or ""
+        sample["imei"] = row["imei"] or sample.get("imei") or ""
+        sample["status"] = row["status"] or sample.get("status") or ""
+        status = sample_record_status(sample)
+        if status == "闲置":
+            continue
+        blockers.append({
+            "sampleId": str(row["id"] or ""),
+            "sampleNo": str(sample.get("sampleNo") or ""),
+            "sn": str(sample.get("sn") or ""),
+            "imei": str(sample.get("imei") or ""),
+            "status": status,
+            "tasks": added_by_sample.get(str(row["id"] or ""), []),
+        })
+    return blockers
+
+
 def commit_task_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
     task = payload.get("task")
     if not isinstance(task, dict):
@@ -4629,7 +4933,28 @@ def commit_task_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
             row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
             current_revision = int(row["revision"]) if row else 1
             is_delete = str(payload.get("deleteMode") or "") == "delete"
+            action = str(payload.get("action") or "task_mutation")
+            if action == "finish_task_result":
+                finished = existing_finished_task(conn, task_id)
+                if finished:
+                    return False, {
+                        "status": 409,
+                        "error_code": "TASK_ALREADY_FINISHED",
+                        "error": "任务已经结束，已拒绝重复结束请求。",
+                        "taskId": task_id,
+                        "taskStatus": str(finished.get("status") or ""),
+                        "server_revision": current_revision,
+                    }
             if not is_delete:
+                status_blockers = detect_task_mutation_sample_status_blockers(conn, [(task_id, task)])
+                if status_blockers:
+                    return False, {
+                        "status": 409,
+                        "error_code": "SAMPLE_STATUS_NOT_SELECTABLE",
+                        "error": "样机状态不可选：只有闲置样机可以加入测试任务，已拒绝保存。",
+                        "samples": status_blockers,
+                        "server_revision": current_revision,
+                    }
                 conflicts = detect_task_mutation_occupancy_conflicts(conn, task_id, task, project_id, stage_id)
                 if conflicts:
                     return False, {
@@ -4658,7 +4983,6 @@ def commit_task_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
 
             new_revision = current_revision + 1
             updated_at = now_iso()
-            action = str(payload.get("action") or "task_mutation")
             remark = str(payload.get("remark") or "任务增量变更")
             user = str(payload.get("user") or "")
             conn.execute(
@@ -4726,6 +5050,19 @@ def commit_task_batch_mutation(payload: dict, client_ip: str) -> tuple[bool, dic
             ).fetchone()
             if not stage_row:
                 return False, {"status": 404, "error": f"阶段不存在: {stage_id}"}
+
+            status_blockers = detect_task_mutation_sample_status_blockers(
+                conn,
+                [(str(task.get("id") or ""), task) for task in normalized_tasks],
+            )
+            if status_blockers:
+                return False, {
+                    "status": 409,
+                    "error_code": "SAMPLE_STATUS_NOT_SELECTABLE",
+                    "error": "样机状态不可选：只有闲置样机可以加入测试任务，已拒绝保存。",
+                    "samples": status_blockers,
+                    "server_revision": current_revision,
+                }
 
             update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
             create_if_missing = bool(payload.get("createIfMissing"))

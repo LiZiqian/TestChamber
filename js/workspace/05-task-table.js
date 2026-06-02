@@ -50,13 +50,13 @@ Object.assign(app, {
     return Math.min(500, Math.max(20, n));
   },
 
-  taskFlowPagerHtml(page, totalPages, total, pageSize) {
+  taskFlowPagerHtml(page, totalPages, total, pageSize, { loading = false } = {}) {
     const start = total ? (page - 1) * pageSize + 1 : 0;
     const end = total ? Math.min(total, page * pageSize) : 0;
     const pageBtn = (label, target, disabled = false) => `
-      <button type="button" class="btn btn-sm btn-outline" ${disabled ? "disabled" : `onclick="app.setTaskFlowPage(${target})"`}>${label}</button>`;
+      <button type="button" class="btn btn-sm btn-outline" ${disabled || loading ? "disabled" : `onclick="app.setTaskFlowPage(${target})"`}>${label}</button>`;
     return `
-      <div class="list-pager task-flow-pager">
+      <div class="list-pager task-flow-pager ${loading ? "is-loading" : ""}">
         <span class="path">显示 ${start}-${end} / ${total} 条</span>
         <div class="list-pager-controls">
           ${pageBtn("上一页", page - 1, page <= 1)}
@@ -65,6 +65,7 @@ Object.assign(app, {
           <select onchange="app.setTaskFlowPageSize(this.value)">
             ${[50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
           </select>
+          ${loading ? `<span class="path list-pager-loading">加载中...</span>` : ""}
         </div>
       </div>`;
   },
@@ -134,49 +135,31 @@ Object.assign(app, {
   workspaceTaskFlowHtml(project, stage) {
     const f = this.view.taskFlowFilters || {};
     const allRows = this.taskRowsForStage(stage);
-    const match = (actual, expected) => !expected || String(actual || "") === String(expected);
-    const catKw = String(f.categoryKeyword || "").trim().toLowerCase();
-    const caseKw = String(f.caseKeyword || "").trim().toLowerCase();
-    const dtsKw = String(f.dtsKeyword || "").trim().toLowerCase();
-    const resultKw = String(f.resultKeyword || "").trim().toLowerCase();
-    const filtered = allRows.filter(row => {
-      const i = this.taskInfoForRow(stage, row);
-      if (f.sku && String(i.skuIndex || "") !== String(f.sku)) return false;
-      if (catKw && !i.category.toLowerCase().includes(catKw)) return false;
-      if (caseKw && !i.testItem.toLowerCase().includes(caseKw)) return false;
-      if (!match(i.ownerName, f.ownerName)) return false;
-      if (!match(i.flowStatus, f.flowStatus)) return false;
-      if (dtsKw) {
-        const dtsNo = String(row.task?.issueRecord?.dtsNo || "").toLowerCase();
-        if (!dtsNo.includes(dtsKw)) return false;
-      }
-      if (resultKw) {
-        const searchText = this.taskResultSearchText(project, stage, row.task);
-        if (!searchText.includes(resultKw)) return false;
-      }
-      return true;
-    });
     const params = this.taskFlowQueryParams(stage);
     const cacheKey = this.taskFlowCacheKey(stage, params);
     const cached = this._taskFlowPageCache?.key === cacheKey ? this._taskFlowPageCache : null;
     if (!cached) this.loadTaskFlowPage(project, stage, cacheKey, params);
     const pageSize = params.pageSize;
-    const total = cached?.total ?? filtered.length;
+    const total = cached?.total ?? allRows.length;
     const totalPages = cached?.totalPages ?? Math.max(1, Math.ceil(total / pageSize));
     const page = Math.min(Math.max(1, cached?.page || params.page), totalPages);
     this.view.taskFlowPage = page;
     const rows = cached?.rows || [];
-    const pagerHtml = this.taskFlowPagerHtml(page, totalPages, total, pageSize);
+    const pagerHtml = this.taskFlowPagerHtml(page, totalPages, total, pageSize, { loading: !cached });
 
     const statusCounts = cached?.stats?.statusCounts || {};
-    const pendingTasks = cached ? (statusCounts["待下发"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "待下发").length;
-    const runningTasks = cached ? (statusCounts["进行中"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "进行中").length;
-    const blockedTasks = cached ? (statusCounts["阻塞中"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "阻塞中").length;
-    const abnormalTasks = cached ? (statusCounts["异常终止"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "异常终止").length;
-    const finishedTasks = cached ? (statusCounts["正常完成"] || 0) : allRows.filter(row => this.taskInfoForRow(stage, row).flowStatus === "正常完成").length;
+    const infos = allRows.map(row => this.taskInfoForRow(stage, row));
+    const localStatusCounts = cached ? {} : infos.reduce((acc, i) => {
+      acc[i.flowStatus] = (acc[i.flowStatus] || 0) + 1;
+      return acc;
+    }, {});
+    const pendingTasks = cached ? (statusCounts["待下发"] || 0) : (localStatusCounts["待下发"] || 0);
+    const runningTasks = cached ? (statusCounts["进行中"] || 0) : (localStatusCounts["进行中"] || 0);
+    const blockedTasks = cached ? (statusCounts["阻塞中"] || 0) : (localStatusCounts["阻塞中"] || 0);
+    const abnormalTasks = cached ? (statusCounts["异常终止"] || 0) : (localStatusCounts["异常终止"] || 0);
+    const finishedTasks = cached ? (statusCounts["正常完成"] || 0) : (localStatusCounts["正常完成"] || 0);
     const totalTasks = cached?.stats?.totalInStage ?? allRows.length;
 
-    const infos = allRows.map(row => this.taskInfoForRow(stage, row));
     const optHtml = (values, cur) => {
       const arr = [...new Set((values || []).map(v => String(v ?? "").trim()).filter(v => v))].sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
       return `<option value="">全部</option>` + arr.map(v => `<option value="${Utils.esc(v)}" ${String(cur || "") === v ? 'selected' : ''}>${Utils.esc(v)}</option>`).join("");
@@ -186,8 +169,8 @@ Object.assign(app, {
       return `<option value="${value}" ${String(f.sku || "") === value ? "selected" : ""}>${Utils.esc(name || `SKU${idx + 1}`)}</option>`;
     }).join("");
     const loadingRow = !cached
-      ? `<tr><td colspan="9" class="empty">正在加载服务器分页数据...</td></tr>`
-      : (cached.error ? `<tr><td colspan="9" class="empty">任务分页加载失败：${Utils.esc(cached.error)}</td></tr>` : "");
+      ? `<tr><td colspan="10" class="empty">正在加载服务器分页数据...</td></tr>`
+      : (cached.error ? `<tr><td colspan="10" class="empty">任务分页加载失败：${Utils.esc(cached.error)}</td></tr>` : "");
 
     return `
       <div class="section-head">
@@ -207,31 +190,31 @@ Object.assign(app, {
           <div class="task-flow-stat stat-done"><b>${finishedTasks}</b><span>正常完成</span></div>
         </div>
         <div class="task-filter-bar">
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-sku">
             <label>方案(SKU)</label>
             <select onchange="app.setTaskFlowFilter('sku',this.value)">${skuOptions}</select>
           </div>
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-keyword">
             <label>类别搜索</label>
             <input type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('categoryKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'categoryKeyword',this.value)">
           </div>
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-keyword">
             <label>用例搜索</label>
             <input type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('caseKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'caseKeyword',this.value)">
           </div>
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-person">
             <label>执行人</label>
             <select onchange="app.setTaskFlowFilter('ownerName',this.value)">${optHtml(infos.map(i => i.ownerName), f.ownerName)}</select>
           </div>
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-status">
             <label>状态</label>
             <select onchange="app.setTaskFlowFilter('flowStatus',this.value)">${optHtml(["待下发", "进行中", "阻塞中", "异常终止", "正常完成"], f.flowStatus)}</select>
           </div>
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-short">
             <label>DTS单号</label>
             <input type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('dtsKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'dtsKeyword',this.value)">
           </div>
-          <div class="task-filter-item">
+          <div class="task-filter-item filter-result">
             <label>测试结果关键词</label>
             <input type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('resultKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'resultKeyword',this.value)">
           </div>
@@ -242,12 +225,13 @@ Object.assign(app, {
         ${pagerHtml}
         <div class="table-wrap task-flow-table"><table>
           <thead>
-<tr><th style="font-weight:700">方案(SKU)</th><th style="font-weight:700">类别/用例</th><th style="font-weight:700">执行人</th><th style="font-weight:700">启动/完成时间</th><th style="font-weight:700">样机</th><th style="font-weight:700">测试结果</th><th style="font-weight:700">问题单</th><th style="font-weight:700">状态</th><th style="font-weight:700">操作</th></tr>
+<tr><th style="font-weight:700">序号</th><th style="font-weight:700">方案(SKU)</th><th style="font-weight:700">类别/用例</th><th style="font-weight:700">执行人</th><th style="font-weight:700">启动/完成时间</th><th style="font-weight:700">样机</th><th style="font-weight:700">测试结果</th><th style="font-weight:700">问题单</th><th style="font-weight:700">状态</th><th style="font-weight:700">操作</th></tr>
           </thead>
-          <tbody>${loadingRow || rows.map(row => {
+          <tbody>${loadingRow || rows.map((row, rowIndex) => {
       const t = row.task;
       const progressId = row.progress?.id || t?.progressId || "";
       const taskId = t?.id || "";
+      const sequence = (page - 1) * pageSize + rowIndex + 1;
       const i = this.taskInfoForRow(stage, row);
       const pending = i.flowStatus === "待下发";
       const running = i.flowStatus === "进行中";
@@ -270,6 +254,7 @@ Object.assign(app, {
       const sampleHtml = `<div class="task-sample-cell"><span class="task-sample-count"><span class="task-sample-count-num">${sampleCount}</span> 台</span>${sampleCount && taskId ? `<button class="btn btn-sm btn-outline" onclick="app.showTaskSamples('${project.id}','${stage.id}','${taskId}')">查看</button>` : ""}</div>`;
       return `
               <tr>
+                <td class="task-seq-cell">${sequence}</td>
                 <td class="task-sku-cell">${Utils.esc(i.sku)}</td>
                 <td class="compact-cell">${catHtml}</td>
                 <td>${execHtml}</td>
@@ -280,10 +265,10 @@ Object.assign(app, {
                 <td><span class="badge ${this.taskStatusBadgeClass(flowStatus)}">${Utils.esc(flowStatus)}</span></td>
                 <td class="op-cell task-op-cell-new">${actionsHtml}</td>
               </tr>`;
-    }).join("") || `<tr><td colspan="9" class="empty">暂无任务。请点击"新增任务"，从阶段配置的测试池中选择测试项。</td></tr>`}
-      ${rows.length ? `<tr class="task-flow-buffer-row" aria-hidden="true"><td colspan="9"></td></tr>` : ""}</tbody>
+    }).join("") || `<tr><td colspan="10" class="empty">暂无任务。请点击"新增任务"，从阶段配置的测试池中选择测试项。</td></tr>`}
+      ${rows.length ? `<tr class="task-flow-buffer-row" aria-hidden="true"><td colspan="10"></td></tr>` : ""}</tbody>
         </table></div>
-        ${filtered.length > pageSize ? pagerHtml : ""}
+        ${total > pageSize ? pagerHtml : ""}
         <div class="task-add-footer">
           <button class="task-add-main" onclick="app.openAddTasksFromPoolModal()">
             <span class="row-action-btn row-add-btn"></span>

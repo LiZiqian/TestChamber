@@ -8,6 +8,41 @@ Object.assign(app, {
     return [...document.querySelectorAll(`input[name='${inputName}']:checked`)].map(x => x.value);
   },
 
+  async ensureTaskSamplePickerDataLoaded() {
+    const categories = this.data?.sampleLibrary?.categories || [];
+    const needLoad = categories.filter(category => {
+      const expected = Number(category?.sampleCount || 0);
+      const current = Array.isArray(category?.samples) ? category.samples.length : 0;
+      return expected > 0 && (category.samplesLoaded !== true || current < expected);
+    });
+    if (!needLoad.length) return true;
+    if (this._taskSamplePickerDataPromise) return this._taskSamplePickerDataPromise;
+
+    this._taskSamplePickerDataPromise = Promise.all(
+      needLoad.map(category => this.ensureSampleCategoryLoaded(category.id, {
+        includePhotos: false,
+        render: false
+      }))
+    ).then(results => {
+      if (results.some(item => !item)) return false;
+      const incomplete = needLoad.filter(category => {
+        const loaded = (this.data.sampleLibrary.categories || [])
+          .find(item => String(item.id || "") === String(category.id || ""));
+        const expected = Number(loaded?.sampleCount || category.sampleCount || 0);
+        const current = Array.isArray(loaded?.samples) ? loaded.samples.length : 0;
+        return expected > 0 && (loaded?.samplesLoaded !== true || current < expected);
+      });
+      if (incomplete.length) {
+        alert(`任务样机数据加载不完整：${incomplete.map(c => c.name || c.id).join("、")}。请刷新后重试。`);
+        return false;
+      }
+      return true;
+    }).finally(() => {
+      this._taskSamplePickerDataPromise = null;
+    });
+    return this._taskSamplePickerDataPromise;
+  },
+
   validateTaskSampleSelection(progress, sampleIds, contextLabel = "任务") {
     const s = this.currentStage();
     const required = this.getProgressRequiredSampleCount(s, progress);
@@ -90,6 +125,20 @@ Object.assign(app, {
     this.updateTaskSampleLimitUI(progressSelectId, inputName, hintId);
   },
 
+  onTaskSampleRowClick(event, inputName, progressSelectId = "", hintId = "") {
+    const target = event?.target;
+    if (target?.closest?.("input, label, button, select, textarea, .dispatch-sample-id")) return;
+    const row = event?.currentTarget || target?.closest?.(".dispatch-sample-row");
+    const checkbox = row?.querySelector?.(`input[type="checkbox"][name="${inputName}"]`);
+    if (!checkbox || checkbox.disabled) return;
+    checkbox.checked = !checkbox.checked;
+    if (progressSelectId && hintId) {
+      this.onTaskSampleCheckboxChange(progressSelectId, inputName, hintId, checkbox);
+    } else {
+      this.updateDispatchSamplePoolCounts(inputName);
+    }
+  },
+
   getAssignSampleSearchText(sample) {
     if (!sample) return "";
     const parts = [
@@ -107,7 +156,6 @@ Object.assign(app, {
 
   buildTaskSamplePickerHtml(selectedIds = [], inputName = "samplePick", progressSelectId = "", hintId = "", excludeTaskId = "") {
     const selectedSet = new Set(selectedIds || []);
-    const hardBlockedStatuses = new Set(["已退库", "取走分析", "已借出"]);
     const candidates = this.allSamples();
     const grouped = {};
     candidates.forEach(x => { const key = x.categoryName || "未分类"; if (!grouped[key]) grouped[key] = []; grouped[key].push(x); });
@@ -136,9 +184,10 @@ Object.assign(app, {
             ${samples.map(x => {
         const selected = selectedSet.has(x.id);
         const occupiedByOpenTask = this.isSampleUsedByAnotherOpenTask(x.id, excludeTaskId);
-        const hardBlocked = hardBlockedStatuses.has(x.status);
-        const canPick = selected || (!occupiedByOpenTask && !hardBlocked);
-        const disabledReason = occupiedByOpenTask ? "样机已被其他未完成任务占用" : (hardBlocked ? "当前状态不能加入测试任务" : "");
+        const status = this.normalizeSampleStatusValue(x.status);
+        const statusBlocked = status !== "闲置";
+        const canPick = selected || (!occupiedByOpenTask && !statusBlocked);
+        const disabledReason = occupiedByOpenTask ? "样机已被其他未完成任务占用" : (statusBlocked ? `当前状态为「${status}」，不能加入测试任务` : "");
         // 身份号优先级：SN > IMEI > 主板SN
         const identity = x.sn ? `SN: ${Utils.esc(x.sn)}` : x.imei ? `IMEI: ${Utils.esc(x.imei)}` : x.boardSn ? `主板SN: ${Utils.esc(x.boardSn)}` : "身份号未录入";
         // 阶段/方案
@@ -156,14 +205,14 @@ Object.assign(app, {
             ? Utils.esc(testedItems.join("、"))
             : `${Utils.esc(testedItems.slice(0, 3).join("、"))} 等 ${testedItems.length} 项`;
         return `
-              <div class="dispatch-sample-row ${canPick ? "" : "is-disabled"}" title="${Utils.esc(disabledReason)}" data-search-text="${Utils.esc(this.getAssignSampleSearchText(x))}">
+              <div class="dispatch-sample-row ${canPick ? "" : "is-disabled"}" onclick="app.onTaskSampleRowClick(event,'${inputName}','${progressSelectId}','${hintId}')" title="${Utils.esc(disabledReason)}" data-search-text="${Utils.esc(this.getAssignSampleSearchText(x))}">
                 <label class="dispatch-sample-check"><input type="checkbox" name="${inputName}" value="${x.id}" data-sample-pick="${inputName}" ${selected ? "checked" : ""} ${canPick ? "" : "disabled"} ${canPick ? changeAttr : ""}></label>
                 <div class="dispatch-sample-info">
                   <span class="dispatch-sample-id" onclick="event.preventDefault();event.stopPropagation();app.openSampleReadonly('${x.id}')">${identity}</span>
                   <span class="dispatch-sample-stage">阶段/方案：${stageSku}</span>
                   <span class="dispatch-sample-tested">已测：${testedText}</span>
                 </div>
-                <span class="dispatch-sample-status"><span class="badge ${this.sampleHasProblem(x) ? 's-故障' : 's-OK'}">${this.sampleHasProblem(x) ? '故障' : 'OK'}</span> <span class="badge s-${Utils.esc(x.status)}">${Utils.esc(x.status)}</span></span>
+                <span class="dispatch-sample-status"><span class="badge ${this.sampleHasProblem(x) ? 's-故障' : 's-OK'}">${this.sampleHasProblem(x) ? '故障' : 'OK'}</span> <span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span></span>
               </div>`;
       }).join("")}
           </div>

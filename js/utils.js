@@ -157,6 +157,7 @@ const Utils = {
       'IMEI': ['imei', 'imei号', 'imei1', 'IMEI号'],
       'SN': ['sn', 'sn号', 'SN号', '序列号', 'serial'],
       '主板SN': ['主板SN', '主板SN号', '主板序列号', 'board sn', 'main board sn', 'motherboard sn'],
+      '重组样机': ['是否重组样机', '重组样机', '是否重组', '重组', 'reassembled', 'is reassembled'],
       '样机状态': ['样机状态', '状态', 'status'],
       '带入位置': ['带入位置', '位置', '样机位置', '入库位置', '存放位置', 'location'],
       '标签': ['标签', 'tag', 'label'],
@@ -183,6 +184,16 @@ const Utils = {
       return `${y}-${String(Number(m)).padStart(2, "0")}-${String(Number(d)).padStart(2, "0")}`;
     }
     return raw;
+  },
+
+  parseSampleReassembledFlag(v) {
+    if (typeof v === "boolean") return v;
+    if (typeof v === "number") return v === 1;
+    const text = String(v ?? "").trim().toLowerCase();
+    if (!text) return false;
+    if (["是", "yes", "y", "true", "1", "重组", "reassembled"].includes(text)) return true;
+    if (["否", "no", "n", "false", "0", "非重组", "不是"].includes(text)) return false;
+    return false;
   },
 
   /** 解析姓名/工号字段: 格式为 "姓名/工号"
@@ -298,6 +309,7 @@ const Utils = {
         imei: imei,
         sn: sn,
         boardSn: boardSn,
+        isReassembled: Utils.parseSampleReassembledFlag(get('重组样机')),
         status: get('样机状态') || '闲置',
         location: get('带入位置') || '',
         tag: get('标签') || '',

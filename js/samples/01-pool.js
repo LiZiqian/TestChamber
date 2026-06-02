@@ -5,13 +5,13 @@
 
 Object.assign(app, {
 
-  samplePagerHtml(page, totalPages, total, pageSize) {
+  samplePagerHtml(page, totalPages, total, pageSize, { loading = false } = {}) {
     const start = total ? (page - 1) * pageSize + 1 : 0;
     const end = total ? Math.min(total, page * pageSize) : 0;
     const pageBtn = (label, target, disabled = false) => `
-      <button type="button" class="btn btn-sm btn-outline" ${disabled ? "disabled" : `onclick="app.setSamplePage(${target})"`}>${label}</button>`;
+      <button type="button" class="btn btn-sm btn-outline" ${disabled || loading ? "disabled" : `onclick="app.setSamplePage(${target})"`}>${label}</button>`;
     return `
-      <div class="list-pager sample-pager">
+      <div class="list-pager sample-pager ${loading ? "is-loading" : ""}">
         <div class="sample-pager-row">
           <span class="path">显示 ${start}-${end} / ${total} 台</span>
           ${pageBtn("上一页", page - 1, page <= 1)}
@@ -20,13 +20,16 @@ Object.assign(app, {
           <select class="sample-page-size-select" onchange="app.setSamplePageSize(this.value)">
             ${[50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
           </select>
+          ${loading ? `<span class="path sample-pager-loading">加载中...</span>` : ""}
         </div>
       </div>`;
   },
 
   setSamplePage(page) {
     this.view.samplePage = Math.max(1, Number.parseInt(page, 10) || 1);
-    this.renderSamples();
+    const cat = this.data.sampleLibrary.categories.find(c => c.id === this.view.selectedCategoryId);
+    if (this.view.module === "samples" && cat) this.refreshSamplePageRegion(cat);
+    else this.renderSamples();
   },
 
   setSamplePageSize(size) {
@@ -59,6 +62,53 @@ Object.assign(app, {
     return JSON.stringify({ categoryId: cat?.id || "", ...params });
   },
 
+  samplePageFilterKey(cat, params) {
+    const copy = { ...(params || {}) };
+    delete copy.page;
+    return JSON.stringify({ categoryId: cat?.id || "", ...copy });
+  },
+
+  samplePageCacheStore() {
+    if (!(this._samplePageCaches instanceof Map)) this._samplePageCaches = new Map();
+    return this._samplePageCaches;
+  },
+
+  samplePageMetaStore() {
+    if (!(this._samplePageMetaCaches instanceof Map)) this._samplePageMetaCaches = new Map();
+    return this._samplePageMetaCaches;
+  },
+
+  samplePageLoadingSet() {
+    if (!(this._samplePageLoadingKeys instanceof Set)) this._samplePageLoadingKeys = new Set();
+    return this._samplePageLoadingKeys;
+  },
+
+  getSamplePageCache(key) {
+    return this.samplePageCacheStore().get(key) || (this._samplePageCache?.key === key ? this._samplePageCache : null);
+  },
+
+  setSamplePageCache(entry) {
+    if (!entry?.key) return;
+    const store = this.samplePageCacheStore();
+    store.set(entry.key, entry);
+    while (store.size > 24) store.delete(store.keys().next().value);
+    this._samplePageCache = entry;
+  },
+
+  setSamplePageMeta(filterKey, entry) {
+    if (!filterKey || !entry) return;
+    const store = this.samplePageMetaStore();
+    store.set(filterKey, {
+      categoryId: entry.categoryId,
+      total: Number(entry.total || 0),
+      totalPages: Number(entry.totalPages || 1),
+      pageSize: Number(entry.pageSize || 100),
+      stats: entry.stats || {},
+      category: entry.category || {}
+    });
+    while (store.size > 24) store.delete(store.keys().next().value);
+  },
+
   loadSampleCategorySummary() {
     if (this._sampleCategorySummaryLoaded || this._sampleCategorySummaryLoading) return;
     this._sampleCategorySummaryLoading = true;
@@ -80,12 +130,16 @@ Object.assign(app, {
       });
   },
 
-  loadSamplePage(cat, key, params) {
-    if (!cat?.id || this._samplePageLoadingKey === key) return;
+  loadSamplePage(cat, key, params, { prefetch = false } = {}) {
+    if (!cat?.id || this.getSamplePageCache(key)) return;
+    const loadingSet = this.samplePageLoadingSet();
+    if (loadingSet.has(key)) return;
+    loadingSet.add(key);
     this._samplePageLoadingKey = key;
     this.fetchSamplePage(cat.id, params)
       .then(result => {
-        this._samplePageLoadingKey = "";
+        loadingSet.delete(key);
+        if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
         const items = result.items || [];
         const byId = new Map((cat.samples || []).map(sample => [String(sample.id || ""), sample]));
         items.forEach(sample => {
@@ -100,15 +154,105 @@ Object.assign(app, {
         Object.assign(cat, result.category || {});
         cat.sampleCount = result.stats?.totalInCategory ?? result.total ?? cat.sampleCount;
         cat.statusCounts = result.stats?.statusCounts || cat.statusCounts || {};
-        this._samplePageCache = { key, categoryId: cat.id, ...result, items };
-        if (this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.renderSamples();
+        cat.problemCounts = result.stats?.problemCounts || cat.problemCounts || {};
+        const entry = { key, filterKey: this.samplePageFilterKey(cat, params), categoryId: cat.id, ...result, items };
+        this.setSamplePageCache(entry);
+        this.setSamplePageMeta(entry.filterKey, entry);
+        if (!prefetch && this.view.module === "samples" && this.view.selectedCategoryId === cat.id) {
+          this.refreshSamplePageRegion(cat);
+          this.prefetchAdjacentSamplePages(cat, entry, params);
+        }
       })
       .catch(e => {
-        this._samplePageLoadingKey = "";
-        this._samplePageCache = { key, categoryId: cat.id, error: e.message, items: [] };
+        loadingSet.delete(key);
+        if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
+        this.setSamplePageCache({ key, filterKey: this.samplePageFilterKey(cat, params), categoryId: cat.id, error: e.message, items: [], page: params.page, pageSize: params.pageSize, total: 0, totalPages: 1 });
         console.error("样机分页加载失败：", e);
-        if (this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.renderSamples();
+        if (!prefetch && this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.refreshSamplePageRegion(cat);
       });
+  },
+
+  prefetchAdjacentSamplePages(cat, entry, params) {
+    if (this._samplePagePrefetchDisabled || !entry || entry.error) return;
+    const page = Number.parseInt(entry.page || params.page, 10) || 1;
+    const totalPages = Number.parseInt(entry.totalPages || 1, 10) || 1;
+    const candidates = [page + 1, page - 1].filter(p => p >= 1 && p <= totalPages);
+    if (!candidates.length) return;
+    const run = () => candidates.forEach(targetPage => {
+      const nextParams = { ...params, page: targetPage };
+      const key = this.samplePageCacheKey(cat, nextParams);
+      if (!this.getSamplePageCache(key) && !this.samplePageLoadingSet().has(key)) {
+        this.loadSamplePage(cat, key, nextParams, { prefetch: true });
+      }
+    });
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(run, { timeout: 600 });
+    } else if (typeof setTimeout === "function") {
+      setTimeout(run, 80);
+    } else {
+      run();
+    }
+  },
+
+  samplePageState(cat, { startLoad = true } = {}) {
+    const params = this.samplePageQueryParams(cat);
+    const key = this.samplePageCacheKey(cat, params);
+    const filterKey = this.samplePageFilterKey(cat, params);
+    const cached = this.getSamplePageCache(key);
+    const meta = cached || this.samplePageMetaStore().get(filterKey) || null;
+    if (!cached && startLoad) this.loadSamplePage(cat, key, params);
+    const loading = !cached && this.samplePageLoadingSet().has(key);
+    const pageSize = Number.parseInt(cached?.pageSize || meta?.pageSize || params.pageSize, 10) || params.pageSize;
+    const fallbackTotal = Number(cat.sampleCount ?? (Array.isArray(cat.samples) ? cat.samples.length : 0)) || 0;
+    const total = Number(cached?.total ?? meta?.total ?? fallbackTotal) || 0;
+    const totalPages = Number(cached?.totalPages ?? meta?.totalPages ?? Math.max(1, Math.ceil(total / pageSize))) || 1;
+    const rawPage = Number.parseInt(cached?.page || params.page, 10) || 1;
+    const page = Math.min(Math.max(1, rawPage), totalPages);
+    this.view.samplePage = page;
+    return { cat, params, key, filterKey, cached, meta, loading, page, pageSize, total, totalPages, items: cached?.items || [] };
+  },
+
+  samplePoolCountText(cat, state) {
+    const totalInCategory = state.cached?.stats?.totalInCategory
+      ?? state.meta?.stats?.totalInCategory
+      ?? cat.sampleCount
+      ?? (cat.samples || []).length;
+    return state.loading && !state.cached
+      ? `加载第 ${state.page} 页 / ${totalInCategory} 台`
+      : `显示 ${state.total} / ${totalInCategory} 台`;
+  },
+
+  samplePageGridHtml(cat, state) {
+    const addCard = `
+        <div class="card add-card" onclick="app.addSample('${cat.id}')">
+          <div class="add-card-plus">+</div>
+          <div class="add-card-label">新增样机</div>
+        </div>`;
+    const body = state.loading && !state.cached
+      ? `<div class="empty sample-empty-hint sample-page-loading">正在加载第 ${state.page} 页样机...</div>`
+      : state.cached?.error
+        ? `<div class="empty sample-empty-hint">样机分页加载失败：${Utils.esc(state.cached.error)}</div>`
+        : (state.items.length ? state.items.map(s => this.sampleCardHtml(s)).join("") : `<div class="empty sample-empty-hint">暂无样机</div>`);
+    return `${addCard}${body}`;
+  },
+
+  refreshSamplePageRegion(cat) {
+    const shell = document.getElementById("samplePageShell");
+    if (!shell || shell.dataset.categoryId !== String(cat.id || "")) {
+      this.renderSamples();
+      return;
+    }
+    const state = this.samplePageState(cat);
+    const pagerHtml = this.samplePagerHtml(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached });
+    shell.dataset.pageKey = state.key;
+    const topPager = document.getElementById("samplePagerTop");
+    const bottomPager = document.getElementById("samplePagerBottom");
+    const count = document.getElementById("samplePoolCount");
+    const grid = document.getElementById("samplePoolGrid");
+    if (topPager) topPager.innerHTML = pagerHtml;
+    if (bottomPager) bottomPager.innerHTML = state.total > state.pageSize ? pagerHtml : "";
+    if (count) count.innerText = this.samplePoolCountText(cat, state);
+    if (grid) grid.innerHTML = this.samplePageGridHtml(cat, state);
   },
 
   renderSamples() {
@@ -138,64 +282,35 @@ Object.assign(app, {
         const ft = document.getElementById("pageFooter");
         if (ft) {
           ft.style.display = "";
-          ft.innerHTML = `<p class="page-footer-text">📦 可创建多个样机池 &nbsp;&nbsp;|&nbsp;&nbsp; 每个 SN / IMEI / 主板SN 只能存在于一个样机池内 &nbsp;&nbsp;|&nbsp;&nbsp; 项目管理中的测试任务可自由地在多个样机池内选取</p>`;
+          ft.innerHTML = `<p class="page-footer-text">📦 可创建多个样机池 &nbsp;&nbsp;|&nbsp;&nbsp; 普通样机的 SN / IMEI / 主板SN 保持唯一，重组样机允许关联重复标识 &nbsp;&nbsp;|&nbsp;&nbsp; 项目管理中的测试任务可自由地在多个样机池内选取</p>`;
         }
       return;
     }
 
-    const localFilteredSamples = (cat.samples || []).filter(s => {
-      const kw = this.view.sampleKeyword.trim().toLowerCase();
-      if (kw) {
-        const direct = [s.sampleNo, s.sn, s.imei, s.boardSn, s.model, s.config, s.tag,
-          s.schemeNo, s.sourceStageName, s.sourceSkuName, s.notes, s.owner, s.borrower, s.location
-        ].filter(Boolean).join(" ").toLowerCase();
-        if (direct.includes(kw)) return true;
-        const problems = (s.problemRecords || []).map(r => r.description || "").filter(Boolean).join(" ");
-        if (problems.toLowerCase().includes(kw)) return true;
-        const logs = this.sampleEventLogsForSample(s.id).map(l => [l.testItem, l.projectName, l.stageName].filter(Boolean).join(" ")).join(" ");
-        if (logs.toLowerCase().includes(kw)) return true;
-        return false;
-      }
-      return true;
-    }).filter(s =>
-      (!this.view.sampleStatusFilter || this.sampleEffectiveStatus(s) === this.view.sampleStatusFilter)
-      && (!this.view.sampleProblemFilter || (this.view.sampleProblemFilter === "fault" ? this.sampleHasProblem(s) : !this.sampleHasProblem(s)))
-      && (!this.view.sampleOwnerFilter || (s.owner || "").includes(this.view.sampleOwnerFilter))
-      && (!this.view.sampleBorrowerFilter || (s.borrower || "").includes(this.view.sampleBorrowerFilter))
-    );
-    const params = this.samplePageQueryParams(cat);
-    const cacheKey = this.samplePageCacheKey(cat, params);
-    const cached = this._samplePageCache?.key === cacheKey ? this._samplePageCache : null;
-    if (!cached) this.loadSamplePage(cat, cacheKey, params);
-    const pageSize = params.pageSize;
-    const total = cached?.total ?? localFilteredSamples.length;
-    const totalPages = cached?.totalPages ?? Math.max(1, Math.ceil(total / pageSize));
-    const rawPage = Number.parseInt(cached?.page || params.page, 10) || 1;
-    const page = Math.min(Math.max(1, rawPage), totalPages);
-    this.view.samplePage = page;
-    const pagedSamples = cached?.items || [];
-    const pagerHtml = this.samplePagerHtml(page, totalPages, total, pageSize);
+    const state = this.samplePageState(cat);
+    const pagerHtml = this.samplePagerHtml(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached });
 
     // 进入样机池内部时隐藏页脚
     const ft2 = document.getElementById("pageFooter");
     if (ft2) ft2.style.display = "none";
 
     content.innerHTML = `
+      <div id="samplePageShell" class="sample-page-shell" data-category-id="${Utils.esc(cat.id || "")}" data-page-key="${Utils.esc(state.key)}">
       <div class="card sample-pool-toolbar">
         <div class="sample-pool-toolbar-title">
           <b class="sample-pool-code">${Utils.esc(cat.name)}</b>
           ${cat.description ? `<span class="path sample-pool-desc">${Utils.esc(cat.description)}</span>` : ""}
         </div>
         <div class="sample-pool-toolbar-filters">
-          <input class="sample-pool-search" placeholder="样机详情 / 失效 / 履历搜索（回车搜索）" value="${Utils.esc(this.view.sampleKeyword)}" oninput="app.view.sampleKeyword=this.value" onkeydown="if(event.key==='Enter'){app.view.sampleKeyword=this.value;app.view.samplePage=1;app.renderSamples()}">
+          <input class="sample-pool-search" placeholder="样机详情 / 问题 / 履历搜索（回车搜索）" value="${Utils.esc(this.view.sampleKeyword)}" oninput="app.view.sampleKeyword=this.value" onkeydown="if(event.key==='Enter'){app.view.sampleKeyword=this.value;app.view.samplePage=1;app.renderSamples()}">
           <select class="sample-pool-filter-status" onchange="app.view.sampleStatusFilter=this.value;app.view.samplePage=1;app.renderSamples()">
-            <option value="">全部状态</option>
+            <option value="">全部使用状态</option>
             ${this.constants.sampleStatuses.map(x => `<option ${this.view.sampleStatusFilter === x ? 'selected' : ''}>${x}</option>`).join("")}
           </select>
           <select class="sample-pool-filter-result" onchange="app.view.sampleProblemFilter=this.value;app.view.samplePage=1;app.renderSamples()">
-            <option value="">全部结果</option>
-            <option value="fault" ${this.view.sampleProblemFilter === "fault" ? "selected" : ""}>故障</option>
-            <option value="ok" ${this.view.sampleProblemFilter === "ok" ? "selected" : ""}>OK</option>
+            <option value="">全部故障状态</option>
+            <option value="fault" ${this.view.sampleProblemFilter === "fault" ? "selected" : ""}>有故障</option>
+            <option value="ok" ${this.view.sampleProblemFilter === "ok" ? "selected" : ""}>无故障</option>
           </select>
           <select class="sample-pool-filter-person" onchange="app.view.sampleOwnerFilter=this.value;app.view.samplePage=1;app.renderSamples()">
             <option value="">全部挂账人</option>
@@ -206,37 +321,65 @@ Object.assign(app, {
             ${[...new Set((cat.samples||[]).map(s=>s.borrower).filter(Boolean))].sort().map(x=>`<option ${this.view.sampleBorrowerFilter===x?'selected':''}>${Utils.esc(x)}</option>`).join("")}
           </select>
           <button type="button" class="btn btn-sm btn-outline sample-pool-clear-btn" onclick="app.view.sampleKeyword='';app.view.sampleStatusFilter='';app.view.sampleProblemFilter='';app.view.sampleOwnerFilter='';app.view.sampleBorrowerFilter='';app.view.samplePage=1;app.renderSamples()">清空</button>
-          <span class="path sample-pool-count">显示 ${total} / ${cached?.stats?.totalInCategory ?? cat.sampleCount ?? (cat.samples || []).length} 台</span>
+          <span id="samplePoolCount" class="path sample-pool-count">${this.samplePoolCountText(cat, state)}</span>
         </div>
         <div class="sample-pool-toolbar-actions">
           <button class="btn sample-pool-main-btn" onclick="app.downloadSampleTemplate()">下载批量导入模板</button>
           <button class="btn btn-purple sample-pool-main-btn" onclick="app.importSampleBatch('${cat.id}')">批量新增</button>
         </div>
       </div>
-      ${pagerHtml}
-      <div class="grid-small sample-pool-grid">
-        <div class="card add-card" onclick="app.addSample('${cat.id}')">
-          <div class="add-card-plus">+</div>
-          <div class="add-card-label">新增样机</div>
-        </div>
-        ${!cached ? `<div class="empty sample-empty-hint">正在加载服务器分页数据...</div>` : cached.error ? `<div class="empty sample-empty-hint">样机分页加载失败：${Utils.esc(cached.error)}</div>` : (pagedSamples.length ? pagedSamples.map(s => this.sampleCardHtml(s)).join("") : `<div class="empty sample-empty-hint">暂无样机</div>`)}
+      <div id="samplePagerTop" data-sample-pager="top">${pagerHtml}</div>
+      <div id="samplePoolGrid" class="grid-small sample-pool-grid">
+        ${this.samplePageGridHtml(cat, state)}
       </div>
-      ${total > pageSize ? pagerHtml : ""}`;
+      <div id="samplePagerBottom" data-sample-pager="bottom">${state.total > state.pageSize ? pagerHtml : ""}</div>
+      </div>`;
+  },
+
+  sampleUsageStatusClass(status) {
+    if (status === "闲置") return "idle";
+    if (status === "测试中") return "testing";
+    if (status === "在位等待") return "waiting";
+    if (status === "已退库") return "retired";
+    if (status === "取走分析" || status === "已借出") return "analysis";
+    return "unknown";
+  },
+
+  sampleProblemSummaryText(sample) {
+    const records = this.sampleProblemRecords(sample);
+    const text = records.map(record => record.description || record).filter(Boolean).join(" / ");
+    return text || (this.sampleHasProblem(sample) ? "有历史问题" : "无");
   },
 
   sampleCardHtml(s) {
-    const status = this.sampleEffectiveStatus(s);
-    const busy = ["在位等待", "已退库", "取走分析", "已借出", "测试中"].includes(status);
-    const bad = ["故障"].includes(status);
-    return `<div class="card sample-card ${busy ? 'status-busy' : bad ? 'status-bad' : 'status-idle'}" onclick="app.openSampleDetail('${s.id}')">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b>${Utils.esc(this.sampleDisplayCode(s))}</b><span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span></div>
-      <div class="path" style="margin-top:8px">SN：${Utils.esc(s.sn || "NA")}</div>
-      <div class="path">IMEI：${Utils.esc(s.imei || "NA")}</div>
-      <div class="path">主板SN：${Utils.esc(s.boardSn || "NA")}</div>
-      <div class="path">阶段：${Utils.esc(s.sourceStageName || "-")} · ${Utils.esc(s.sourceSkuName || "-")}</div>
-      ${s.tag ? `<div class="path">标签：${Utils.esc(s.tag)}</div>` : ''}
-      <div class="path">问题：${Utils.esc((s.problemRecords || []).map(r => r.description || r).filter(Boolean).join(" / ") || "-")}</div>
-      <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.destroySample('${s.id}')" title="档案销毁">🗑</button>
+    const usageStatus = this.normalizeSampleStatusValue(s.status || s.effectiveStatus);
+    const usageClass = this.sampleUsageStatusClass(usageStatus);
+    const hasProblem = this.sampleHasProblem(s);
+    const qualityText = hasProblem ? "有故障" : "无故障";
+    const problemText = this.sampleProblemSummaryText(s);
+    const stageText = [s.sourceStageName || "-", s.sourceSkuName || "-"].filter(Boolean).join(" · ");
+    return `<div class="card sample-card sample-archive-card status-${usageClass} ${hasProblem ? "has-problem" : "is-ok"}" data-usage-status="${Utils.esc(usageStatus)}" data-quality-status="${hasProblem ? "fault" : "ok"}" onclick="app.openSampleDetail('${Utils.esc(s.id)}')">
+      <div class="sample-card-top">
+        <b class="sample-card-code">${Utils.esc(this.sampleDisplayCode(s))}</b>
+        <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.destroySample('${Utils.esc(s.id)}')" title="档案销毁" aria-label="档案销毁">🗑</button>
+      </div>
+      <div class="sample-card-content">
+        <div class="sample-card-main">
+          <div class="sample-card-ident">
+            <div class="sample-card-line"><span>SN:</span><b>${Utils.esc(s.sn || "NA")}</b></div>
+            <div class="sample-card-line"><span>IMEI:</span><b>${Utils.esc(s.imei || "NA")}</b></div>
+            <div class="sample-card-line"><span>主板SN:</span><b>${Utils.esc(s.boardSn || "NA")}</b></div>
+          </div>
+          <div class="sample-card-detail">
+            <div class="sample-card-line wide"><span>阶段:</span><b>${Utils.esc(stageText)}</b></div>
+            <div class="sample-card-line issue ${hasProblem ? "has-issue" : ""}"><span>问题:</span><b>${Utils.esc(problemText)}</b></div>
+          </div>
+        </div>
+        <div class="sample-card-statuses">
+          <span class="sample-state-badge usage s-${Utils.esc(usageStatus)}" title="使用状态">${Utils.esc(usageStatus)}</span>
+          <span class="sample-state-badge quality ${hasProblem ? "fault" : "ok"}" title="故障状态">${Utils.esc(qualityText)}</span>
+        </div>
+      </div>
     </div>`;
   },
 
@@ -254,6 +397,7 @@ Object.assign(app, {
   sampleCategoryStatsHtml(category) {
     const samples = category.samples || [];
     const serverCounts = category.statusCounts || {};
+    const problemCounts = category.problemCounts || {};
     const count = status => serverCounts[status] ?? samples.filter(s => this.sampleEffectiveStatus(s) === status).length;
     const chipClass = {
       "测试中": "testing", "闲置": "idle", "在位等待": "waiting",
@@ -262,8 +406,8 @@ Object.assign(app, {
     const chips = this.constants.sampleStatuses
       .filter(s => count(s) > 0)
       .map(s => `<span class="sample-pool-chip ${chipClass[s] || ''}"><b>${count(s)}</b> ${Utils.esc(s)}</span>`);
-    const faultN = serverCounts["故障"] ?? samples.filter(s => this.sampleHasProblem(s)).length;
-    if (faultN > 0) chips.push(`<span class="sample-pool-chip fault"><b>${faultN}</b> 故障</span>`);
+    const faultN = problemCounts.fault ?? samples.filter(s => this.sampleHasProblem(s)).length;
+    if (faultN > 0) chips.push(`<span class="sample-pool-chip fault"><b>${faultN}</b> 有故障</span>`);
 
     return `
       <div class="sample-pool-card-total">
@@ -742,6 +886,7 @@ Object.assign(app, {
       sn: sn || "",
       imei: imei || "",
       boardSn: sourceInfo.boardSn || "",
+      isReassembled: this.sampleIsReassembled(sourceInfo),
       model: sourceInfo.platform || "",
       config: sourceInfo.standard || "",
       schemeNo: sourceInfo.schemeNo || "",
@@ -799,8 +944,9 @@ Object.assign(app, {
           <div class="form-group" style="margin-bottom:0"><label>方案（制式/配置/型号/SKU）</label><input id="sampleConfig" placeholder="如 VXN-XX 或 SKU2"></div>
           <div class="form-group" style="margin-bottom:0"><label>方案编号</label><input id="sampleSchemeNo" placeholder="如 B1 或 1"></div>
         </div>
-        <div class="form-row" style="gap:14px">
+        <div class="form-row form-row-three" style="gap:14px">
           <div class="form-group" style="margin-bottom:0"><label>样机状态</label><select id="sampleStatus">${this.constants.sampleStatuses.map(x => `<option ${x === "闲置" ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+          <div class="form-group" style="margin-bottom:0"><label>重组样机</label><select id="sampleReassembled"><option value="否" selected>否</option><option value="是">是</option></select></div>
           <div class="form-group" style="margin-bottom:0"><label>位置</label>${this.sampleLocationInputHtml("sampleLocation", "")}</div>
         </div>
         <div class="form-row" style="gap:14px">
@@ -819,6 +965,7 @@ Object.assign(app, {
       const sn = document.getElementById("sampleSn").value.trim();
       const imei = document.getElementById("sampleImei").value.trim();
       const boardSn = document.getElementById("sampleBoardSn").value.trim();
+      const isReassembled = document.getElementById("sampleReassembled").value === "是";
       if (!sn && !imei && !boardSn) {
         this.markFieldInvalid(document.getElementById("sampleSn"), "SN、IMEI 和主板SN至少需要填写一个。");
         this.markFieldInvalid(document.getElementById("sampleImei"), "SN、IMEI 和主板SN至少需要填写一个。");
@@ -855,15 +1002,16 @@ Object.assign(app, {
       if (selfDup) { this.markFieldInvalid(document.getElementById(selfDup.field), selfDup.msg); return true; }
 
       // 池内查重
-      const inCat = this._checkInCategoryDuplicate(category, sn, imei, boardSn, "", "sample");
+      const inCat = this._checkInCategoryDuplicate(category, sn, imei, boardSn, isReassembled, "", "sample");
       if (inCat) { this.markFieldInvalid(document.getElementById(inCat.fieldId), inCat.msg); return true; }
 
       // 跨池查重
-      const global = this._checkGlobalDuplicate(sn, imei, boardSn, catId, "", "sample");
+      const global = this._checkGlobalDuplicate(sn, imei, boardSn, isReassembled, catId, "", "sample");
       if (global) { this.markFieldInvalid(document.getElementById(global.fieldId), global.msg); return true; }
       const sample = this.newSample(catId, sn || imei || boardSn, sn, imei, {
         stage,
         boardSn,
+        isReassembled,
         standard: config,
         schemeNo: document.getElementById("sampleSchemeNo").value.trim(),
         initialResult: initialResults.join("\n"),

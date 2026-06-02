@@ -188,13 +188,14 @@ Object.assign(app, {
     return task;
   },
 
-  assignPlanTaskSamples(projectId, stageId, progressId, taskId = "") {
+  async assignPlanTaskSamples(projectId, stageId, progressId, taskId = "") {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以分配或重新分配样机。"); return; }
+    if (!await this.ensureTaskSamplePickerDataLoaded()) return;
     const selectedIds = t?.sampleIds || [];
     const sampleCards = this.buildTaskSamplePickerHtml(selectedIds, "assignSamplePick", "assignProgress", "assignSampleLimitHint", t?.id || "");
     this.showModal(t?.sampleIds?.length ? "重新分配样机" : "分配样机", `
@@ -314,13 +315,14 @@ Object.assign(app, {
     return "未知测试项";
   },
 
-  openTaskConfigPanel(projectId, stageId, progressId, taskId = "", initialTab = "plan") {
+  async openTaskConfigPanel(projectId, stageId, progressId, taskId = "", initialTab = "plan") {
     const p = this.data.projects.find(x => x.id === projectId);
     const s = p?.stages.find(x => x.id === stageId);
     const t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以修改配置。"); return; }
+    if (!await this.ensureTaskSamplePickerDataLoaded()) return;
     const html = this.taskConfigPanelHtml(p, s, progress, t, initialTab);
     this.showModal("任务配置", html,
       () => this.saveTaskConfigAll(projectId, stageId, progressId, taskId),

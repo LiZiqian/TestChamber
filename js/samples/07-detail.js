@@ -15,6 +15,7 @@ Object.assign(app, {
       <div class="sample-summary-bar">
         <div class="sample-summary-card"><span class="sample-summary-label">档案编号</span><b class="sample-summary-value">${Utils.esc(this.sampleDisplayCode(s))}</b></div>
         <div class="sample-summary-card"><span class="sample-summary-label">故障</span><b class="sample-summary-value" style="color:${this.sampleHasProblem(s) ? '#dc2626' : '#16a34a'}">${this.sampleHasProblem(s) ? '有' : '无'}</b></div>
+        <div class="sample-summary-card"><span class="sample-summary-label">重组样机</span><b class="sample-summary-value" style="color:${this.sampleIsReassembled(s) ? '#dc2626' : '#16a34a'}">${this.sampleIsReassembled(s) ? '是' : '否'}</b></div>
         <div class="sample-summary-card"><span class="sample-summary-label">当前状态</span><b class="sample-summary-value">${Utils.esc(this.sampleEffectiveStatus(s) || "—")}</b></div>
         <div class="sample-summary-card"><span class="sample-summary-label">当前任务</span><b class="sample-summary-value">${Utils.esc(s.currentTestItem || "—")}</b></div>
       </div>
@@ -34,13 +35,15 @@ Object.assign(app, {
                 <div class="form-group" style="margin-bottom:0"><label>IMEI</label><input id="sdImei" value="${Utils.esc(s.imei || "")}" placeholder="IMEI号"></div>
                 <div class="form-group" style="margin-bottom:0"><label>主板SN</label><input id="sdBoardSn" value="${Utils.esc(s.boardSn || "")}" placeholder="主板序列号"></div>
               </div>
+              ${this.sampleReassemblySourcesHtml(s)}
               <div class="form-row form-row-three">
                 <div class="form-group" style="margin-bottom:0"><label>阶段</label><input id="sdStage" value="${Utils.esc(s.sourceStageName || "")}" placeholder="如 V3-1"></div>
                 <div class="form-group" style="margin-bottom:0"><label>方案</label><input id="sdConfig" value="${Utils.esc(s.config || s.model || "")}" placeholder="制式/配置/型号/SKU"></div>
                 <div class="form-group" style="margin-bottom:0"><label>方案编号</label><input id="sdSchemeNo" value="${Utils.esc(s.schemeNo || "")}" placeholder="如 B1"></div>
               </div>
-              <div class="form-row">
+              <div class="form-row form-row-three">
                 <div class="form-group" style="margin-bottom:0"><label>样机状态</label><select id="sdStatus">${this.constants.sampleStatuses.map(x => `<option ${s.status === x ? 'selected' : ''}>${x}</option>`).join("")}</select></div>
+                <div class="form-group" style="margin-bottom:0"><label>重组样机</label><select id="sdReassembled"><option value="否" ${!this.sampleIsReassembled(s) ? 'selected' : ''}>否</option><option value="是" ${this.sampleIsReassembled(s) ? 'selected' : ''}>是</option></select></div>
                 <div class="form-group" style="margin-bottom:0"><label>当前位置</label>${this.sampleLocationInputHtml("sdLocation", s.location || "")}</div>
               </div>
               <div class="form-row">
@@ -72,6 +75,7 @@ Object.assign(app, {
       const newSn = document.getElementById("sdSn").value.trim();
       const newImei = document.getElementById("sdImei").value.trim();
       const newBoardSn = document.getElementById("sdBoardSn").value.trim();
+      const nextReassembled = document.getElementById("sdReassembled").value === "是";
       if (!newSn && !newImei && !newBoardSn) {
         this.markFieldInvalid(document.getElementById("sdSn"), "SN、IMEI 和主板SN至少需要填写一个。");
         this.markFieldInvalid(document.getElementById("sdImei"), "SN、IMEI 和主板SN至少需要填写一个。");
@@ -81,17 +85,18 @@ Object.assign(app, {
 
       const newIdentity = { sn: newSn, imei: newImei, boardSn: newBoardSn };
       const identityChanged = this.sampleIdentifierSignature(s) !== this.sampleIdentifierSignature(newIdentity);
+      const reassembledChanged = this.sampleIsReassembled(s) !== nextReassembled;
       // 自校验：同一台样机的 SN/IMEI/主板SN 互不相同
       const selfDup = this.validateSampleSelfDuplicate(newSn, newImei, newBoardSn, "sd");
       if (selfDup) { this.markFieldInvalid(document.getElementById(selfDup.field), selfDup.msg); return true; }
 
-      if (identityChanged) {
+      if (identityChanged || reassembledChanged) {
         // 池内查重
-        const inCat = this._checkInCategoryDuplicate(found.category, newSn, newImei, newBoardSn, s.id, "sd");
+        const inCat = this._checkInCategoryDuplicate(found.category, newSn, newImei, newBoardSn, nextReassembled, s.id, "sd");
         if (inCat) { this.markFieldInvalid(document.getElementById(inCat.fieldId), inCat.msg); return true; }
 
         // 跨池查重
-        const global = this._checkGlobalDuplicate(newSn, newImei, newBoardSn, found.category.id, s.id, "sd");
+        const global = this._checkGlobalDuplicate(newSn, newImei, newBoardSn, nextReassembled, found.category.id, s.id, "sd");
         if (global) { this.markFieldInvalid(document.getElementById(global.fieldId), global.msg); return true; }
       }
       const location = document.getElementById("sdLocation").value.trim();
@@ -114,6 +119,7 @@ Object.assign(app, {
       s.sn = newSn;
       s.imei = newImei;
       s.boardSn = newBoardSn;
+      s.isReassembled = nextReassembled;
       s.sampleNo = newSn || newImei || newBoardSn || s.sampleNo;
       s.model = "";
       s.config = document.getElementById("sdConfig").value.trim();
@@ -169,7 +175,7 @@ Object.assign(app, {
     if (readonly) {
       const body = document.getElementById("modalBody");
       body?.querySelectorAll(".sample-archive-content input, .sample-archive-content select, .sample-archive-content textarea").forEach(el => { el.disabled = true; });
-      body?.querySelectorAll(".sample-archive-content button:not(.sample-history-photo):not(.sample-photo-thumb):not(.sample-history-summary)").forEach(el => { el.disabled = true; });
+      body?.querySelectorAll(".sample-archive-content button:not(.sample-history-photo):not(.sample-photo-thumb):not(.sample-history-summary):not(.sample-reassembly-link)").forEach(el => { el.disabled = true; });
     }
   },
 

@@ -614,9 +614,36 @@ Object.assign(app, {
     return this.isTaskResultSamplesEqual(a, b);
   },
 
+  restoreTaskResultSaveSnapshot(snapshot) {
+    if (!snapshot) return;
+    this.data = snapshot.data;
+    this._baseData = snapshot.baseData;
+    this._lastTaskMutationError = null;
+  },
+
+  async refreshTaskAfterAlreadyFinished(projectId, stageId) {
+    if (!this.fetchProjectDetail || !this.mergeProjectDetail) return;
+    try {
+      this.updateServerStatus?.("刷新任务");
+      const project = await this.fetchProjectDetail(projectId, { includeTasks: true });
+      if (project) {
+        this.mergeProjectDetail(project, { includeTasks: true });
+        this._baseData = this.cloneData(this.data);
+        this.invalidatePagedCaches?.({ stageId });
+        this.render?.();
+      }
+      this.updateServerStatus?.("已同步");
+    } catch (e) {
+      console.error("重复结束任务后刷新服务器状态失败：", e);
+      this.updateServerStatus?.("刷新失败");
+      alert("任务已在服务器结束，但刷新本地状态失败：" + (e.message || e));
+    }
+  },
+
   async saveTaskResult(projectId, stageId, taskId, finishTask = false) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!p || !s || !t) return false;
+    if (finishTask && this.isTaskCompleted(t)) return false;
     const payload = this.collectTaskResultForm();
     if (!finishTask) {
       const baselineUnchanged =
@@ -647,16 +674,38 @@ Object.assign(app, {
       this.markTaskResultValidation(payload, finishTask);
       return true;
     }
-    this.applyTaskResult(p, s, t, payload, finishTask);
-    if (finishTask) delete t.resultDraft;
-    const saved = await this.commitTaskMutation(p, s, t, {
-      action: finishTask ? "finish_task_result" : "upload_task_result",
-      remark: finishTask ? "结束任务并保存结果" : "保存测试结果",
-      user: payload.user
-    });
-    if (!saved) return true;
-    Utils.toast(finishTask ? "任务已结束，结果和样机档案已同步。" : "本次结果已保存，样机档案已同步。");
-    return false;
+    const finishKey = String(taskId || "");
+    if (finishTask) {
+      if (!this._taskFinishInFlight) this._taskFinishInFlight = {};
+      if (this._taskFinishInFlight[finishKey]) return true;
+      this._taskFinishInFlight[finishKey] = true;
+    }
+    const snapshot = finishTask ? {
+      data: this.cloneData(this.data),
+      baseData: this.cloneData(this._baseData || this.data)
+    } : null;
+    try {
+      this.applyTaskResult(p, s, t, payload, finishTask);
+      if (finishTask) delete t.resultDraft;
+      const saved = await this.commitTaskMutation(p, s, t, {
+        action: finishTask ? "finish_task_result" : "upload_task_result",
+        remark: finishTask ? "结束任务并保存结果" : "保存测试结果",
+        user: payload.user
+      });
+      if (!saved) {
+        const mutationError = this._lastTaskMutationError;
+        if (finishTask) this.restoreTaskResultSaveSnapshot(snapshot);
+        if (finishTask && mutationError?.error_code === "TASK_ALREADY_FINISHED") {
+          await this.refreshTaskAfterAlreadyFinished(projectId, stageId);
+          return false;
+        }
+        return true;
+      }
+      Utils.toast(finishTask ? "任务已结束，结果和样机档案已同步。" : "本次结果已保存，样机档案已同步。");
+      return false;
+    } finally {
+      if (finishTask && this._taskFinishInFlight) delete this._taskFinishInFlight[finishKey];
+    }
   },
 
 
@@ -724,9 +773,27 @@ Object.assign(app, {
       endBtn.type = "button";
       endBtn.className = "btn btn-purple modal-extra-action";
       endBtn.innerText = "结束任务";
-      endBtn.onclick = () => {
-        const keepOpen = this.saveTaskResult(projectId, stageId, taskId, true);
-        if (!keepOpen) this.closeModal();
+      endBtn.onclick = async () => {
+        if (endBtn.disabled || ok?.disabled) return;
+        const oldText = endBtn.innerText;
+        const okWasDisabled = !!ok?.disabled;
+        let keepOpen = true;
+        endBtn.disabled = true;
+        endBtn.innerText = "结束中...";
+        if (ok) ok.disabled = true;
+        try {
+          keepOpen = await this.saveTaskResult(projectId, stageId, taskId, true);
+          if (!keepOpen) {
+            this.closeModal();
+            return;
+          }
+        } finally {
+          if (keepOpen) {
+            endBtn.disabled = false;
+            endBtn.innerText = oldText;
+            if (ok) ok.disabled = okWasDisabled;
+          }
+        }
       };
       ok?.insertAdjacentElement("afterend", endBtn);
     }

@@ -22,6 +22,7 @@
   border: 1px solid var(--border); padding: 8px 12px;
   border-radius: 9px; margin: 0; color: var(--text);
   background: #fff; font-size: 12px;
+  cursor: pointer;
 }
 .dispatch-sample-row:hover { border-color: var(--primary) }
 .dispatch-sample-info {

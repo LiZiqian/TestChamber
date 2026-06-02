@@ -165,6 +165,11 @@ Object.assign(app, {
       this.repairSampleStatus(s, s.status || "闲置", { markChanged: true });
       if (typeof s.imei === "undefined") s.imei = "";
       if (typeof s.boardSn === "undefined") s.boardSn = "";
+      const normalizedReassembled = Utils.parseSampleReassembledFlag(s.isReassembled);
+      if (s.isReassembled !== normalizedReassembled) {
+        s.isReassembled = normalizedReassembled;
+        this._normalizedChanged = true;
+      }
       if (typeof s.schemeNo === "undefined") s.schemeNo = "";
       if (typeof s.initialResult === "undefined") s.initialResult = "";
       if (!Array.isArray(s.initialResults)) {
@@ -257,14 +262,17 @@ Object.assign(app, {
   },
 
   sampleHasProblem(sample) {
+    if (!sample) return false;
+    if (sample.hasProblem === true || sample.hasProblem === 1 || sample.hasProblem === "1") return true;
     return this.sampleProblemRecords(sample).length > 0;
   },
 
+  sampleIsReassembled(sample) {
+    return Utils.parseSampleReassembledFlag(sample?.isReassembled);
+  },
+
   sampleEffectiveStatus(sample) {
-    const status = String(sample?.status || "闲置").trim() || "闲置";
-    if (["已退库", "取走分析", "已借出", "测试中", "在位等待"].includes(status)) return status === "已借出" ? "取走分析" : status;
-    if (this.sampleHasProblem(sample)) return "故障";
-    return status;
+    return this.normalizeSampleStatusValue(sample?.status);
   },
 
   normalizeSampleStatusValue(status) {

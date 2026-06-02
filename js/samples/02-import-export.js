@@ -39,6 +39,7 @@ Object.assign(app, {
           const sample = this.newSample(catId, sampleNo, row.sn, row.imei, {
             stage: row.stage,
             boardSn: row.boardSn,
+            isReassembled: row.isReassembled,
             skuName: row.standard || "Unknown",
             standard: row.standard,
             platform: "",
@@ -105,8 +106,10 @@ Object.assign(app, {
   findDuplicateSampleInCategory(category, row = {}, excludeSampleId = "") {
     const incoming = this.sampleIdentifierSet(row);
     if (!incoming.size) return null;
+    const incomingReassembled = this.sampleIsReassembled(row);
     return (category.samples || []).find(sample => {
       if (excludeSampleId && sample.id === excludeSampleId) return false;
+      if (incomingReassembled || this.sampleIsReassembled(sample)) return false;
       const existing = this.sampleIdentifierSet(sample);
       return [...incoming].some(id => existing.has(id));
     }) || null;
@@ -117,10 +120,12 @@ Object.assign(app, {
   findDuplicateSampleGlobally(row = {}, excludeCategoryId = "", excludeSampleId = "") {
     const incoming = this.sampleIdentifierSet(row);
     if (!incoming.size) return null;
+    const incomingReassembled = this.sampleIsReassembled(row);
     for (const cat of (this.data.sampleLibrary.categories || [])) {
       if (cat.id === excludeCategoryId) continue;
       for (const sample of (cat.samples || [])) {
         if (excludeSampleId && sample.id === excludeSampleId) continue;
+        if (incomingReassembled || this.sampleIsReassembled(sample)) continue;
         const existing = this.sampleIdentifierSet(sample);
         const conflict = [...incoming].find(id => existing.has(id));
         if (conflict) return { category: cat, sample, conflictId: conflict };
@@ -170,8 +175,8 @@ Object.assign(app, {
 
   /** 池内重复：返回 { fieldId, msg } */
 
-  _checkInCategoryDuplicate(category, sn, imei, boardSn, excludeSampleId, idPrefix) {
-    const dupSample = this.findDuplicateSampleInCategory(category, { sn, imei, boardSn }, excludeSampleId);
+  _checkInCategoryDuplicate(category, sn, imei, boardSn, isReassembled, excludeSampleId, idPrefix) {
+    const dupSample = this.findDuplicateSampleInCategory(category, { sn, imei, boardSn, isReassembled }, excludeSampleId);
     if (!dupSample) return null;
     const dupIds = this.sampleIdentifierSet({ sn, imei, boardSn });
     const existIds = this.sampleIdentifierSet(dupSample);
@@ -185,8 +190,8 @@ Object.assign(app, {
 
   /** 跨池重复：返回 { fieldId, msg } */
 
-  _checkGlobalDuplicate(sn, imei, boardSn, excludeCategoryId, excludeSampleId, idPrefix) {
-    const globalDup = this.findDuplicateSampleGlobally({ sn, imei, boardSn }, excludeCategoryId, excludeSampleId);
+  _checkGlobalDuplicate(sn, imei, boardSn, isReassembled, excludeCategoryId, excludeSampleId, idPrefix) {
+    const globalDup = this.findDuplicateSampleGlobally({ sn, imei, boardSn, isReassembled }, excludeCategoryId, excludeSampleId);
     if (!globalDup) return null;
     const existingLabel = this._existingLabelForConflict(globalDup.conflictId, globalDup.sample);
     const poolName = globalDup.category.name;
@@ -207,9 +212,9 @@ Object.assign(app, {
   },
 
   exportSampleCsv() {
-    const rows = [["类别", "显示编号", "SN", "IMEI", "主板SN", "型号/方案", "配置/制式", "方案编号", "样机问题表", "阶段", "SKU/版本", "状态", "位置", "挂账人", "持有人", "标签", "备注"]];
+    const rows = [["类别", "显示编号", "SN", "IMEI", "主板SN", "是否重组样机", "型号/方案", "配置/制式", "方案编号", "样机问题表", "阶段", "SKU/版本", "状态", "位置", "挂账人", "持有人", "标签", "备注"]];
     this.data.sampleLibrary.categories.forEach(c => (c.samples || []).forEach(s =>
-      rows.push([c.name, this.sampleDisplayCode(s), s.sn, s.imei || "", s.boardSn || "", s.model, s.config, s.schemeNo || "", this.sampleInitialResultsValue(s).join("\n"), s.sourceStageName, s.sourceSkuName, this.sampleEffectiveStatus(s), s.location, s.owner, "", s.tag || "", s.notes])
+      rows.push([c.name, this.sampleDisplayCode(s), s.sn, s.imei || "", s.boardSn || "", this.sampleIsReassembled(s) ? "是" : "否", s.model, s.config, s.schemeNo || "", this.sampleInitialResultsValue(s).join("\n"), s.sourceStageName, s.sourceSkuName, this.sampleEffectiveStatus(s), s.location, s.owner, "", s.tag || "", s.notes])
     ));
     Utils.downloadCsv(rows, `样机档案池_${Utils.exportTimestamp()}.csv`);
   },

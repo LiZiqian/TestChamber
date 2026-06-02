@@ -67,7 +67,6 @@ Object.assign(app, {
 
   // ==================== BOM 上料清单（删除规格/说明列）====================
   workspaceBomHtml(stage) {
-    const bomMinWidth = 56 + 320 + (stage.skuNames.length * 220) + 86;
     return `
       <div class="section-head">
         <div>
@@ -76,7 +75,7 @@ Object.assign(app, {
         </div>
         <button class="btn btn-sm" onclick="app.addBomRow()">+ 新增物料</button>
       </div>
-      <div class="mini-table wide-table-scroll bom-table"><table class="bom-config-table" style="min-width:${bomMinWidth}px">
+      <div class="mini-table bom-table"><table class="bom-config-table">
         <colgroup>
           <col class="col-row-no">
           <col class="col-bom-material">
@@ -93,8 +92,8 @@ Object.assign(app, {
           <tr>
             <td class="row-no">${idx + 1}</td>
             <td><input value="${Utils.esc(r.materialName || "")}" onchange="app.updateBom(${idx},'materialName',this.value)" placeholder="必填"></td>
-            ${stage.skuNames.map((n, i) => `<td><input value="${Utils.esc(r['sku' + (i + 1)] || "")}" onchange="app.updateBom(${idx},'sku${i + 1}',this.value)" placeholder="SKU/版本说明"></td>`).join("")}
-            <td><button class="btn btn-sm btn-danger" onclick="app.deleteBomRow(${idx})">删除</button></td>
+            ${stage.skuNames.map((n, i) => `<td><input value="${Utils.esc(r['sku' + (i + 1)] || "")}" onchange="app.updateBom(${idx},'sku${i + 1}',this.value)" placeholder="说明"></td>`).join("")}
+            <td><button class="stage-row-delete-btn" onclick="app.deleteBomRow(${idx})" title="删除" aria-label="删除 BOM 物料">🗑</button></td>
           </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 3}" class="empty">暂无 BOM 物料</td></tr>`}</tbody>
       </table></div>`;
   },
@@ -114,10 +113,16 @@ Object.assign(app, {
   },
   deleteBomRow(idx) {
     const s = this.currentStage();
-    if (!s || !s.bom) return;
-    s.bom.splice(idx, 1);
-    this.persistStageStrategyMutation("update_bom", "删除 BOM 物料", { render: false });
-    this.render();
+    const row = s?.bom?.[idx];
+    if (!s || !row) return;
+    const name = String(row.materialName || "").trim() || `第 ${idx + 1} 行`;
+    this.showConfirm(`确认删除 BOM 物料「${name}」？`, async () => {
+      const latest = this.currentStage();
+      if (!latest?.bom?.[idx]) return;
+      latest.bom.splice(idx, 1);
+      await this.persistStageStrategyMutation("update_bom", "删除 BOM 物料", { render: false });
+      this.render();
+    }, { title: "删除 BOM 物料", okText: "删除", okClass: "btn btn-danger" });
   },
 
   // ==================== 测试策略配置（删除"生成/同步进展"按钮）====================
@@ -173,7 +178,7 @@ Object.assign(app, {
       <div class="section-head">
         <div>
           <h3 style="margin:0">测试策略配置</h3>
-          <div class="path">STEP1（可选）：可以手动导入一个测试用例集<br>STEP2：点击 <新增测试项>，在测试项列表中新增一行测试用例<br>STEP3：搜索选择或手动输入测试项<br>STEP4：勾选需要被执行的方案</div>
+          <div class="path strategy-desc">STEP1（可选）：可以手动导入一个测试用例集<br>STEP2：点击 <新增测试项>，在测试项列表中新增一行测试用例<br>STEP3：搜索选择或手动输入测试项<br>STEP4：勾选需要被执行的方案</div>
         </div>
         <div class="case-tools">
           <span class="case-master-badge">用例库：${caseCount} 条</span>
@@ -216,7 +221,7 @@ Object.assign(app, {
               oninput="app.onStrategyInput(${idx},'sampleSize',this)"
               onblur="app.validateSampleSizeInput(this)" placeholder="正整数"></td>
             ${stage.skuNames.map((n, i) => `<td style="text-align:center;vertical-align:middle"><input data-sku="${i + 1}" type="checkbox" style="width:auto;vertical-align:middle" ${r.skuMap?.[i + 1] ? 'checked' : ''} onchange="app.updateStrategySku(${idx},${i + 1},this.checked)"></td>`).join("")}
-            <td><button class="btn btn-sm btn-danger" onclick="app.deleteStrategyRow(${idx})">删除</button></td>
+            <td><button class="stage-row-delete-btn" onclick="app.deleteStrategyRow(${idx})" title="删除" aria-label="删除测试策略">🗑</button></td>
           </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 5}" class="empty">${(stage.strategy || []).length ? "无匹配策略，请调整搜索条件。" : "暂无策略。先新增测试项。"}</td></tr>`}</tbody>
       </table></div>
         <div class="task-add-footer">
@@ -267,9 +272,16 @@ Object.assign(app, {
   },
   deleteStrategyRow(idx) {
     const s = this.currentStage();
-    s.strategy.splice(idx, 1);
-    this.persistStageStrategyMutation("update_strategy", "删除测试策略", { render: false });
-    this.render();
+    const row = s?.strategy?.[idx];
+    if (!s || !row) return;
+    const name = String(row.item || row.category || "").trim() || `第 ${idx + 1} 行`;
+    this.showConfirm(`确认删除测试策略「${name}」？`, async () => {
+      const latest = this.currentStage();
+      if (!latest?.strategy?.[idx]) return;
+      latest.strategy.splice(idx, 1);
+      await this.persistStageStrategyMutation("update_strategy", "删除测试策略", { render: false });
+      this.render();
+    }, { title: "删除测试策略", okText: "删除", okClass: "btn btn-danger" });
   },
 
   syncStrategyFromDom() {

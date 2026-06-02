@@ -349,7 +349,9 @@ Object.assign(app, {
     const id = String(categoryId || "");
     if (!id) return null;
     const current = (this.data.sampleLibrary.categories || []).find(category => String(category.id || "") === id);
-    if (current?.samplesLoaded && !includePhotos) return current;
+    const expectedCount = Number(current?.sampleCount || 0);
+    const currentCount = Array.isArray(current?.samples) ? current.samples.length : 0;
+    if (current?.samplesLoaded && !includePhotos && (!expectedCount || currentCount >= expectedCount)) return current;
     const key = `${id}:${includePhotos ? "photos" : "detail"}`;
     if (!this._sampleCategoryDetailPromises) this._sampleCategoryDetailPromises = {};
     if (!this._sampleCategoryDetailPromises[key]) {
@@ -419,8 +421,21 @@ Object.assign(app, {
   invalidatePagedCaches({ stageId = "", categoryId = "" } = {}) {
     if (stageId && this._taskFlowPageCache?.stageId === stageId) this._taskFlowPageCache = null;
     if (!stageId && this._taskFlowPageCache) this._taskFlowPageCache = null;
+    const clearSampleCacheStore = (store) => {
+      if (!(store instanceof Map)) return;
+      if (!categoryId) {
+        store.clear();
+        return;
+      }
+      [...store.entries()].forEach(([key, value]) => {
+        if (String(value?.categoryId || "") === String(categoryId)) store.delete(key);
+      });
+    };
+    clearSampleCacheStore(this._samplePageCaches);
+    clearSampleCacheStore(this._samplePageMetaCaches);
     if (categoryId && this._samplePageCache?.categoryId === categoryId) this._samplePageCache = null;
     if (!categoryId && this._samplePageCache) this._samplePageCache = null;
+    if (this._samplePageLoadingKeys instanceof Set) this._samplePageLoadingKeys.clear();
     this._sampleCategorySummaryLoaded = false;
   },
 
@@ -434,8 +449,19 @@ Object.assign(app, {
     });
   },
 
+  taskSampleStatusBlockerMessage(json = {}) {
+    return (json.samples || []).slice(0, 8).map(item => {
+      const found = this.findSample?.(item.sampleId);
+      const sampleName = found?.sample?.sampleNo || item.sampleNo || found?.sample?.sn || item.sn || item.imei || item.sampleId;
+      const status = item.status || "未知状态";
+      const taskNames = (item.tasks || []).map(t => t.testItem || t.taskId || "未命名任务").join("、");
+      return `· 样机 ${sampleName}：当前状态「${status}」${taskNames ? `，目标任务「${taskNames}」` : ""}`;
+    }).join("\n");
+  },
+
   async commitTaskMutation(project, stage, task, { action = "task_mutation", remark = "任务增量变更", user = "", render = true, createIfMissing = false, deleteMode = "" } = {}) {
     if (!project || !stage || !task) return false;
+    this._lastTaskMutationError = null;
     const sampleIds = this.taskMutationSampleIds(task);
     const samples = sampleIds
       .map(id => this.compactSampleForMutation(this.findSample(id)?.sample))
@@ -472,6 +498,18 @@ Object.assign(app, {
         }).join("\n");
         this.updateServerStatus("样机占用冲突");
         alert(`保存被拒绝：样机占用冲突。\n\n同一样机不能被多个未完成任务同时占用：\n${detail}`);
+        return false;
+      }
+      if (resp.status === 409 && json.error_code === "SAMPLE_STATUS_NOT_SELECTABLE") {
+        this._lastTaskMutationError = json;
+        this.updateServerStatus("样机状态不可选");
+        alert(`保存被拒绝：样机状态不可选。\n\n只有「闲置」样机可以加入测试任务：\n${this.taskSampleStatusBlockerMessage(json)}`);
+        return false;
+      }
+      if (resp.status === 409 && json.error_code === "TASK_ALREADY_FINISHED") {
+        this._lastTaskMutationError = json;
+        this.updateServerStatus("任务已结束");
+        Utils.toast("任务已经结束，已同步服务器状态。");
         return false;
       }
       if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
@@ -512,6 +550,11 @@ Object.assign(app, {
         body: JSON.stringify(payload),
       });
       const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+      if (resp.status === 409 && json.error_code === "SAMPLE_STATUS_NOT_SELECTABLE") {
+        this.updateServerStatus("样机状态不可选");
+        alert(`保存被拒绝：样机状态不可选。\n\n只有「闲置」样机可以加入测试任务：\n${this.taskSampleStatusBlockerMessage(json)}`);
+        return false;
+      }
       if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();

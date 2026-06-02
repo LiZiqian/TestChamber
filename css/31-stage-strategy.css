@@ -2,7 +2,6 @@
    阶段配置 — BOM 上料清单、测试策略表、用例下拉框
    ======================================== */
 
-.bom-config-table,
 .strategy-config-table {
   table-layout: fixed;
   width: 100%;
@@ -20,8 +19,6 @@
 }
 .bom-config-table .col-row-no,
 .strategy-config-table .col-row-no { width: 56px }
-.bom-config-table .col-bom-material { width: 320px }
-.bom-config-table .col-bom-sku { width: 220px }
 .strategy-config-table .col-test-category { width: 260px }
 .strategy-config-table .col-test-item { width: 300px }
 .strategy-config-table .col-sample-size { width: 92px }
@@ -135,10 +132,74 @@
 .strategy-table input[type="checkbox"] { transform: scale(1.5); transform-origin: center; margin: 0 4px }
 
 /* ---- BOM 上料清单说明 ---- */
-.bom-desc {
+.bom-desc,
+.strategy-desc {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* ---- BOM 上料清单表格：宽度自适应，避免全屏横向滚动 ---- */
+.bom-table {
+  max-height: clamp(240px, 42vh, 520px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.bom-config-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+}
+.bom-config-table th,
+.bom-config-table td {
+  padding: 8px 6px;
+  vertical-align: middle;
+}
+.bom-config-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f3f6fa;
+}
+.bom-config-table .col-row-no {
+  width: 44px;
+}
+.bom-config-table .col-bom-material {
+  width: clamp(180px, 22%, 260px);
+}
+.bom-config-table .col-bom-sku {
+  width: auto;
+}
+.bom-config-table .col-action {
+  width: 64px;
+}
+.bom-config-table .row-no {
+  text-align: center;
+}
+.bom-config-table input {
+  height: 34px;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.stage-row-delete-btn {
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  min-width: 0;
+  width: 34px;
+  height: 30px;
+  padding: 4px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.stage-row-delete-btn:hover {
+  color: #b91c1c;
 }
 
 /* ---- Strategy Config Table Columns ---- */

@@ -90,10 +90,16 @@ button, input, select, textarea { font-family: inherit }
 .sidebar.collapsed .nav-label { display: none }
 .sidebar.collapsed .nav { padding-left: 7px; padding-right: 7px }
 .sidebar.collapsed .nav-item { justify-content: center; padding-left: 8px; padding-right: 8px }
-.sidebar.collapsed .nav-icon { min-width: auto }
+.sidebar.collapsed .nav-item-main { flex: 0 0 auto; justify-content: center; width: 100% }
+.sidebar.collapsed .nav-icon {
+  min-width: 0;
+  width: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 .sidebar.collapsed .nav-sub,
 .sidebar.collapsed .nav-toggle { display: none }
-.sidebar.collapsed .sidebar-toggle { right: 50%; transform: translateX(50%) }
 .sidebar.collapsed .nav-tool-label { display: none }
 .sidebar.collapsed .nav-tool-item { justify-content: center; padding: 5px 4px }
 .sidebar.collapsed .nav-tool-icon { width: auto; font-size: 15px }
@@ -189,13 +195,13 @@ button, input, select, textarea { font-family: inherit }
 
 .sidebar-toggle {
   position: fixed;
-  left: 192px;
+  left: 178px;
   right: auto;
   top: 50%;
   transform: translateY(-50%);
   z-index: 30;
 }
-.sidebar.collapsed + .sidebar-toggle { left: 52px }
+.sidebar.collapsed + .sidebar-toggle { left: 38px }
 
 .header {
   min-height: 64px;
@@ -247,4 +253,3 @@ button, input, select, textarea { font-family: inherit }
   color: var(--muted);
   font-size: 13px;
 }
-

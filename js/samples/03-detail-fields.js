@@ -67,6 +67,61 @@ Object.assign(app, {
     return rows.map(x => String(x || "").trim()).filter(Boolean);
   },
 
+  sampleIdentityFields(sample = {}) {
+    return [
+      { key: "sn", label: "SN", value: String(sample.sn || "").trim() },
+      { key: "imei", label: "IMEI", value: String(sample.imei || "").trim() },
+      { key: "boardSn", label: "主板SN", value: String(sample.boardSn || "").trim() },
+    ];
+  },
+
+  sampleReassemblySources(sample = {}) {
+    const sampleId = String(sample.id || "");
+    const fields = this.sampleIdentityFields(sample).filter(item => item.value);
+    return fields.map(field => {
+      const valueKey = field.value.toLowerCase();
+      const matches = [];
+      for (const category of (this.data.sampleLibrary.categories || [])) {
+        for (const candidate of (category.samples || [])) {
+          if (!candidate || String(candidate.id || "") === sampleId) continue;
+          const matchedFields = this.sampleIdentityFields(candidate)
+            .filter(item => item.value && item.value.toLowerCase() === valueKey)
+            .map(item => item.label);
+          if (!matchedFields.length) continue;
+          matches.push({ category, sample: candidate, matchedFields });
+        }
+      }
+      return { ...field, matches };
+    });
+  },
+
+  sampleReassemblySourcesHtml(sample = {}) {
+    if (!this.sampleIsReassembled(sample)) return "";
+    const groups = this.sampleReassemblySources(sample);
+    const hasMatches = groups.some(group => group.matches.length);
+    const body = hasMatches
+      ? groups.map(group => `
+          <div class="sample-reassembly-group">
+            <div class="sample-reassembly-group-title">${Utils.esc(group.label)}来源</div>
+            <div class="sample-reassembly-group-body">
+              ${group.matches.length ? group.matches.map(item => `
+                <button type="button" class="sample-reassembly-link" onclick="app.openSampleReadonly('${Utils.esc(item.sample.id)}')">
+                  <b>${Utils.esc(this.sampleDisplayCode(item.sample))}</b>
+                  <span>${Utils.esc(item.category.name || "-")} · 匹配${Utils.esc(item.matchedFields.join("/"))}</span>
+                </button>
+              `).join("") : `<span class="sample-reassembly-empty">暂无匹配样机</span>`}
+            </div>
+          </div>`).join("")
+      : `<div class="sample-reassembly-none">暂无已建档前身样机</div>`;
+    return `<div class="sample-reassembly-panel">
+      <div class="sample-reassembly-head">
+        <b>重组来源</b>
+        <span>按 SN / IMEI / 主板SN 自动匹配全局样机池</span>
+      </div>
+      ${body}
+    </div>`;
+  },
+
   showSamplePersonOptions(id) {
     document.querySelectorAll(".sample-person-options.show").forEach(el => {
       if (el.dataset.pickerFor !== id) el.classList.remove("show");
