@@ -1,6 +1,6 @@
 # 数字治理平台 V7 · TestChamber
 
-> 内网协同版 — 终端硬件测试样机全生命周期管理系统
+> 测似活动管理系统
 
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Vanilla JS](https://img.shields.io/badge/JavaScript-ES2020+-F7DF1E?logo=javascript&logoColor=000)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
@@ -358,17 +358,16 @@ TestChamberV7/
 
 ## 技术债务
 
-详见 [CLAUDE.md](./CLAUDE.md)，已知问题包括：
+1. ~~**workspace.js 过大** (3594行)~~ ✅ 已解决 — 拆分为 10 个模块 (3722行)
+2. ~~**samples.js 中 openSampleReadonly 与 app.render.js 重复定义**~~ ✅ 已解决 — 已从 app.render.js 和 app.data.js 中移除重复定义，仅保留 samples.js 中的版本
+3. **全局变量污染** — 所有状态在 app.data/app.view 中，无模块隔离
+4. **无前端测试** — 纯手动测试
+5. **CSS 部分模块过大** — 20-samples 923行、35-task-result 782行、32-task-flow 588行，大量 `!important` patch 堆叠，建议后续引入 CSS 变量层级管理
+6. **内存全量加载** — 样机数量大时可能影响性能
+7. **照片无缩略图** — 原图直接展示在列表/网格中
+8. **日志字段混杂** — sampleLibrary.logs 和 sample.logs 双写，字段命名不统一
+9. **大量 DOM 字符串拼接** — 无 Virtual DOM 或模板引擎
+10. **XLSX 解析依赖浏览器** — DecompressionStream 在新版 Chrome 才可用
+11. **samples.js 仍然最大** (1580行, 62函数) — 样机全生命周期逻辑集中，建议后续拆分为 2-3 个子模块
+12. **`saveTaskPlanConfig()` / `saveTaskSampleConfig()` 死代码** — 旧版单独保存函数 (`js/workspace/07-task-config.js:397-466`)，已被 `saveTaskConfigAll()` 取代但未删除
 
-1. **全局变量污染** — 无模块隔离，所有状态在 `app.data` / `app.view` 中
-2. **无前端测试** — 纯手动测试
-3. **部分 CSS 文件过大** — `20-samples.css` 923行，`35-task-result.css` 782行
-4. **内存全量加载** — 样机数量大时可能影响性能
-5. **照片无缩略图** — 原图直接展示在列表/网格中
-6. **大量 DOM 字符串拼接** — 无 Virtual DOM 或模板引擎
-
----
-
-## License
-
-MIT © 2025–2026 TestChamber Contributors
