@@ -2134,10 +2134,33 @@ def commit_import_bundle(payload: dict) -> dict:
                 curr_projects[pid] = _normalize_project(incoming_projects_by_id[pid])
                 stats["projectsAdded"] += 1
         elif atype == "new_stage":
-            # 阶段已包含在项目对象中
-            pass
+            proj_id = auto.get("projectId", "")
+            sid = auto["id"]
+            if proj_id in curr_projects and proj_id in incoming_projects_by_id:
+                inc_proj = incoming_projects_by_id[proj_id]
+                for inc_stage in inc_proj.get("stages") or []:
+                    if inc_stage.get("id") == sid:
+                        curr_projects[proj_id].setdefault("stages", []).append(copy.deepcopy(inc_stage))
+                        stats["stagesAdded"] += 1
+                        break
         elif atype == "new_task":
-            pass  # 任务已包含在项目对象中
+            proj_id = auto.get("projectId", "")
+            stage_id = auto.get("stageId", "")
+            tid = auto["id"]
+            if proj_id in curr_projects and proj_id in incoming_projects_by_id:
+                inc_proj = incoming_projects_by_id[proj_id]
+                for inc_stage in inc_proj.get("stages") or []:
+                    if inc_stage.get("id") == stage_id:
+                        for inc_task in inc_stage.get("tasks") or []:
+                            if inc_task.get("id") == tid:
+                                curr_stages = curr_projects[proj_id].setdefault("stages", [])
+                                for cs in curr_stages:
+                                    if cs.get("id") == stage_id:
+                                        cs.setdefault("tasks", []).append(copy.deepcopy(inc_task))
+                                        stats["tasksAdded"] += 1
+                                        break
+                                break
+                        break
         elif atype == "new_sample":
             sid = auto["id"]
             # 稍后处理
@@ -2327,6 +2350,8 @@ def commit_import_bundle(payload: dict) -> dict:
     ok, resp = save_state(current_data, None, "import-bundle", remark=import_remark, user="数据导入")
 
     if not ok:
+        _cleanup_preview_temp(preview_id)
+        del _IMPORT_PREVIEWS[preview_id]
         return {"ok": False, "error": resp.get("error", "写入失败"), "status": resp.get("status", 500)}
 
     _cleanup_preview_temp(preview_id)
@@ -2334,16 +2359,34 @@ def commit_import_bundle(payload: dict) -> dict:
 
     return {"ok": True, "stats": stats, "newRevision": resp.get("newRevision", 0)}
 
-    # 如果 save_state 失败或未到达，清理
-    _cleanup_preview_temp(preview_id)
 
-
-# ── commit 中需要的 manifest 引用 ──
-def _manifest_from_preview(preview_id: str) -> dict:
-    entry = _IMPORT_PREVIEWS.get(preview_id)
-    if not entry:
-        return {}
-    return (entry.get("result") or {}).get("source", {})
+def _merge_project_sub_data(target: dict, source: dict) -> None:
+    """将 source 项目的阶段/任务追加合并到 target 项目（不覆盖主字段）"""
+    target_stages = {s["id"]: s for s in (target.get("stages") or [])}
+    for stage in source.get("stages") or []:
+        sid = stage.get("id", "")
+        if sid and sid in target_stages:
+            # 已存在阶段：合并任务
+            target_tasks = {t["id"]: t for t in (target_stages[sid].get("tasks") or [])}
+            for task in stage.get("tasks") or []:
+                tid = task.get("id", "")
+                if tid and tid not in target_tasks:
+                    target_stages[sid].setdefault("tasks", []).append(copy.deepcopy(task))
+        else:
+            # 新阶段
+            target.setdefault("stages", []).append(copy.deepcopy(stage))
+    # 合并 members 和 locations（去重）
+    existing_members = {(m.get("employeeNo"), m.get("name")) for m in (target.get("members") or [])}
+    for m in source.get("members") or []:
+        key = (m.get("employeeNo"), m.get("name"))
+        if key not in existing_members:
+            target.setdefault("members", []).append(copy.deepcopy(m))
+            existing_members.add(key)
+    existing_locs = set(target.get("locations") or [])
+    for loc in source.get("locations") or []:
+        if loc not in existing_locs:
+            target.setdefault("locations", []).append(loc)
+            existing_locs.add(loc)
 
 FINISHED_TASK_STATUSES = {"正常完成", "异常终止"}
 

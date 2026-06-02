@@ -62,6 +62,8 @@ Object.assign(app, {
       },
     });
 
+    // 插入「仅导入无冲突数据」按钮
+    this._injectQuickImportButton();
     // 初始化按钮状态
     this._updateImportCommitButton();
     // 绑定冲突处理事件
@@ -440,6 +442,44 @@ Object.assign(app, {
       okBtn.disabled = false;
       okBtn.textContent = "确认导入已处理项目";
       okBtn.title = "";
+    }
+  },
+
+  // ── 仅导入无冲突数据 ──
+
+  _injectQuickImportButton() {
+    // 在弹窗 footer 插入第三个按钮
+    setTimeout(() => {
+      const footer = document.querySelector(".confirm-box-footer");
+      if (!footer) return;
+      const btn = document.createElement("button");
+      btn.className = "btn btn-outline";
+      btn.textContent = "仅导入无冲突数据";
+      btn.id = "quickImportBtn";
+      btn.onclick = () => this._onQuickImport();
+      // 插入到 cancel 和 ok 之间
+      const okBtn = document.getElementById("modalOk");
+      if (okBtn) {
+        footer.insertBefore(btn, okBtn);
+      } else {
+        footer.appendChild(btn);
+      }
+    }, 50);
+  },
+
+  async _onQuickImport() {
+    // 跳过所有冲突项，只提交 autoApply
+    const conflicts = this._importState.preview.conflicts || [];
+    this._importState.decisions = {};
+    this._importState.processedConflicts = new Set();
+    for (const c of conflicts) {
+      this._importState.decisions[c.conflictId] = { action: "skip" };
+      this._importState.processedConflicts.add(c.conflictId);
+    }
+    // 直接提交
+    const shouldClose = await this._onImportCommit();
+    if (shouldClose === false || shouldClose === undefined) {
+      // 弹窗已关闭
     }
   },
 
