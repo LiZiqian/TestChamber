@@ -15,6 +15,12 @@ Thumbs.db
 
 # AI assistant settings (not for distribution)
 .claude/
+AGENTS.md
+agents.md
+agent.md
+
+# Local validation harness (not for distribution)
+tests/
 
 # Project docs (local only, not for distribution)
 docs/

@@ -13,7 +13,6 @@
 | 默认端口 | `9398` |
 | 数据库 | `data/testchamber.sqlite` |
 | 样机照片 | `data/samples/<sampleId>/photos/` |
-| 测试 | Python unittest + Node 前端工具测试 |
 
 ## 功能概览
 
@@ -73,7 +72,6 @@ TestChamberV7/
 ├── index.html
 ├── start_server.bat
 ├── start_server.ps1
-├── AGENTS.md
 ├── README.md
 ├── css/
 │   ├── style.css
@@ -129,15 +127,10 @@ TestChamberV7/
 │   │   └── 10-dropdown-issue.js
 │   └── debug/
 │       └── auditConsistency.js
-├── tests/
-│   ├── frontend_status_transitions.test.cjs
-│   └── test_server_core.py
 ├── templates/
 ├── data/
 └── backups/
 ```
-
-`AGENTS.md` 是给 AI agent 使用的代码定位器，包含更细的函数、CSS、API 行号索引。
 
 ## 前端加载顺序
 
@@ -266,34 +259,6 @@ sampleLibrary
 | `GET` | `/api/samples/<id>/photos/<photoId>` | 读取照片资产 |
 | `GET` | `/css/*`, `/js/*`, `/templates/*` | 静态资源 |
 
-## 测试
-
-前端状态和 XLSX 解压兜底测试：
-
-```bash
-node tests/frontend_status_transitions.test.cjs
-```
-
-后端核心测试：
-
-```bash
-python -m unittest discover -s tests
-```
-
-Python 语法检查：
-
-```bash
-python -m py_compile server.py
-```
-
-JS 语法检查：
-
-```powershell
-Get-ChildItem js -Recurse -Filter *.js | ForEach-Object {
-  node --check $_.FullName
-}
-```
-
 ## 已完成的主要技术债清理
 
 - `workspace.js` 已拆分为 `js/workspace/` 下 10 个模块
@@ -303,14 +268,12 @@ Get-ChildItem js -Recurse -Filter *.js | ForEach-Object {
 - 样机日志不再双写 `sample.logs`，统一写 `sampleLibrary.logs`
 - 样机状态、任务状态、progress 状态已有集中入口
 - XLSX 解压支持旧浏览器 JS 兜底
-- 已新增最小自动化测试护栏
 
 ## 仍需关注
 
 - 全局 `app` 混入模式仍未模块隔离
 - 前端仍大量使用 DOM 字符串拼接和内联事件
 - `GET/PUT /api/state` 仍是全量 state 读写，数据量增长后可能成为性能瓶颈
-- 自动化测试覆盖仍偏薄，尤其是浏览器交互、照片上传、结果录入和导入导出路径
 
 ## 开发提示
 
