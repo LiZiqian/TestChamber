@@ -6,7 +6,6 @@
 Object.assign(app, {
 
   async importSampleBatch(catId) {
-    if (!await this.ensureFullStateLoaded({ render: false })) return;
     const input = document.createElement("input");
     input.type = "file"; input.accept = ".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv";
     input.onchange = e => {
@@ -25,14 +24,48 @@ Object.assign(app, {
         const snapshot = this.cloneData(this.data);
         let imported = 0, skippedDup = 0, skippedGlobal = 0;
         const importedSamples = [];
+        const localDupIndexes = new Set();
+        const seenIdentifiers = new Map();
+        result.rows.forEach((row, idx) => {
+          if (this.sampleIsReassembled(row)) return;
+          for (const ident of this.sampleIdentifierSet(row)) {
+            if (seenIdentifiers.has(ident)) {
+              localDupIndexes.add(idx);
+              return;
+            }
+            seenIdentifiers.set(ident, idx);
+          }
+        });
+        let serverConflicts = new Map();
+        try {
+          const check = await this.checkSampleIdentityConflicts(
+            result.rows.map((row, idx) => ({
+              index: idx,
+              categoryId: catId,
+              sn: row.sn,
+              imei: row.imei,
+              boardSn: row.boardSn,
+              isReassembled: row.isReassembled
+            })),
+            { categoryId: catId }
+          );
+          serverConflicts = new Map((check.results || [])
+            .filter(item => item?.hasConflict && item.conflict)
+            .map(item => [Number(item.index), item.conflict]));
+        } catch (e) {
+          alert("样机身份查重失败：" + (e.message || e));
+          return;
+        }
         result.rows.forEach((row, idx) => {
           // 用 IMEI 或 SN 作为样机编号
           const sampleNo = row.sn || row.imei || row.boardSn || this.nextSampleNo(category, row.stage || "CSV", idx);
-          const duplicate = this.findDuplicateSampleInCategory(category, row);
-          if (duplicate) { skippedDup++; return; }
-          // 跨池唯一性检查
-          const globalDup = this.findDuplicateSampleGlobally(row, catId);
-          if (globalDup) { skippedGlobal++; return; }
+          if (localDupIndexes.has(idx)) { skippedDup++; return; }
+          const serverDup = serverConflicts.get(idx);
+          if (serverDup) {
+            if (serverDup.scope === "category") skippedDup++;
+            else skippedGlobal++;
+            return;
+          }
           const location = String(row.location || "").trim();
           const initialResults = Utils.parseSampleIssueText(row.initialResult);
           const normalizedStatus = row.status === "已借出" || row.status === "借出" ? "取走分析" : row.status;
@@ -68,15 +101,13 @@ Object.assign(app, {
             remark: "批量导入样机",
             user: "管理员",
             createSamples: true,
-            samples: importedSamples,
-            render: false
+            samples: importedSamples
           });
           if (!saved) {
             this.data = snapshot;
             return;
           }
         }
-        this.renderSamples();
         const warn = result.invalidPersonCount
           ? `；其中 ${result.invalidPersonCount} 条挂账人字段格式不合法，已按空处理`
           : "";
@@ -200,6 +231,36 @@ Object.assign(app, {
       fieldId: this._fieldIdByIdentifier(globalDup.conflictId, sn, imei, boardSn, idPrefix),
       msg: `于「${poolName}」池【${code}】的 ${existingLabel} 相同`
     };
+  },
+
+  sampleIdentityConflictValidation(conflict, sn, imei, boardSn, idPrefix) {
+    if (!conflict) return null;
+    const fieldId = conflict.incomingField
+      ? `${idPrefix}${conflict.incomingField === "sn" ? "Sn" : conflict.incomingField === "imei" ? "Imei" : "BoardSn"}`
+      : this._fieldIdByIdentifier(conflict.conflictId, sn, imei, boardSn, idPrefix);
+    const scope = conflict.scope === "category"
+      ? "本样机池"
+      : `「${conflict.categoryName || "-"}」池`;
+    const code = conflict.sample?.code || this.sampleDisplayCode(conflict.sample || {});
+    const label = conflict.existingLabel || this._existingLabelForConflict(conflict.conflictId, conflict.sample || {});
+    return {
+      fieldId,
+      msg: `于${scope}【${code}】的 ${label} 相同`
+    };
+  },
+
+  async _checkServerIdentityDuplicate(sn, imei, boardSn, isReassembled, categoryId, excludeSampleId, idPrefix) {
+    const check = await this.checkSampleIdentityConflicts([{
+      index: 0,
+      categoryId,
+      excludeSampleId,
+      sn,
+      imei,
+      boardSn,
+      isReassembled
+    }], { categoryId });
+    const conflict = (check.results || []).find(item => item?.hasConflict)?.conflict;
+    return this.sampleIdentityConflictValidation(conflict, sn, imei, boardSn, idPrefix);
   },
 
   downloadSampleTemplate() {

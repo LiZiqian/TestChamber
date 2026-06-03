@@ -196,15 +196,7 @@ Object.assign(app, {
         });
         const obj = await res.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
         if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
-        await this.syncAfterDirectMutation({ render: false, statusText: "已保存" });
-        const latest = this.findSample(sampleId);
-        if (latest?.sample && Array.isArray(obj.photos)) {
-          latest.sample.photos = obj.photos;
-          latest.sample.photoCount = obj.photos.length;
-          latest.sample.photosLoaded = true;
-        }
-        const panel = document.querySelector('[data-sample-archive-panel="photos"]');
-        if (panel && latest?.sample) panel.innerHTML = this.samplePhotosHtml(latest.sample);
+        this.applySamplePhotosMutationResult(sampleId, obj, { renderPanel: true, statusText: "已保存" });
         Utils.toast(`已上传 ${files.length} 张外观照片。`);
       } catch (e) {
         alert("照片上传失败：" + (e.message || e));
@@ -251,14 +243,7 @@ Object.assign(app, {
           });
           const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
           if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
-          this.serverRevision = json.revision || this.serverRevision;
-          this.serverUpdatedAt = json.updated_at || new Date().toISOString();
-          found.sample.photos = Array.isArray(json.photos) ? json.photos : found.sample.photos;
-          found.sample.photoCount = found.sample.photos.length;
-          found.sample.photosLoaded = true;
-          found.sample.updatedAt = Utils.now();
-          this._baseData = this.cloneData(this.data);
-          this.updateServerStatus("已保存");
+          this.applySamplePhotosMutationResult(sampleId, json, { statusText: "已保存" });
         } catch (e) {
           this.updateServerStatus("保存失败");
           alert("照片重命名失败：" + (e.message || e));
@@ -300,15 +285,7 @@ Object.assign(app, {
         const res = await fetch(`/api/samples/${encodeURIComponent(sampleId)}/photos/${encodeURIComponent(photoId)}`, { method: "DELETE" });
         const obj = await res.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
         if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
-        await this.syncAfterDirectMutation({ render: false, statusText: "已保存" });
-        const latest = this.findSample(sampleId);
-        if (latest?.sample && Array.isArray(obj.photos)) {
-          latest.sample.photos = obj.photos;
-          latest.sample.photoCount = obj.photos.length;
-          latest.sample.photosLoaded = true;
-        }
-        const panel = document.querySelector('[data-sample-archive-panel="photos"]');
-        if (panel && latest?.sample) panel.innerHTML = this.samplePhotosHtml(latest.sample);
+        this.applySamplePhotosMutationResult(sampleId, obj, { renderPanel: true, statusText: "已保存" });
       } catch (e) {
         alert("删除照片失败：" + (e.message || e));
       }

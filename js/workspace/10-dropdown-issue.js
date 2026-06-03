@@ -204,10 +204,8 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         action: "update_issue_record",
         remark: "录入任务问题单",
         user: "管理员",
-        render: false
       });
       if (!saved) { this.data = snapshot; return true; }
-      this.render();
       return false;
     }, "保存");
   }

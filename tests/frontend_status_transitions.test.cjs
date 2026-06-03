@@ -7,6 +7,7 @@ const zlib = require("node:zlib");
 const root = path.resolve(__dirname, "..");
 const context = {
   console,
+  URLSearchParams,
   alert: () => {},
   window: {},
   document: {},
@@ -32,14 +33,63 @@ function loadScript(relativePath, trailer = "") {
 
 loadScript("js/utils.js", "globalThis.Utils = Utils;");
 loadScript("js/app.data.js");
+loadScript("js/app.server.js");
 loadScript("js/workspace/01-shared.js");
 loadScript("js/workspace/06-sample-picker.js");
+loadScript("js/samples/04-photos.js");
 loadScript("js/workspace/09-task-result.js");
 
 const { app } = context;
 const { Utils } = context;
 
 app.sampleTestedItemNames = () => [];
+
+{
+  app.data.sampleLibrary.categories = [{
+    id: "cat_photo",
+    name: "照片池",
+    samples: [{ id: "sample_photo", sampleNo: "S001", photos: [], photoCount: 0, photosLoaded: true }],
+  }];
+  app.serverRevision = 1;
+  vm.runInContext(`
+    app._samplePageCaches = new Map([
+      ["same", { categoryId: "cat_photo" }],
+      ["other", { categoryId: "cat_other" }],
+    ]);
+    app._samplePageMetaCaches = new Map([
+      ["same_meta", { categoryId: "cat_photo" }],
+      ["other_meta", { categoryId: "cat_other" }],
+    ]);
+  `, context);
+  let reloads = 0;
+  const statuses = [];
+  const originalReloadFromServer = app.reloadFromServer;
+  const originalUpdateServerStatus = app.updateServerStatus;
+  try {
+    app.reloadFromServer = async () => { reloads++; };
+    app.updateServerStatus = text => statuses.push(text);
+
+    const sample = app.applySamplePhotosMutationResult("sample_photo", {
+      revision: 2,
+      updated_at: "2026-06-02T12:00:00",
+      photos: [{ id: "photo_1", name: "front.jpg", url: "/api/samples/sample_photo/photos/photo_1" }],
+    });
+
+    assert.equal(reloads, 0);
+    assert.equal(app.serverRevision, 2);
+    assert.equal(sample.photoCount, 1);
+    assert.equal(sample.photosLoaded, true);
+    assert.equal(sample.photos[0].name, "front.jpg");
+    assert.equal(app._samplePageCaches.has("same"), false);
+    assert.equal(app._samplePageCaches.has("other"), true);
+    assert.equal(app._samplePageMetaCaches.has("same_meta"), false);
+    assert.equal(app._samplePageMetaCaches.has("other_meta"), true);
+    assert.equal(statuses[statuses.length - 1], "已保存");
+  } finally {
+    app.reloadFromServer = originalReloadFromServer;
+    app.updateServerStatus = originalUpdateServerStatus;
+  }
+}
 
 function pickerInputHtml(html, sampleId) {
   const match = html.match(new RegExp(`<input[^>]+value="${sampleId}"[^>]*>`));
@@ -150,6 +200,7 @@ function pickerInputHtml(html, sampleId) {
       categories: [{
         id: "cat_picker",
         name: "池A",
+        sampleCount: 70000,
         samples: [
           { id: "idle", sampleNo: "S001", status: "闲置" },
           { id: "testing", sampleNo: "S002", status: "测试中" },
@@ -163,48 +214,63 @@ function pickerInputHtml(html, sampleId) {
     },
   };
 
+  app.allSamples = () => {
+    throw new Error("sample picker should not enumerate all samples");
+  };
   const html = app.buildTaskSamplePickerHtml([], "pick", "", "", "");
-  assert.ok(!pickerInputHtml(html, "idle").includes("disabled"));
-  ["testing", "waiting", "retired", "analysis", "borrowed"].forEach(sampleId => {
-    assert.ok(pickerInputHtml(html, sampleId).includes("disabled"), `${sampleId} should be disabled`);
-  });
+  assert.ok(html.includes("data-task-sample-picker=\"pick\""));
+  assert.ok(html.includes("正在加载候选样机"));
 
-  const selectedHtml = app.buildTaskSamplePickerHtml(["testing", "waiting"], "pick", "", "", "task_current");
+  const state = app.resetTaskSamplePickerState("pick", { selectedIds: ["testing", "waiting"], excludeTaskId: "task_current" });
+  const idleHtml = app.taskSamplePickerSampleRowHtml({ id: "idle", sampleNo: "S001", status: "闲置", selectable: true }, state);
+  assert.ok(!pickerInputHtml(idleHtml, "idle").includes("disabled"));
+  const blockedHtml = app.taskSamplePickerSampleRowHtml({
+    id: "borrowed",
+    sampleNo: "S006",
+    status: "取走分析",
+    selectable: false,
+    disabledReason: "当前状态为「取走分析」，不能加入测试任务",
+  }, state);
+  assert.ok(pickerInputHtml(blockedHtml, "borrowed").includes("disabled"));
+  assert.ok(blockedHtml.includes("取走分析"));
   ["testing", "waiting"].forEach(sampleId => {
-    const input = pickerInputHtml(selectedHtml, sampleId);
+    const selectedRow = app.taskSamplePickerSampleRowHtml({
+      id: sampleId,
+      sampleNo: sampleId,
+      status: sampleId === "testing" ? "测试中" : "在位等待",
+      selectable: false,
+      disabledReason: "当前任务已选",
+    }, state, { selected: true });
+    const input = pickerInputHtml(selectedRow, sampleId);
     assert.ok(input.includes("checked"), `${sampleId} should remain checked`);
     assert.ok(!input.includes("disabled"), `${sampleId} should remain editable for current task`);
   });
+  assert.deepEqual(app.getSelectedTaskSampleIds("pick"), ["testing", "waiting"]);
 
-  let poolCountsUpdated = 0;
-  app.updateDispatchSamplePoolCounts = (inputName) => {
-    assert.equal(inputName, "pick");
-    poolCountsUpdated++;
-  };
-  const enabledCheckbox = { checked: false, disabled: false };
+  const enabledCheckbox = { value: "idle", checked: false, disabled: false };
   const enabledRow = { querySelector: () => enabledCheckbox };
   app.onTaskSampleRowClick({
     target: { closest: () => null },
     currentTarget: enabledRow,
   }, "pick");
   assert.equal(enabledCheckbox.checked, true);
-  assert.equal(poolCountsUpdated, 1);
+  assert.deepEqual(app.getSelectedTaskSampleIds("pick"), ["testing", "waiting", "idle"]);
 
-  const disabledCheckbox = { checked: false, disabled: true };
+  const disabledCheckbox = { value: "retired", checked: false, disabled: true };
   const disabledRow = { querySelector: () => disabledCheckbox };
   app.onTaskSampleRowClick({
     target: { closest: () => null },
     currentTarget: disabledRow,
   }, "pick");
   assert.equal(disabledCheckbox.checked, false);
-  assert.equal(poolCountsUpdated, 1);
+  assert.deepEqual(app.getSelectedTaskSampleIds("pick"), ["testing", "waiting", "idle"]);
 
   app.onTaskSampleRowClick({
     target: { closest: (selector) => selector.includes(".dispatch-sample-id") ? {} : null },
     currentTarget: enabledRow,
   }, "pick");
   assert.equal(enabledCheckbox.checked, true);
-  assert.equal(poolCountsUpdated, 1);
+  assert.deepEqual(app.getSelectedTaskSampleIds("pick"), ["testing", "waiting", "idle"]);
 }
 
 function taskResultBaseData(status = "进行中") {

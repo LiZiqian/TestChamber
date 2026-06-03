@@ -203,6 +203,73 @@ Object.assign(app, {
     this.updateServerStatus(statusText);
   },
 
+  applySamplePhotosMutationResult(sampleId, json = {}, { renderPanel = false, statusText = "已保存" } = {}) {
+    const found = this.findSample(sampleId);
+    this.serverRevision = json.revision || json.newRevision || this.serverRevision;
+    this.serverUpdatedAt = json.updated_at || json.updatedAt || new Date().toISOString();
+    this.serverOnline = true;
+
+    if (found?.sample && Array.isArray(json.photos)) {
+      found.sample.photos = json.photos;
+      found.sample.photoCount = json.photos.length;
+      found.sample.photosLoaded = true;
+      found.sample.updatedAt = json.updated_at || json.updatedAt || Utils.now();
+    }
+
+    if (found?.category?.id) this.invalidatePagedCaches({ categoryId: found.category.id });
+    this.invalidateSampleHistoryCache(sampleId);
+    this._baseData = this.cloneData(this.data);
+
+    if (renderPanel) {
+      const panel = document.querySelector('[data-sample-archive-panel="photos"]');
+      if (panel && found?.sample) panel.innerHTML = this.samplePhotosHtml(found.sample);
+    }
+
+    this.updateServerStatus(statusText);
+    return found?.sample || null;
+  },
+
+  invalidateSampleHistoryCache(sampleIds = []) {
+    const ids = Array.isArray(sampleIds) ? sampleIds : [sampleIds];
+    if (!this._sampleHistoryCache) return;
+    ids.map(id => String(id || "")).filter(Boolean).forEach(id => {
+      delete this._sampleHistoryCache[id];
+      const sample = this.findSample(id)?.sample;
+      if (sample) sample.historyLoaded = false;
+    });
+  },
+
+  async refreshTaskListAfterMutation(project, stage, { render = true } = {}) {
+    if (!stage?.id) return false;
+    const isCurrentTaskFlow = this.view?.module === "projectWorkspace"
+      && String(this.view?.selectedStageId || "") === String(stage.id || "");
+    if (render && isCurrentTaskFlow && typeof this.refreshCurrentTaskFlowPage === "function") {
+      this.invalidatePagedCaches({ stageId: stage.id });
+      await this.refreshCurrentTaskFlowPage(project, stage);
+      return true;
+    }
+    this.invalidatePagedCaches({ stageId: stage.id });
+    if (render) this.render();
+    return false;
+  },
+
+  async refreshSampleListAfterMutation(sampleOrCategory, { render = true } = {}) {
+    const categoryId = sampleOrCategory?.categoryId || sampleOrCategory?.id || "";
+    if (!categoryId) return false;
+    const category = this.data?.sampleLibrary?.categories?.find(c => String(c.id || "") === String(categoryId));
+    const isCurrentSamplePage = category
+      && this.view?.module === "samples"
+      && String(this.view?.selectedCategoryId || "") === String(category.id || "");
+    if (render && isCurrentSamplePage && typeof this.refreshCurrentSamplePage === "function") {
+      this.invalidatePagedCaches({ categoryId });
+      await this.refreshCurrentSamplePage(category);
+      return true;
+    }
+    this.invalidatePagedCaches({ categoryId });
+    if (render) this.render();
+    return false;
+  },
+
   async fetchSamplePhotos(sampleId) {
     const resp = await fetch(`/api/samples/${encodeURIComponent(sampleId)}/photos`, { cache: "no-store" });
     const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
@@ -215,6 +282,28 @@ Object.assign(app, {
     const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
     if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
     return json.logs || [];
+  },
+
+  async fetchSampleHistory(sampleId, { page = 1, pageSize = 20 } = {}) {
+    const params = new URLSearchParams();
+    params.set("page", String(page || 1));
+    params.set("pageSize", String(pageSize || 20));
+    const resp = await fetch(`/api/samples/${encodeURIComponent(sampleId)}/history?${params.toString()}`, { cache: "no-store" });
+    const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+    if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
+    return json;
+  },
+
+  async checkSampleIdentityConflicts(samples = [], { categoryId = "" } = {}) {
+    const list = Array.isArray(samples) ? samples : [samples];
+    const resp = await fetch("/api/sample-identity-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ categoryId, samples: list }),
+    });
+    const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+    if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
+    return json;
   },
 
   async fetchProjectSummary() {
@@ -250,6 +339,22 @@ Object.assign(app, {
     });
     const suffix = query.toString() ? `?${query.toString()}` : "";
     const resp = await fetch(`/api/sample-categories/${encodeURIComponent(categoryId)}/samples${suffix}`, { cache: "no-store" });
+    const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+    if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
+    return json;
+  },
+
+  async fetchTaskSampleCandidates(params = {}) {
+    const query = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        if (value.length) query.set(key, value.join(","));
+      } else if (value !== "" && value !== null && value !== undefined) {
+        query.set(key, value);
+      }
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const resp = await fetch(`/api/task-sample-candidates${suffix}`, { cache: "no-store" });
     const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
     if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
     return json;
@@ -315,6 +420,139 @@ Object.assign(app, {
     if (idx >= 0) this.data.sampleLibrary.categories[idx] = { ...existing, ...category };
     else this.data.sampleLibrary.categories.push(category);
     return this.data.sampleLibrary.categories.find(item => String(item.id || "") === String(category.id)) || category;
+  },
+
+  mergeProjectSummaries(projects = []) {
+    const existingById = new Map((this.data.projects || []).map(project => [String(project.id || ""), project]));
+    this.data.projects = (projects || []).map(summary => {
+      const existing = existingById.get(String(summary.id || "")) || null;
+      const detailLoaded = !!existing?._detailLoaded;
+      return {
+        ...(existing || {}),
+        ...summary,
+        stages: Array.isArray(existing?.stages) ? existing.stages : [],
+        _summaryOnly: !detailLoaded,
+        _detailLoaded: detailLoaded,
+        _tasksFullyLoaded: !!existing?._tasksFullyLoaded,
+      };
+    });
+    return this.data.projects;
+  },
+
+  mergeSampleCategorySummaries(categories = []) {
+    if (!this.data.sampleLibrary) this.data.sampleLibrary = { categories: [], logs: [] };
+    const existingById = new Map((this.data.sampleLibrary.categories || []).map(category => [String(category.id || ""), category]));
+    this.data.sampleLibrary.categories = (categories || []).map(summary => {
+      const existing = existingById.get(String(summary.id || "")) || null;
+      const samplesLoaded = !!existing?.samplesLoaded;
+      return {
+        ...(existing || {}),
+        ...summary,
+        samples: Array.isArray(existing?.samples) ? existing.samples : [],
+        _summaryOnly: !samplesLoaded,
+        samplesLoaded,
+      };
+    });
+    this._sampleCategorySummaryLoaded = true;
+    return this.data.sampleLibrary.categories;
+  },
+
+  importMutationIdSets(mutationSummary = {}) {
+    const toSet = values => new Set((values || []).map(value => String(value || "")).filter(Boolean));
+    return {
+      projectIds: toSet(mutationSummary.projectIds),
+      stageIds: toSet(mutationSummary.stageIds),
+      sampleCategoryIds: toSet(mutationSummary.sampleCategoryIds),
+      sampleIds: toSet(mutationSummary.sampleIds),
+    };
+  },
+
+  async applyImportBundleMutationResult(result = {}, { render = true } = {}) {
+    const mutationSummary = result.mutationSummary || null;
+    this.serverRevision = result.revision || result.newRevision || this.serverRevision;
+    this.serverUpdatedAt = result.updated_at || result.updatedAt || new Date().toISOString();
+    this.serverOnline = true;
+
+    if (!mutationSummary || mutationSummary.requiresFullState) {
+      try {
+        await this.reloadFromServer({ render });
+      } catch (e) {
+        console.error("导入后完整刷新失败：", e);
+        this.updateServerStatus("导入已写入，同步失败");
+      }
+      return false;
+    }
+
+    this.updateServerStatus("同步导入");
+    this.invalidatePagedCaches();
+    const { projectIds, stageIds, sampleCategoryIds } = this.importMutationIdSets(mutationSummary);
+
+    try {
+      const [projectSummaries, categorySummaries] = await Promise.all([
+        this.fetchProjectSummary(),
+        this.fetchSampleCategoriesSummary(),
+      ]);
+      this.mergeProjectSummaries(projectSummaries);
+      this.mergeSampleCategorySummaries(categorySummaries);
+
+      await Promise.all([...projectIds].map(async projectId => {
+        const detail = await this.fetchProjectDetail(projectId, { includeTasks: false });
+        if (detail) this.mergeProjectDetail(detail, { includeTasks: false });
+      }));
+
+      if (!this.view.selectedProjectId || !(this.data.projects || []).some(project => String(project.id || "") === String(this.view.selectedProjectId))) {
+        this.view.selectedProjectId = [...projectIds][0] || this.data.projects[0]?.id || null;
+      }
+      const currentProject = this.currentProject();
+      if (currentProject && (!this.view.selectedStageId || !(currentProject.stages || []).some(stage => String(stage.id || "") === String(this.view.selectedStageId)))) {
+        this.view.selectedStageId = currentProject.stages?.[0]?.id || null;
+      }
+
+      if (render) {
+        this.renderNav?.();
+        this.renderHeader?.();
+        let contentRefreshed = false;
+        if (this.view.module === "projectWorkspace") {
+          const project = this.currentProject();
+          const stage = this.currentStage();
+          const selectedProjectAffected = projectIds.has(String(project?.id || ""));
+          const selectedStageAffected = stageIds.has(String(stage?.id || "")) || selectedProjectAffected;
+          if (project && stage && selectedStageAffected && typeof this.refreshCurrentTaskFlowPage === "function") {
+            contentRefreshed = await this.refreshCurrentTaskFlowPage(project, stage);
+          }
+          if (!contentRefreshed && selectedProjectAffected && typeof this.renderContent === "function") {
+            this.renderContent();
+            contentRefreshed = true;
+          }
+        } else if (this.view.module === "samples") {
+          const category = (this.data.sampleLibrary.categories || [])
+            .find(cat => String(cat.id || "") === String(this.view.selectedCategoryId || ""));
+          if (category && sampleCategoryIds.has(String(category.id || "")) && typeof this.refreshCurrentSamplePage === "function") {
+            contentRefreshed = await this.refreshCurrentSamplePage(category);
+          }
+          if (!contentRefreshed && typeof this.renderContent === "function") {
+            this.renderContent();
+            contentRefreshed = true;
+          }
+        } else if ((this.view.module === "home" || this.view.module === "projects") && typeof this.renderContent === "function") {
+          this.renderContent();
+        }
+      }
+
+      this._baseData = this.cloneData(this.data);
+      this.updateServerStatus("已导入");
+      return true;
+    } catch (e) {
+      console.error("导入后局部同步失败，尝试完整刷新：", e);
+      this.updateServerStatus("导入同步失败");
+      try {
+        await this.reloadFromServer({ render });
+      } catch (fallbackError) {
+        console.error("导入后完整刷新兜底失败：", fallbackError);
+        this.updateServerStatus("导入已写入，同步失败");
+      }
+      return false;
+    }
   },
 
   async ensureProjectLoaded(projectId, { includeTasks = false, render = false } = {}) {
@@ -516,10 +754,10 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.invalidateSampleHistoryCache(sampleIds);
       this._baseData = this.cloneData(this.data);
-      this.invalidatePagedCaches({ stageId: stage.id });
       this.updateServerStatus("已保存");
-      if (render) this.render();
+      await this.refreshTaskListAfterMutation(project, stage, { render });
       return true;
     } catch (e) {
       console.error("任务增量保存失败：", e);
@@ -559,10 +797,10 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.invalidateSampleHistoryCache([...new Set(tasks.flatMap(task => this.taskMutationSampleIds(task)))]);
       this._baseData = this.cloneData(this.data);
-      this.invalidatePagedCaches({ stageId: stage.id });
       this.updateServerStatus("已保存");
-      if (render) this.render();
+      await this.refreshTaskListAfterMutation(project, stage, { render });
       return true;
     } catch (e) {
       console.error("批量任务增量保存失败：", e);
@@ -609,6 +847,7 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.invalidateSampleHistoryCache([sample.id, ...((samples || []).map(s => s?.id)), ...((events || []).map(log => log?.sampleId))]);
       this._baseData = this.cloneData(this.data);
       this.invalidatePagedCaches();
       this.updateServerStatus("已保存");
@@ -651,6 +890,7 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.invalidateSampleHistoryCache([...(samples || []).map(s => s?.id), ...(sampleEvents || []).map(log => log?.sampleId)]);
       this._baseData = this.cloneData(this.data);
       this.invalidatePagedCaches({ stageId: stage.id });
       this.updateServerStatus("已保存");
@@ -692,9 +932,8 @@ Object.assign(app, {
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
       this._baseData = this.cloneData(this.data);
-      this.invalidatePagedCaches({ categoryId: sample.categoryId || "" });
       this.updateServerStatus("已保存");
-      if (render) this.render();
+      await this.refreshSampleListAfterMutation(sample, { render });
       return true;
     } catch (e) {
       console.error("样机增量保存失败：", e);
@@ -733,9 +972,13 @@ Object.assign(app, {
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
       this._baseData = this.cloneData(this.data);
-      this.invalidatePagedCaches({ categoryId: category.id });
       this.updateServerStatus("已保存");
-      if (render) this.render();
+      if (createSamples && !deleteCategory) {
+        await this.refreshSampleListAfterMutation(category, { render });
+      } else {
+        this.invalidatePagedCaches({ categoryId: category.id });
+        if (render) this.render();
+      }
       return true;
     } catch (e) {
       console.error("样机池增量保存失败：", e);
@@ -773,6 +1016,28 @@ Object.assign(app, {
     if (tasks.length) await Promise.all(tasks);
     if (renderPanels) this.refreshSampleArchivePanels(sampleId);
     return sample;
+  },
+
+  async ensureSampleHistoryLoaded(sampleId, { page = 1, pageSize = 20, renderPanels = true, force = false } = {}) {
+    const found = this.findSample(sampleId);
+    if (!found) return null;
+    if (!this._sampleHistoryCache) this._sampleHistoryCache = {};
+    const key = String(sampleId || "");
+    const cached = this._sampleHistoryCache[key];
+    if (!force && cached && cached.page === page && cached.pageSize === pageSize) return cached;
+    this._sampleHistoryCache[key] = { loading: true, page, pageSize, items: [], total: 0, totalPages: 1 };
+    if (renderPanels) this.refreshSampleArchivePanels(sampleId);
+    try {
+      const result = await this.fetchSampleHistory(sampleId, { page, pageSize });
+      this._sampleHistoryCache[key] = result;
+      found.sample.historyLoaded = true;
+      if (renderPanels) this.refreshSampleArchivePanels(sampleId);
+      return result;
+    } catch (e) {
+      this._sampleHistoryCache[key] = { error: e.message || String(e), page, pageSize, items: [], total: 0, totalPages: 1 };
+      if (renderPanels) this.refreshSampleArchivePanels(sampleId);
+      throw e;
+    }
   },
 
   // ── 数据包导入导出 ──

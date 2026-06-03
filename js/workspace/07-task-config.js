@@ -195,7 +195,6 @@ Object.assign(app, {
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以分配或重新分配样机。"); return; }
-    if (!await this.ensureTaskSamplePickerDataLoaded()) return;
     const selectedIds = t?.sampleIds || [];
     const sampleCards = this.buildTaskSamplePickerHtml(selectedIds, "assignSamplePick", "assignProgress", "assignSampleLimitHint", t?.id || "");
     this.showModal(t?.sampleIds?.length ? "重新分配样机" : "分配样机", `
@@ -236,7 +235,10 @@ Object.assign(app, {
       if (saved) Utils.toast(oldSampleIds.length ? "样机已重新分配" : "样机已分配");
       return !saved;
     }, "确认", { className: "assign-sample-modal" });
-    setTimeout(() => this.updateTaskSampleLimitUI('assignProgress', 'assignSamplePick', 'assignSampleLimitHint'), 0);
+    setTimeout(() => {
+      this.initTaskSamplePicker("assignSamplePick");
+      this.updateTaskSampleLimitUI('assignProgress', 'assignSamplePick', 'assignSampleLimitHint');
+    }, 0);
   },
 
   setPlanTaskSchedule(projectId, stageId, progressId, taskId = "") {
@@ -322,7 +324,6 @@ Object.assign(app, {
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以修改配置。"); return; }
-    if (!await this.ensureTaskSamplePickerDataLoaded()) return;
     const html = this.taskConfigPanelHtml(p, s, progress, t, initialTab);
     this.showModal("任务配置", html,
       () => this.saveTaskConfigAll(projectId, stageId, progressId, taskId),
@@ -355,9 +356,10 @@ Object.assign(app, {
       }
     }, 0);
     // 若默认进入样机配置页，初始化数量提示
-    if (initialTab === "sample") {
-      setTimeout(() => this.updateTaskSampleLimitUI("tcSampleProgress", "tcSamplePick", "tcSampleLimitHint"), 0);
-    }
+    setTimeout(() => {
+      this.initTaskSamplePicker("tcSamplePick");
+      if (initialTab === "sample") this.updateTaskSampleLimitUI("tcSampleProgress", "tcSamplePick", "tcSampleLimitHint");
+    }, 0);
   },
 
   taskConfigPanelHtml(project, stage, progress, task, activeTab) {

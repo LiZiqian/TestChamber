@@ -44,6 +44,62 @@ def patched_server_db(conn):
         server.DB_LOCK = old_lock
 
 
+@contextmanager
+def patched_server_data_dirs(root):
+    old_data_dir = server.DATA_DIR
+    old_sample_dir = server.SAMPLE_DATA_DIR
+    old_backup_dir = server.BACKUP_DIR
+    try:
+        server.DATA_DIR = Path(root)
+        server.SAMPLE_DATA_DIR = Path(root) / "samples"
+        server.BACKUP_DIR = Path(root) / "backups"
+        server.ensure_dirs()
+        yield
+    finally:
+        server.DATA_DIR = old_data_dir
+        server.SAMPLE_DATA_DIR = old_sample_dir
+        server.BACKUP_DIR = old_backup_dir
+
+
+def make_multipart(fields=None, files=None, boundary="tcv7_test_boundary"):
+    parts = []
+    for name, value in (fields or {}).items():
+        parts.append(f"--{boundary}\r\n".encode("utf-8"))
+        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        parts.append(str(value).encode("utf-8"))
+        parts.append(b"\r\n")
+    for item in files or []:
+        field, filename, content_type, content = item
+        parts.append(f"--{boundary}\r\n".encode("utf-8"))
+        header = (
+            f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        )
+        parts.append(header.encode("utf-8"))
+        parts.append(content)
+        parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return {"Content-Type": f"multipart/form-data; boundary={boundary}"}, b"".join(parts)
+
+
+def call_handler_json(method, path, *, body=b"", headers=None, client_ip="127.0.0.1"):
+    handler = object.__new__(server.Handler)
+    handler.path = path
+    handler.headers = headers or {}
+    handler.client_address = (client_ip, 12345)
+    handler._read_body = lambda max_bytes=server.MAX_UPLOAD_BYTES: body
+
+    result = {}
+
+    def send_json(payload, status=200):
+        result["payload"] = payload
+        result["status"] = status
+
+    handler._send_json = send_json
+    getattr(server.Handler, method)(handler)
+    return result.get("status"), result.get("payload")
+
+
 def state_conn(data):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -130,6 +186,100 @@ class ServerCoreTests(unittest.TestCase):
             finally:
                 server.DATA_DIR = old_data_dir
                 server.SAMPLE_DATA_DIR = old_sample_dir
+
+    def test_sample_photo_routes_upload_rename_and_delete(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat1",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample_1",
+                "sampleNo": "S001",
+                "sn": "SN001",
+                "status": "闲置",
+                "photos": [],
+                "problemRecords": [],
+            }],
+        }]
+        conn = state_conn(data)
+
+        with tempfile.TemporaryDirectory() as tmp, patched_server_data_dirs(tmp), patched_server_db(conn):
+            original_compose_state = server.compose_state
+            server.compose_state = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("photo routes must not compose full state"))
+            headers, body = make_multipart(
+                fields={"remark": "上传测试照片"},
+                files=[
+                    ("photos", "front.jpg", "image/jpeg", b"photo-bytes"),
+                    ("thumb_0", "front.thumb.jpg", "image/jpeg", b"thumb-bytes"),
+                ],
+            )
+
+            try:
+                status, payload = call_handler_json(
+                    "do_POST",
+                    "/api/samples/sample_1/photos",
+                    body=body,
+                    headers=headers,
+                )
+
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["revision"], 2)
+                self.assertEqual(len(payload["uploaded"]), 1)
+                self.assertEqual(len(payload["photos"]), 1)
+                photo = payload["photos"][0]
+                self.assertEqual(photo["name"], "front.jpg")
+                self.assertIn("thumbUrl", photo)
+                self.assertTrue((Path(tmp) / photo["relativePath"]).is_file())
+                self.assertEqual(
+                    conn.execute("SELECT action FROM audit_log WHERE revision_after = 2").fetchone()["action"],
+                    "upload_sample_photos",
+                )
+
+                rename_body = json.dumps({"name": "front-renamed.jpg", "user": "张三/001"}).encode("utf-8")
+                status, payload = call_handler_json(
+                    "do_PATCH",
+                    f"/api/samples/sample_1/photos/{photo['id']}",
+                    body=rename_body,
+                )
+
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["revision"], 3)
+                self.assertEqual(payload["photos"][0]["name"], "front-renamed.jpg")
+                audit = conn.execute(
+                    "SELECT user, action, revision_before, revision_after FROM audit_log WHERE revision_after = 3"
+                ).fetchone()
+                self.assertEqual(audit["user"], "张三/001")
+                self.assertEqual(audit["action"], "rename_sample_photo")
+                self.assertEqual(audit["revision_before"], 2)
+                self.assertEqual(audit["revision_after"], 3)
+
+                status, payload = call_handler_json(
+                    "do_DELETE",
+                    f"/api/samples/sample_1/photos/{photo['id']}",
+                )
+
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["revision"], 4)
+                self.assertEqual(payload["photos"], [])
+                rows = conn.execute(
+                    """
+                    SELECT id, deleted_at
+                    FROM sample_assets
+                    WHERE sample_id = ? AND id IN (?, ?)
+                    """,
+                    ("sample_1", photo["id"], server.thumbnail_asset_id(photo["id"])),
+                ).fetchall()
+                self.assertEqual(len(rows), 2)
+                self.assertTrue(all(row["deleted_at"] for row in rows))
+                self.assertEqual(
+                    conn.execute("SELECT action FROM audit_log WHERE revision_after = 4").fetchone()["action"],
+                    "delete_sample_photo",
+                )
+            finally:
+                server.compose_state = original_compose_state
 
     def test_stage_tasks_page_filters_and_paginates(self):
         data = empty_state()
@@ -242,6 +392,65 @@ class ServerCoreTests(unittest.TestCase):
         self.assertNotIn("故障", summary["statusCounts"])
         self.assertEqual(summary["statusCounts"].get("闲置"), 2)
         self.assertEqual(summary["problemCounts"].get("fault"), 1)
+
+    def test_task_sample_candidates_page_marks_selectability_without_full_sample_load(self):
+        data = empty_state()
+        data["projects"] = [{
+            "id": "p1",
+            "name": "项目A",
+            "stages": [{
+                "id": "st1",
+                "name": "阶段A",
+                "tasks": [
+                    {"id": "task_current", "testItem": "当前任务", "status": "待下发", "sampleIds": ["selected_busy"]},
+                    {"id": "task_other", "testItem": "占用任务", "status": "进行中", "sampleIds": ["occupied_idle"]},
+                    {"id": "task_done", "testItem": "完成任务", "status": "正常完成", "completed": True, "sampleIds": ["idle"]},
+                ],
+            }],
+        }]
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat1",
+            "name": "样机池A",
+            "samples": [
+                {"id": "selected_busy", "categoryId": "cat1", "sampleNo": "S001", "sn": "SN001", "status": "在位等待"},
+                {"id": "idle", "categoryId": "cat1", "sampleNo": "S002", "sn": "SN002", "status": "闲置"},
+                {"id": "occupied_idle", "categoryId": "cat1", "sampleNo": "S003", "sn": "SN003", "status": "闲置"},
+                {"id": "testing", "categoryId": "cat1", "sampleNo": "S004", "sn": "SN004", "status": "测试中"},
+            ],
+        }]
+        conn = state_conn(data)
+
+        page = server.list_task_sample_candidates_page(conn, {
+            "taskId": ["task_current"],
+            "selectedIds": ["selected_busy"],
+            "page": ["1"],
+            "pageSize": ["10"],
+        })
+
+        self.assertEqual(page["selectedItems"][0]["id"], "selected_busy")
+        self.assertTrue(page["selectedItems"][0]["selectable"])
+        self.assertEqual({item["id"] for item in page["items"]}, {"idle", "occupied_idle", "testing"})
+        by_id = {item["id"]: item for item in page["items"]}
+        self.assertTrue(by_id["idle"]["selectable"])
+        self.assertFalse(by_id["occupied_idle"]["selectable"])
+        self.assertIn("占用", by_id["occupied_idle"]["disabledReason"])
+        self.assertEqual(by_id["occupied_idle"]["occupyingTasks"][0]["taskId"], "task_other")
+        self.assertFalse(by_id["testing"]["selectable"])
+        self.assertIn("测试中", by_id["testing"]["disabledReason"])
+
+        status_page = server.list_task_sample_candidates_page(conn, {
+            "status": ["闲置"],
+            "page": ["1"],
+            "pageSize": ["10"],
+        })
+        self.assertEqual({item["id"] for item in status_page["items"]}, {"idle", "occupied_idle"})
+
+        with patched_server_db(conn):
+            status, payload = call_handler_json("do_GET", "/api/task-sample-candidates?taskId=task_current&selectedIds=selected_busy&pageSize=2")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["pageSize"], 2)
+        self.assertEqual(payload["selectedItems"][0]["id"], "selected_busy")
 
     def test_commit_task_mutation_updates_task_sample_and_events(self):
         data = empty_state()
@@ -988,6 +1197,158 @@ class ServerCoreTests(unittest.TestCase):
         state, _, _ = server.compose_state(conn)
         sample = state["sampleLibrary"]["categories"][0]["samples"][0]
         self.assertTrue(sample["isReassembled"])
+
+    def test_sample_identity_check_uses_server_index_and_reassembled_rules(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat_a",
+            "name": "池A",
+            "samples": [{
+                "id": "sample_a",
+                "categoryId": "cat_a",
+                "sampleNo": "A001",
+                "sn": "SN-A",
+                "imei": "IMEI-A",
+                "boardSn": "MB-A",
+                "status": "闲置",
+            }],
+        }, {
+            "id": "cat_b",
+            "name": "池B",
+            "samples": [{
+                "id": "sample_b",
+                "categoryId": "cat_b",
+                "sampleNo": "B001",
+                "sn": "SN-B",
+                "imei": "IMEI-B",
+                "boardSn": "MB-B",
+                "status": "闲置",
+            }, {
+                "id": "sample_r",
+                "categoryId": "cat_b",
+                "sampleNo": "R001",
+                "sn": "SN-LATE",
+                "isReassembled": True,
+                "status": "闲置",
+            }],
+        }]
+        conn = state_conn(data)
+
+        result = server.check_sample_identity_conflicts(conn, {
+            "categoryId": "cat_a",
+            "samples": [
+                {"index": 0, "categoryId": "cat_a", "boardSn": "MB-A"},
+                {"index": 1, "categoryId": "cat_a", "sn": "SN-B"},
+                {"index": 2, "categoryId": "cat_a", "sn": "SN-LATE"},
+                {"index": 3, "categoryId": "cat_a", "sn": "SN-A", "excludeSampleId": "sample_a"},
+                {"index": 4, "categoryId": "cat_a", "sn": "SN-A", "isReassembled": True},
+            ],
+        })
+
+        by_index = {item["index"]: item for item in result["results"]}
+        self.assertTrue(by_index[0]["hasConflict"])
+        self.assertEqual(by_index[0]["conflict"]["scope"], "category")
+        self.assertEqual(by_index[0]["conflict"]["existingField"], "boardSn")
+        self.assertTrue(by_index[1]["hasConflict"])
+        self.assertEqual(by_index[1]["conflict"]["scope"], "global")
+        self.assertFalse(by_index[2]["hasConflict"])
+        self.assertFalse(by_index[3]["hasConflict"])
+        self.assertFalse(by_index[4]["hasConflict"])
+
+        with patched_server_db(conn):
+            status, payload = call_handler_json(
+                "do_POST",
+                "/api/sample-identity-check",
+                body=json.dumps({"categoryId": "cat_a", "samples": [{"index": 0, "imei": "IMEI-B"}]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["results"][0]["conflict"]["sample"]["id"], "sample_b")
+
+    def test_sample_history_page_is_aggregated_server_side(self):
+        data = empty_state()
+        data["projects"] = [{
+            "id": "p1",
+            "name": "项目A",
+            "stages": [{
+                "id": "st1",
+                "name": "EVT",
+                "tasks": [{
+                    "id": "task_1",
+                    "projectId": "p1",
+                    "stageId": "st1",
+                    "testItem": "跌落测试",
+                    "status": "正常完成",
+                    "owner": "张三/001",
+                    "sampleIds": ["sample_1"],
+                    "result": "Fail",
+                    "resultDate": "2026-06-03",
+                    "sampleFaultRecords": [{"id": "fault_1", "sampleId": "sample_1", "problem": "不开机"}],
+                    "resultUploads": [{
+                        "id": "result_1",
+                        "result": "Fail",
+                        "user": "张三/001",
+                        "time": "2026-06-03T10:00:00",
+                        "samples": [{
+                            "sampleId": "sample_1",
+                            "photos": [{"id": "photo_1", "name": "fail.jpg"}],
+                        }],
+                    }],
+                }],
+            }],
+        }]
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat1",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample_1",
+                "categoryId": "cat1",
+                "sampleNo": "S001",
+                "sn": "SN001",
+                "status": "闲置",
+                "photos": [{
+                    "id": "photo_1",
+                    "name": "fail.jpg",
+                    "url": "/api/samples/sample_1/photos/photo_1",
+                    "relativePath": "samples/sample_1/photos/photo_1/fail.jpg",
+                    "type": "image/jpeg",
+                    "size": 12,
+                    "uploadedAt": "2026-06-03T09:59:00",
+                }],
+            }],
+        }]
+        data["sampleLibrary"]["logs"] = [{
+            "id": "event_1",
+            "sampleId": "sample_1",
+            "taskId": "task_1",
+            "projectId": "p1",
+            "stageId": "st1",
+            "testItem": "跌落测试",
+            "time": "2026-06-03T10:01:00",
+            "user": "张三/001",
+            "flowStatus": "故障",
+            "problemDescription": "不开机",
+        }]
+        conn = state_conn(data)
+
+        result = server.list_sample_history_page(conn, "sample_1", {"page": ["1"], "pageSize": ["10"]})
+
+        self.assertEqual(result["total"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["task"]["id"], "task_1")
+        self.assertEqual(item["projectName"], "项目A")
+        self.assertEqual(item["stageName"], "EVT")
+        self.assertTrue(item["faultMarked"])
+        self.assertIn("不开机", item["problems"])
+        self.assertEqual(item["resultPhotos"][0]["id"], "photo_1")
+        self.assertIn("/api/samples/sample_1/photos/photo_1", item["resultPhotos"][0]["url"])
+
+        with patched_server_db(conn):
+            status, payload = call_handler_json("do_GET", "/api/samples/sample_1/history?page=1&pageSize=5")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["items"][0]["task"]["id"], "task_1")
 
     def test_import_bundle_sample_identity_conflict_respects_reassembled_flag(self):
         current = empty_state()

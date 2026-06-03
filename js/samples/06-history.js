@@ -24,10 +24,19 @@ Object.assign(app, {
     if (hint) hint.textContent = hints[tab] || "";
     if ((tab === "photos" || tab === "history") && this._activeSampleDetailId) {
       const sample = this.findSample(this._activeSampleDetailId)?.sample;
-      if (sample && ((tab === "photos" && sample.photosLoaded !== true) || (tab === "history" && sample.eventsLoaded !== true))) {
+      if (tab === "history" && sample && sample.historyLoaded !== true) {
+        this.ensureSampleHistoryLoaded(this._activeSampleDetailId, {
+          page: 1,
+          pageSize: 20,
+          renderPanels: true
+        }).catch(e => {
+          console.error("加载样机测试履历失败：", e);
+          Utils.toast("样机测试履历加载失败：" + (e.message || e));
+        });
+      } else if (sample && tab === "photos" && sample.photosLoaded !== true) {
         this.ensureSampleDetailsLoaded(this._activeSampleDetailId, {
-          photos: tab === "photos",
-          events: tab === "history",
+          photos: true,
+          events: false,
           renderPanels: true
         }).catch(e => {
           console.error("加载样机详情数据失败：", e);
@@ -91,71 +100,36 @@ Object.assign(app, {
   },
 
   sampleTestHistoryHtml(sampleId) {
-    const sample = this.findSample(sampleId)?.sample;
-    if (sample && sample.eventsLoaded !== true) {
-      return this.sampleArchivePlaceholder("正在加载测试履历", "样机状态事件已按需外置，打开履历时从服务器读取。");
+    const cache = this._sampleHistoryCache?.[String(sampleId || "")];
+    if (!cache || cache.loading) {
+      return this.sampleArchivePlaceholder("正在加载测试履历", "测试履历按页从服务器读取。");
     }
-    const sampleLogsAll = this.sampleEventLogsForSample(sampleId);
-    const rows = new Map();
-    sampleLogsAll.forEach(log => {
-      const key = log.taskId || `log_${log.id}`;
-      if (!rows.has(key)) {
-        rows.set(key, {
-          key,
-          task: null,
-          projectName: log.projectName || this.projectName(log.projectId),
-          stageName: log.stageName || this.stageName(log.projectId, log.stageId),
-          testItem: log.testItem || "-",
-          logs: []
-        });
-      }
-      rows.get(key).logs.push(log);
-    });
-    (this.data.projects || []).forEach(project => (project.stages || []).forEach(stage => (stage.tasks || []).forEach(task => {
-      const taskOwnsSample = (task.sampleIds || []).includes(sampleId)
-        || (task.removedSampleRecords || []).some(item => item?.sampleId === sampleId);
-      const taskTouchedSample = rows.has(task.id);
-      if (!taskOwnsSample && !taskTouchedSample) return;
-      const key = task.id;
-      if (!rows.has(key)) {
-        rows.set(key, { key, task, projectName: project.name, stageName: stage.name, testItem: task.testItem || "-", logs: [] });
-      }
-      const item = rows.get(key);
-      item.task = task;
-      item.projectName = project.name;
-      item.stageName = stage.name;
-      item.testItem = task.testItem || item.testItem || "-";
-    })));
-    const list = [...rows.values()].sort((a, b) => {
-      const at = a.task?.completedAt || a.task?.resultDate || a.task?.startDate || a.logs[0]?.time || "";
-      const bt = b.task?.completedAt || b.task?.resultDate || b.task?.startDate || b.logs[0]?.time || "";
-      return String(bt).localeCompare(String(at));
-    });
+    if (cache.error) {
+      return this.sampleArchivePlaceholder("测试履历加载失败", cache.error);
+    }
+    const list = Array.isArray(cache.items) ? cache.items : [];
     if (!list.length) return this.sampleArchivePlaceholder("暂无测试履历", "该样机还没有被分配到任何测试任务。");
 
-    return `<div class="sample-history-list">${list.map(({ task, projectName, stageName, testItem, logs }, idx) => {
-      const historySeq = list.length - idx;
-      const status = task ? this.taskFlowStatus(task) : "历史记录";
-      const result = task?.latestResult || task?.result || "-";
-      const date = task?.resultDate || task?.completedAt || task?.planDate || logs[logs.length - 1]?.time || "-";
-      const taskSampleCount = task
-        ? new Set([...(task.sampleIds || []), ...(task.removedSampleRecords || []).map(item => item?.sampleId).filter(Boolean)]).size
-        : 0;
-      const sampleFaultRecords = (task?.sampleFaultRecords || []).filter(x => x.sampleId === sampleId);
-      const faultMarked = logs.some(log => log.faultMarked || log.flowStatus === "故障")
-        || !!(task?.sampleFaults?.[sampleId]?.fault)
-        || sampleFaultRecords.some(x => x.fault || x.problem);
-      const problems = [...new Set([
-        ...logs.map(log => log.problemDescription).filter(Boolean),
-        task?.sampleFaults?.[sampleId]?.problem,
-        ...sampleFaultRecords.map(x => x.problem).filter(Boolean)
-      ].filter(Boolean))];
-      const resultPhotos = this.sampleTaskResultPhotos(task, sampleId);
+    const total = Number(cache.total || list.length);
+    const page = Number(cache.page || 1);
+    const pageSize = Number(cache.pageSize || 20);
+    const offset = (page - 1) * pageSize;
+    return `<div class="sample-history-list">${list.map((row, idx) => {
+      const task = row.task || null;
+      const logs = Array.isArray(row.logs) ? row.logs : [];
+      const historySeq = Math.max(1, total - offset - idx);
+      const status = row.status || (task ? this.taskFlowStatus(task) : "历史记录");
+      const result = row.result || task?.latestResult || task?.result || "-";
+      const date = row.date || task?.resultDate || task?.completedAt || task?.planDate || logs[logs.length - 1]?.time || "-";
+      const taskSampleCount = Number(row.taskSampleCount || 0);
+      const faultMarked = !!row.faultMarked;
+      const problems = Array.isArray(row.problems) ? row.problems : [];
+      const resultPhotos = Array.isArray(row.resultPhotos) ? row.resultPhotos : [];
       const orderedLogs = logs.slice().reverse();
       return `<div class="sample-history-item">
         <button type="button" class="sample-history-summary" aria-expanded="false" onclick="app.toggleSampleHistoryItem(this)">
           <span class="history-seq">履历 #${historySeq}</span>
-          <b>${Utils.esc(testItem || "-")}</b>
+          <b>${Utils.esc(row.testItem || task?.testItem || "-")}</b>
           <span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span>
           <span class="badge ${faultMarked ? "status-bad" : "status-done"}">${faultMarked ? "已标记故障" : "未标记故障"}</span>
           <span class="sample-history-toggle"></span>
@@ -163,8 +137,8 @@ Object.assign(app, {
         <div class="sample-history-detail">
           <div class="sample-history-grid">
             <span>任务ID：<b>${Utils.esc(task?.id || logs[0]?.taskId || "-")}</b></span>
-            <span>项目：<b>${Utils.esc(projectName || "-")}</b></span>
-            <span>阶段：<b>${Utils.esc(stageName || "-")}</b></span>
+            <span>项目：<b>${Utils.esc(row.projectName || "-")}</b></span>
+            <span>阶段：<b>${Utils.esc(row.stageName || "-")}</b></span>
             <span>执行人：<b>${Utils.esc(task?.owner || logs[0]?.user || "-")}</b></span>
             <span>结果：<b>${Utils.esc(result)}</b></span>
             <span>日期：<b>${Utils.esc(date)}</b></span>
@@ -175,7 +149,26 @@ Object.assign(app, {
           ${orderedLogs.length ? `<div class="sample-history-logs">${orderedLogs.map((log, logIdx) => this.logHtml(log, orderedLogs.length - logIdx, "日志 #")).join("")}</div>` : `<div class="path">暂无该任务下的样机状态记录。</div>`}
         </div>
       </div>`;
-    }).join("")}</div>`;
+    }).join("")}</div>${this.sampleHistoryPagerHtml(sampleId, cache)}`;
+  },
+
+  sampleHistoryPagerHtml(sampleId, cache = {}) {
+    const totalPages = Number(cache.totalPages || 1);
+    if (totalPages <= 1) return "";
+    const page = Number(cache.page || 1);
+    return `<div class="pager sample-history-pager">
+      <button type="button" class="btn btn-sm btn-outline sample-history-page-btn" ${page <= 1 ? "disabled" : ""} onclick="app.loadSampleHistoryPage('${Utils.esc(sampleId)}',${page - 1})">上一页</button>
+      <span>${page} / ${totalPages} · 共 ${Number(cache.total || 0)} 条</span>
+      <button type="button" class="btn btn-sm btn-outline sample-history-page-btn" ${page >= totalPages ? "disabled" : ""} onclick="app.loadSampleHistoryPage('${Utils.esc(sampleId)}',${page + 1})">下一页</button>
+    </div>`;
+  },
+
+  async loadSampleHistoryPage(sampleId, page) {
+    try {
+      await this.ensureSampleHistoryLoaded(sampleId, { page, pageSize: 20, renderPanels: true, force: true });
+    } catch (e) {
+      Utils.toast("样机测试履历加载失败：" + (e.message || e));
+    }
   },
 
   // ---- 样机数字档案（含 IMEI）----,

@@ -213,6 +213,17 @@
 .sample-history-item.is-expanded .sample-history-detail {
   display: block;
 }
+.sample-history-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.sample-history-pager span {
+  color: var(--muted);
+  font-size: 12px;
+}
 .sample-history-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

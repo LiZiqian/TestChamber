@@ -714,6 +714,13 @@ _assert(result["stats"]["projectsAdded"] == 1, f"Project added: {result['stats']
 _assert(result["stats"]["stagesAdded"] == 1, f"Stage added: {result['stats']}")
 _assert(result["stats"]["tasksAdded"] == 1, f"Task added: {result['stats']}")
 _assert(result["stats"]["samplesAdded"] == 1, f"Sample added: {result['stats']}")
+mutation_summary = result.get("mutationSummary") or {}
+_assert(mutation_summary.get("requiresFullState") is False, f"Import sync does not require full state: {mutation_summary}")
+_assert("proj_blank_import" in mutation_summary.get("projectIds", []), f"Project in import sync summary: {mutation_summary}")
+_assert("stage_blank_import" in mutation_summary.get("stageIds", []), f"Stage in import sync summary: {mutation_summary}")
+_assert("task_blank_import" in mutation_summary.get("taskIds", []), f"Task in import sync summary: {mutation_summary}")
+_assert("sample_blank_import" in mutation_summary.get("sampleIds", []), f"Sample in import sync summary: {mutation_summary}")
+_assert(len(mutation_summary.get("sampleCategoryIds", [])) == 1, f"Sample category in import sync summary: {mutation_summary}")
 
 state, _, _ = get_state()
 _assert(len(state["projects"]) == 1, f"One project after import: {len(state['projects'])}")

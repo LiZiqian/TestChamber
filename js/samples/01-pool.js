@@ -109,6 +109,72 @@ Object.assign(app, {
     while (store.size > 24) store.delete(store.keys().next().value);
   },
 
+  storeSamplePageResult(cat, key, params, result = {}) {
+    const items = result.items || [];
+    const byId = new Map((cat.samples || []).map(sample => [String(sample.id || ""), sample]));
+    items.forEach(sample => {
+      if (!sample?.id) return;
+      const existing = byId.get(String(sample.id));
+      if (existing) {
+        Object.assign(existing, sample);
+      } else {
+        if (!Array.isArray(cat.samples)) cat.samples = [];
+        cat.samples.push(sample);
+      }
+    });
+    Object.assign(cat, result.category || {});
+    cat.sampleCount = result.stats?.totalInCategory ?? result.total ?? cat.sampleCount;
+    cat.statusCounts = result.stats?.statusCounts || cat.statusCounts || {};
+    cat.problemCounts = result.stats?.problemCounts || cat.problemCounts || {};
+    const entry = { key, filterKey: this.samplePageFilterKey(cat, params), categoryId: cat.id, ...result, items };
+    this.setSamplePageCache(entry);
+    this.setSamplePageMeta(entry.filterKey, entry);
+    return entry;
+  },
+
+  storeSamplePageError(cat, key, params, message) {
+    const entry = {
+      key,
+      filterKey: this.samplePageFilterKey(cat, params),
+      categoryId: cat.id,
+      error: message,
+      items: [],
+      page: params.page,
+      pageSize: params.pageSize,
+      total: 0,
+      totalPages: 1
+    };
+    this.setSamplePageCache(entry);
+    return entry;
+  },
+
+  async refreshCurrentSamplePage(cat) {
+    if (!cat?.id || typeof this.fetchSamplePage !== "function") return false;
+    const params = this.samplePageQueryParams(cat);
+    const key = this.samplePageCacheKey(cat, params);
+    const loadingSet = this.samplePageLoadingSet();
+    loadingSet.add(key);
+    this._samplePageLoadingKey = key;
+    try {
+      const result = await this.fetchSamplePage(cat.id, params);
+      loadingSet.delete(key);
+      if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
+      const entry = this.storeSamplePageResult(cat, key, params, result);
+      if (this.view.module === "samples" && this.view.selectedCategoryId === cat.id) {
+        this.refreshSamplePageRegion(cat);
+        this.prefetchAdjacentSamplePages(cat, entry, params);
+      }
+      return true;
+    } catch (e) {
+      loadingSet.delete(key);
+      if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
+      this.storeSamplePageError(cat, key, params, e.message);
+      console.error("样机分页刷新失败：", e);
+      if (this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.refreshSamplePageRegion(cat);
+      return false;
+    }
+  },
+
   loadSampleCategorySummary() {
     if (this._sampleCategorySummaryLoaded || this._sampleCategorySummaryLoading) return;
     this._sampleCategorySummaryLoading = true;
@@ -140,24 +206,7 @@ Object.assign(app, {
       .then(result => {
         loadingSet.delete(key);
         if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
-        const items = result.items || [];
-        const byId = new Map((cat.samples || []).map(sample => [String(sample.id || ""), sample]));
-        items.forEach(sample => {
-          if (!sample?.id) return;
-          const existing = byId.get(String(sample.id));
-          if (existing) Object.assign(existing, sample);
-          else {
-            if (!Array.isArray(cat.samples)) cat.samples = [];
-            cat.samples.push(sample);
-          }
-        });
-        Object.assign(cat, result.category || {});
-        cat.sampleCount = result.stats?.totalInCategory ?? result.total ?? cat.sampleCount;
-        cat.statusCounts = result.stats?.statusCounts || cat.statusCounts || {};
-        cat.problemCounts = result.stats?.problemCounts || cat.problemCounts || {};
-        const entry = { key, filterKey: this.samplePageFilterKey(cat, params), categoryId: cat.id, ...result, items };
-        this.setSamplePageCache(entry);
-        this.setSamplePageMeta(entry.filterKey, entry);
+        const entry = this.storeSamplePageResult(cat, key, params, result);
         if (!prefetch && this.view.module === "samples" && this.view.selectedCategoryId === cat.id) {
           this.refreshSamplePageRegion(cat);
           this.prefetchAdjacentSamplePages(cat, entry, params);
@@ -166,7 +215,7 @@ Object.assign(app, {
       .catch(e => {
         loadingSet.delete(key);
         if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
-        this.setSamplePageCache({ key, filterKey: this.samplePageFilterKey(cat, params), categoryId: cat.id, error: e.message, items: [], page: params.page, pageSize: params.pageSize, total: 0, totalPages: 1 });
+        this.storeSamplePageError(cat, key, params, e.message);
         console.error("样机分页加载失败：", e);
         if (!prefetch && this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.refreshSamplePageRegion(cat);
       });
@@ -837,14 +886,12 @@ Object.assign(app, {
           deleteSample: true,
           taskMutations,
           samples: affectedSamples,
-          sampleEvents,
-          render: false
+          sampleEvents
         });
         if (!saved) {
           this.data = dataSnapshot;
           return true;
         }
-        this.renderSamples();
         Utils.toast("样机档案已销毁，关联任务已处理。");
         return false;
       },
@@ -931,7 +978,6 @@ Object.assign(app, {
   },
 
   async addSample(catId) {
-    if (!await this.ensureFullStateLoaded({ render: false })) return;
     this.showModal("新增样机", `
       <div style="display:flex;flex-direction:column;gap:18px">
         <div class="form-row sample-id-row" style="gap:14px">
@@ -1001,13 +1047,13 @@ Object.assign(app, {
       const selfDup = this.validateSampleSelfDuplicate(sn, imei, boardSn, "sample");
       if (selfDup) { this.markFieldInvalid(document.getElementById(selfDup.field), selfDup.msg); return true; }
 
-      // 池内查重
-      const inCat = this._checkInCategoryDuplicate(category, sn, imei, boardSn, isReassembled, "", "sample");
-      if (inCat) { this.markFieldInvalid(document.getElementById(inCat.fieldId), inCat.msg); return true; }
-
-      // 跨池查重
-      const global = this._checkGlobalDuplicate(sn, imei, boardSn, isReassembled, catId, "", "sample");
-      if (global) { this.markFieldInvalid(document.getElementById(global.fieldId), global.msg); return true; }
+      try {
+        const duplicate = await this._checkServerIdentityDuplicate(sn, imei, boardSn, isReassembled, catId, "", "sample");
+        if (duplicate) { this.markFieldInvalid(document.getElementById(duplicate.fieldId), duplicate.msg); return true; }
+      } catch (e) {
+        alert("样机身份查重失败：" + (e.message || e));
+        return true;
+      }
       const sample = this.newSample(catId, sn || imei || boardSn, sn, imei, {
         stage,
         boardSn,

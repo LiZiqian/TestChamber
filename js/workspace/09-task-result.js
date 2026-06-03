@@ -284,7 +284,7 @@ Object.assign(app, {
           type: photo.type || "",
           size: photo.size || 0
         })).filter(photo => photo.id);
-        await this.syncAfterDirectMutation({ render: false, statusText: "已保存" });
+        this.applySamplePhotosMutationResult(sampleId, obj, { statusText: "已保存" });
         this.setTaskResultRowPhotos(row, [...this.taskResultRowPhotos(row), ...uploaded]);
         Utils.toast(`已上传 ${uploaded.length || files.length} 张结果图片。`);
       } catch (e) {

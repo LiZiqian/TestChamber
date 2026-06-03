@@ -609,8 +609,7 @@ Object.assign(app, {
         `事件 ${result.stats?.sampleEventsAdded || 0} 条，` +
         `跳过 ${result.stats?.skipped || 0} 项`
       );
-      await this.reloadFromServer();
-      this.render();
+      await this.applyImportBundleMutationResult(result, { render: true });
     } catch (e) {
       const msg = e.message || e;
       if (msg.includes("修改") || msg.includes("revision")) {

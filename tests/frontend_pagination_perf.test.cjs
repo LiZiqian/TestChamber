@@ -12,6 +12,8 @@ function createContext() {
   };
   const context = {
     console,
+    URLSearchParams,
+    alert: () => {},
     window: {},
     document: {
       getElementById(id) {
@@ -59,11 +61,15 @@ function loadFrontend() {
   const context = createContext();
   loadScript(context, "js/utils.js", "globalThis.Utils = Utils;");
   loadScript(context, "js/app.data.js");
+  loadScript(context, "js/app.server.js");
+  loadScript(context, "js/import-export-bundle.js");
   loadScript(context, "js/workspace/01-shared.js");
   loadScript(context, "js/workspace/05-task-table.js");
   loadScript(context, "js/samples/01-pool.js");
   loadScript(context, "js/samples/02-import-export.js");
   loadScript(context, "js/samples/03-detail-fields.js");
+  loadScript(context, "js/samples/04-photos.js");
+  loadScript(context, "js/samples/06-history.js");
   return context;
 }
 
@@ -150,6 +156,203 @@ function flushPromises() {
     assert.ok(html.includes("IMEI来源"));
     assert.ok(html.includes("主板SN来源"));
     assert.ok(html.includes("前身池"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app } = context;
+    let fetches = 0;
+    context.fetch = async (url, options = {}) => {
+      fetches++;
+      assert.equal(String(url), "/api/sample-identity-check");
+      assert.equal(options.method, "POST");
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.categoryId, "cat_a");
+      assert.equal(payload.samples[0].sn, "SN-A");
+      assert.ok(!String(options.body).includes("/api/state"));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          results: [{
+            index: 0,
+            hasConflict: true,
+            conflict: {
+              index: 0,
+              scope: "global",
+              categoryName: "池B",
+              conflictId: "SN-A",
+              incomingField: "sn",
+              existingLabel: "SN",
+              sample: { id: "sample_b", code: "SN#SN-A", sn: "SN-A" },
+            },
+          }],
+          conflicts: [],
+          count: 1,
+        }),
+      };
+    };
+
+    const result = await app.checkSampleIdentityConflicts([{ index: 0, sn: "SN-A" }], { categoryId: "cat_a" });
+    const validation = app.sampleIdentityConflictValidation(result.results[0].conflict, "SN-A", "", "", "sample");
+    assert.equal(fetches, 1);
+    assert.equal(validation.fieldId, "sampleSn");
+    assert.ok(validation.msg.includes("池B"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app } = context;
+    app.data.sampleLibrary.categories = [{ id: "cat_import", name: "导入池", samples: [] }];
+    app.ensureFullStateLoaded = async () => { throw new Error("/api/state should not be loaded before sample import duplicate check"); };
+    let identityChecks = 0;
+    app.checkSampleIdentityConflicts = async (samples, { categoryId }) => {
+      identityChecks++;
+      assert.equal(categoryId, "cat_import");
+      assert.equal(samples.length, 3);
+      return {
+        results: [
+          { index: 0, hasConflict: false, conflict: null },
+          { index: 1, hasConflict: true, conflict: { index: 1, scope: "category" } },
+          { index: 2, hasConflict: true, conflict: { index: 2, scope: "global" } },
+        ],
+      };
+    };
+    let committedSamples = [];
+    app.commitSampleCategoryMutation = async (category, options) => {
+      assert.equal(category.id, "cat_import");
+      committedSamples = options.samples;
+      return true;
+    };
+    const csv = [
+      "SN,IMEI,主板SN,是否重组样机,阶段",
+      "SN-OK,IMEI-OK,MB-OK,否,EVT",
+      "SN-DUP,,MB-DUP,否,EVT",
+      "SN-GLOBAL,,MB-GLOBAL,否,EVT",
+    ].join("\n");
+    context.FileReader = class {
+      readAsText() {
+        this.result = csv;
+        return Promise.resolve().then(() => this.onload && this.onload());
+      }
+    };
+    context.document.createElement = tag => {
+      assert.equal(tag, "input");
+      return {
+        files: [{ name: "samples.csv" }],
+        click() {
+          this.onchange({ target: this });
+        },
+      };
+    };
+
+    await app.importSampleBatch("cat_import");
+    await flushPromises();
+    await flushPromises();
+
+    assert.equal(identityChecks, 1);
+    assert.equal(committedSamples.length, 1);
+    assert.equal(committedSamples[0].sn, "SN-OK");
+  }
+
+  {
+    const context = loadFrontend();
+    const { app } = context;
+    let fetches = 0;
+    context.fetch = async url => {
+      fetches++;
+      const text = String(url);
+      assert.ok(text.startsWith("/api/samples/sample_1/history?"));
+      assert.ok(text.includes("page=2"));
+      assert.ok(text.includes("pageSize=20"));
+      assert.ok(!text.includes("/api/state"));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, sampleId: "sample_1", page: 2, pageSize: 20, total: 21, totalPages: 2, items: [] }),
+      };
+    };
+    const result = await app.fetchSampleHistory("sample_1", { page: 2, pageSize: 20 });
+    assert.equal(fetches, 1);
+    assert.equal(result.page, 2);
+  }
+
+  {
+    const context = loadFrontend();
+    const { app } = context;
+    app.data.projects = new Proxy([], {
+      get() {
+        throw new Error("sample history render must not scan local projects");
+      },
+    });
+    app._sampleHistoryCache = {
+      sample_1: {
+        page: 1,
+        pageSize: 20,
+        total: 1,
+        totalPages: 1,
+        items: [{
+          task: { id: "task_1", owner: "张三/001" },
+          projectName: "项目A",
+          stageName: "EVT",
+          testItem: "跌落测试",
+          logs: [],
+          status: "正常完成",
+          result: "Fail",
+          date: "2026-06-03",
+          taskSampleCount: 1,
+          faultMarked: true,
+          problems: ["不开机"],
+          resultPhotos: [],
+        }],
+      },
+    };
+    app.logHtml = () => "<div>log</div>";
+    const html = app.sampleTestHistoryHtml("sample_1");
+    assert.ok(html.includes("跌落测试"));
+    assert.ok(html.includes("项目A"));
+    assert.ok(html.includes("不开机"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app } = context;
+    let fetches = 0;
+    context.fetch = async (url) => {
+      fetches++;
+      const text = String(url);
+      assert.ok(text.startsWith("/api/task-sample-candidates?"));
+      assert.ok(text.includes("taskId=task_1"));
+      assert.ok(text.includes("selectedIds=sample_a%2Csample_b"));
+      assert.ok(text.includes("page=2"));
+      assert.ok(!text.includes("/api/state"));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          page: 2,
+          pageSize: 50,
+          total: 70,
+          totalPages: 2,
+          items: [{ id: "sample_c", status: "闲置", selectable: true }],
+          selectedItems: [{ id: "sample_a", status: "在位等待", selectable: true }],
+          categories: [],
+        }),
+      };
+    };
+
+    const result = await app.fetchTaskSampleCandidates({
+      taskId: "task_1",
+      selectedIds: ["sample_a", "sample_b"],
+      page: 2,
+      pageSize: 50,
+    });
+
+    assert.equal(fetches, 1);
+    assert.equal(result.page, 2);
+    assert.equal(result.items[0].id, "sample_c");
   }
 
   {
@@ -268,6 +471,487 @@ function flushPromises() {
     };
     const html = app.workspaceTaskFlowHtml({ id: "project_perf", name: "项目" }, stage);
     assert.ok(html.includes("正在加载服务器分页数据"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.taskFlowShell = { dataset: { stageId: "stage_local" }, innerHTML: "" };
+    app.view.module = "projectWorkspace";
+    app.view.selectedStageId = "stage_local";
+    app.view.taskFlowPage = 1;
+    app.view.taskFlowPageSize = 50;
+    app.sectionToggleTriangle = () => "";
+    app.taskIssueSummaryHtml = () => "<span>-</span>";
+    app.taskIssueRecordHtml = () => "<span>-</span>";
+    app.taskFlowActionsHtml = () => "";
+    app.ensureTaskLogs = () => [];
+    app.updateSelectPlaceholderState = () => {};
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderPreserveScroll = () => { fullRenders++; };
+    const project = { id: "project_local", name: "项目", stages: [] };
+    const stage = {
+      id: "stage_local",
+      name: "阶段",
+      skuNames: ["SKU1"],
+      progress: [],
+      tasks: [{ id: "task_local", status: "待下发", skuIndex: 1, category: "老类别", testItem: "旧任务", sampleIds: [] }],
+    };
+    project.stages.push(stage);
+    app.data.projects = [project];
+    let pageFetches = 0;
+    app.fetchStageTasksPage = async (stageId, params) => {
+      pageFetches++;
+      assert.equal(stageId, "stage_local");
+      assert.equal(params.pageSize, 50);
+      return {
+        page: 1,
+        pageSize: 50,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInStage: 1, statusCounts: { "进行中": 1 }, ownerNames: ["张三"] },
+        rows: [{ progress: null, task: { id: "task_local", status: "进行中", skuIndex: 1, category: "射频", testItem: "吞吐测试", owner: "张三/001", sampleIds: [] } }],
+      };
+    };
+
+    const refreshed = await app.refreshTaskListAfterMutation(project, stage, { render: true });
+
+    assert.equal(refreshed, true);
+    assert.equal(pageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.ok(nodes.taskFlowShell.innerHTML.includes("吞吐测试"));
+    assert.ok(nodes.taskFlowShell.innerHTML.includes("进行中"));
+    assert.equal(stage.tasks[0].testItem, "吞吐测试");
+    assert.equal(stage.statusCounts["进行中"], 1);
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.samplePageShell = { dataset: { categoryId: "cat_local" }, innerHTML: "" };
+    nodes.samplePagerTop = { innerHTML: "" };
+    nodes.samplePagerBottom = { innerHTML: "" };
+    nodes.samplePoolCount = { innerText: "" };
+    nodes.samplePoolGrid = { innerHTML: "" };
+    app._samplePagePrefetchDisabled = true;
+    app.view.module = "samples";
+    app.view.selectedCategoryId = "cat_local";
+    app.view.samplePage = 1;
+    app.view.samplePageSize = 50;
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderSamples = () => { fullRenders++; };
+    app.data.sampleLibrary.categories = [{
+      id: "cat_local",
+      name: "池A",
+      sampleCount: 1,
+      samples: [{ id: "sample_local", sn: "OLD000001", status: "闲置" }],
+    }];
+    let pageFetches = 0;
+    app.fetchSamplePage = async (categoryId, params) => {
+      pageFetches++;
+      assert.equal(categoryId, "cat_local");
+      assert.equal(params.pageSize, 50);
+      return {
+        page: 1,
+        pageSize: 50,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInCategory: 1, statusCounts: { "测试中": 1 }, problemCounts: { ok: 1, fault: 0 } },
+        category: { id: "cat_local", name: "池A" },
+        items: [{ id: "sample_local", sn: "NEW000123", status: "测试中" }],
+      };
+    };
+
+    const refreshed = await app.refreshSampleListAfterMutation({ categoryId: "cat_local" }, { render: true });
+
+    assert.equal(refreshed, true);
+    assert.equal(pageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.ok(nodes.samplePoolGrid.innerHTML.includes("SN#000123"));
+    assert.ok(nodes.samplePoolGrid.innerHTML.includes("测试中"));
+    assert.equal(nodes.samplePoolCount.innerText, "显示 1 / 1 台");
+    assert.equal(app.data.sampleLibrary.categories[0].samples[0].status, "测试中");
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.taskFlowShell = { dataset: { stageId: "stage_commit" }, innerHTML: "" };
+    app.view.module = "projectWorkspace";
+    app.view.selectedStageId = "stage_commit";
+    app.sectionToggleTriangle = () => "";
+    app.taskIssueSummaryHtml = () => "<span>-</span>";
+    app.taskIssueRecordHtml = () => "<span>-</span>";
+    app.taskFlowActionsHtml = () => "";
+    app.ensureTaskLogs = () => [];
+    app.updateSelectPlaceholderState = () => {};
+    app.updateServerStatus = () => {};
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderPreserveScroll = () => { fullRenders++; };
+    app.reloadFromServer = async () => { throw new Error("/api/state should not be used after task mutation"); };
+    const task = { id: "task_commit", status: "进行中", skuIndex: 1, category: "可靠性", testItem: "跌落", owner: "张三/001", sampleIds: [] };
+    const stage = { id: "stage_commit", name: "阶段", skuNames: ["SKU1"], progress: [], tasks: [task] };
+    const project = { id: "project_commit", name: "项目", stages: [stage] };
+    app.data.projects = [project];
+    app.serverRevision = 1;
+    let mutationFetches = 0;
+    let pageFetches = 0;
+    context.fetch = async (url) => {
+      mutationFetches++;
+      assert.ok(String(url).startsWith("/api/tasks/task_commit/mutation"));
+      return { ok: true, status: 200, json: async () => ({ ok: true, revision: 2, updated_at: "2026-06-03T10:00:00" }) };
+    };
+    app.fetchStageTasksPage = async () => {
+      pageFetches++;
+      return {
+        page: 1,
+        pageSize: 100,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInStage: 1, statusCounts: { "进行中": 1 }, ownerNames: ["张三"] },
+        rows: [{ progress: null, task }],
+      };
+    };
+
+    const saved = await app.commitTaskMutation(project, stage, task, { action: "start_task", remark: "开始测试", user: "张三/001" });
+
+    assert.equal(saved, true);
+    assert.equal(mutationFetches, 1);
+    assert.equal(pageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.equal(app.serverRevision, 2);
+    assert.ok(nodes.taskFlowShell.innerHTML.includes("跌落"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.taskFlowShell = { dataset: { stageId: "stage_batch" }, innerHTML: "" };
+    app.view.module = "projectWorkspace";
+    app.view.selectedStageId = "stage_batch";
+    app.sectionToggleTriangle = () => "";
+    app.taskIssueSummaryHtml = () => "<span>-</span>";
+    app.taskIssueRecordHtml = () => "<span>-</span>";
+    app.taskFlowActionsHtml = () => "";
+    app.ensureTaskLogs = () => [];
+    app.updateSelectPlaceholderState = () => {};
+    app.updateServerStatus = () => {};
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderPreserveScroll = () => { fullRenders++; };
+    const tasks = [{ id: "task_batch", status: "待下发", skuIndex: 1, category: "射频", testItem: "批量新增", sampleIds: [] }];
+    const stage = { id: "stage_batch", name: "阶段", skuNames: ["SKU1"], progress: [], tasks };
+    const project = { id: "project_batch", name: "项目", stages: [stage] };
+    app.data.projects = [project];
+    app.serverRevision = 1;
+    let mutationFetches = 0;
+    let pageFetches = 0;
+    context.fetch = async (url) => {
+      mutationFetches++;
+      assert.ok(String(url).startsWith("/api/stages/stage_batch/tasks/batch"));
+      return { ok: true, status: 200, json: async () => ({ ok: true, revision: 2, updated_at: "2026-06-03T10:00:00" }) };
+    };
+    app.fetchStageTasksPage = async () => {
+      pageFetches++;
+      return {
+        page: 1,
+        pageSize: 100,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInStage: 1, statusCounts: { "待下发": 1 }, ownerNames: [] },
+        rows: [{ progress: null, task: tasks[0] }],
+      };
+    };
+
+    const saved = await app.commitTaskBatchMutation(project, stage, tasks, { action: "create_tasks", remark: "批量新增", user: "管理员" });
+
+    assert.equal(saved, true);
+    assert.equal(mutationFetches, 1);
+    assert.equal(pageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.ok(nodes.taskFlowShell.innerHTML.includes("批量新增"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.samplePageShell = { dataset: { categoryId: "cat_commit" }, innerHTML: "" };
+    nodes.samplePagerTop = { innerHTML: "" };
+    nodes.samplePagerBottom = { innerHTML: "" };
+    nodes.samplePoolCount = { innerText: "" };
+    nodes.samplePoolGrid = { innerHTML: "" };
+    app._samplePagePrefetchDisabled = true;
+    app.view.module = "samples";
+    app.view.selectedCategoryId = "cat_commit";
+    app.updateServerStatus = () => {};
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderSamples = () => { fullRenders++; };
+    app.reloadFromServer = async () => { throw new Error("/api/state should not be used after sample mutation"); };
+    const sample = { id: "sample_commit", categoryId: "cat_commit", sn: "SN123456", status: "测试中" };
+    app.data.sampleLibrary.categories = [{ id: "cat_commit", name: "池A", sampleCount: 1, samples: [sample] }];
+    app.serverRevision = 1;
+    let mutationFetches = 0;
+    let pageFetches = 0;
+    context.fetch = async (url) => {
+      mutationFetches++;
+      assert.ok(String(url).startsWith("/api/samples/sample_commit/mutation"));
+      return { ok: true, status: 200, json: async () => ({ ok: true, revision: 2, updated_at: "2026-06-03T10:00:00" }) };
+    };
+    app.fetchSamplePage = async () => {
+      pageFetches++;
+      return {
+        page: 1,
+        pageSize: 100,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInCategory: 1, statusCounts: { "测试中": 1 }, problemCounts: { ok: 1, fault: 0 } },
+        category: { id: "cat_commit", name: "池A" },
+        items: [sample],
+      };
+    };
+
+    const saved = await app.commitSampleMutation(sample, { action: "sample_detail_update", remark: "样机详情编辑", user: "管理员" });
+
+    assert.equal(saved, true);
+    assert.equal(mutationFetches, 1);
+    assert.equal(pageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.equal(app.serverRevision, 2);
+    assert.ok(nodes.samplePoolGrid.innerHTML.includes("SN#123456"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.samplePageShell = { dataset: { categoryId: "cat_batch" }, innerHTML: "" };
+    nodes.samplePagerTop = { innerHTML: "" };
+    nodes.samplePagerBottom = { innerHTML: "" };
+    nodes.samplePoolCount = { innerText: "" };
+    nodes.samplePoolGrid = { innerHTML: "" };
+    app._samplePagePrefetchDisabled = true;
+    app.view.module = "samples";
+    app.view.selectedCategoryId = "cat_batch";
+    app.updateServerStatus = () => {};
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderSamples = () => { fullRenders++; };
+    const sample = { id: "sample_batch", categoryId: "cat_batch", sn: "SN654321", status: "闲置" };
+    const category = { id: "cat_batch", name: "池B", sampleCount: 1, samples: [sample] };
+    app.data.sampleLibrary.categories = [category];
+    app.serverRevision = 1;
+    let mutationFetches = 0;
+    let pageFetches = 0;
+    context.fetch = async (url) => {
+      mutationFetches++;
+      assert.ok(String(url).startsWith("/api/sample-categories/cat_batch/mutation"));
+      return { ok: true, status: 200, json: async () => ({ ok: true, revision: 2, updated_at: "2026-06-03T10:00:00" }) };
+    };
+    app.fetchSamplePage = async () => {
+      pageFetches++;
+      return {
+        page: 1,
+        pageSize: 100,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInCategory: 1, statusCounts: { "闲置": 1 }, problemCounts: { ok: 1, fault: 0 } },
+        category: { id: "cat_batch", name: "池B" },
+        items: [sample],
+      };
+    };
+
+    const saved = await app.commitSampleCategoryMutation(category, {
+      action: "create_sample",
+      remark: "新增样机",
+      user: "管理员",
+      createSamples: true,
+      samples: [sample],
+    });
+
+    assert.equal(saved, true);
+    assert.equal(mutationFetches, 1);
+    assert.equal(pageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.ok(nodes.samplePoolGrid.innerHTML.includes("SN#654321"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.taskFlowShell = { dataset: { stageId: "stage_import" }, innerHTML: "" };
+    app.view.module = "projectWorkspace";
+    app.view.selectedProjectId = "project_import";
+    app.view.selectedStageId = "stage_import";
+    app.view.taskFlowPage = 1;
+    app.view.taskFlowPageSize = 50;
+    app.sectionToggleTriangle = () => "";
+    app.taskIssueSummaryHtml = () => "<span>-</span>";
+    app.taskIssueRecordHtml = () => "<span>-</span>";
+    app.taskFlowActionsHtml = () => "";
+    app.ensureTaskLogs = () => [];
+    app.updateSelectPlaceholderState = () => {};
+    app.closeModal = () => { app._closed = (app._closed || 0) + 1; };
+    app.updateServerStatus = () => {};
+    app.renderNav = () => { app._navRenders = (app._navRenders || 0) + 1; };
+    app.renderHeader = () => { app._headerRenders = (app._headerRenders || 0) + 1; };
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderContent = () => { fullRenders++; };
+    app.reloadFromServer = async () => { throw new Error("/api/state should not be used after bundle import"); };
+    app.data.projects = [{
+      id: "project_import",
+      name: "旧项目",
+      stages: [{ id: "stage_import", name: "EVT", skuNames: ["SKU1"], progress: [], tasks: [] }],
+      _detailLoaded: true,
+    }];
+    app.data.sampleLibrary.categories = [{ id: "cat_import", name: "旧样机池", sampleCount: 0, samples: [] }];
+    app.serverRevision = 1;
+    app._importState = { preview: { previewId: "preview_import", conflicts: [], blockers: [] }, decisions: {}, processedConflicts: new Set() };
+    let projectSummaryFetches = 0;
+    let categorySummaryFetches = 0;
+    let projectDetailFetches = 0;
+    let taskPageFetches = 0;
+    app.importBundleCommit = async (previewId, decisions) => {
+      assert.equal(previewId, "preview_import");
+      assert.deepEqual(decisions, {});
+      return {
+        ok: true,
+        revision: 2,
+        updated_at: "2026-06-03T11:00:00",
+        stats: { projectsAdded: 1, samplesAdded: 1, samplesMerged: 0, sampleEventsAdded: 0, skipped: 0 },
+        mutationSummary: {
+          projectIds: ["project_import"],
+          stageIds: ["stage_import"],
+          taskIds: ["task_import"],
+          sampleCategoryIds: ["cat_import"],
+          sampleIds: ["sample_import"],
+          requiresFullState: false,
+        },
+      };
+    };
+    app.fetchProjectSummary = async () => {
+      projectSummaryFetches++;
+      return [{ id: "project_import", name: "导入项目", code: "IMP", owner: "张三/001", stageCount: 1, taskCount: 1 }];
+    };
+    app.fetchSampleCategoriesSummary = async () => {
+      categorySummaryFetches++;
+      return [{ id: "cat_import", name: "导入池", sampleCount: 1, statusCounts: { "闲置": 1 }, problemCounts: { ok: 1 } }];
+    };
+    app.fetchProjectDetail = async projectId => {
+      projectDetailFetches++;
+      assert.equal(projectId, "project_import");
+      return {
+        id: "project_import",
+        name: "导入项目",
+        code: "IMP",
+        owner: "张三/001",
+        stages: [{ id: "stage_import", name: "EVT", skuNames: ["SKU1"], progress: [], tasks: [], taskCount: 1, statusCounts: { "待下发": 1 }, ownerNames: [] }],
+      };
+    };
+    app.fetchStageTasksPage = async (stageId, params) => {
+      taskPageFetches++;
+      assert.equal(stageId, "stage_import");
+      assert.equal(params.pageSize, 50);
+      return {
+        page: 1,
+        pageSize: 50,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInStage: 1, statusCounts: { "待下发": 1 }, ownerNames: [] },
+        rows: [{ progress: null, task: { id: "task_import", status: "待下发", skuIndex: 1, category: "可靠性", testItem: "导入任务", sampleIds: [] } }],
+      };
+    };
+
+    const shouldClose = await app._onImportCommit({ skipCollect: true });
+
+    assert.equal(shouldClose, false);
+    assert.equal(app._importState, null);
+    assert.equal(app._closed, 1);
+    assert.equal(projectSummaryFetches, 1);
+    assert.equal(categorySummaryFetches, 1);
+    assert.equal(projectDetailFetches, 1);
+    assert.equal(taskPageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.equal(app.serverRevision, 2);
+    assert.equal(app.data.projects[0].name, "导入项目");
+    assert.ok(nodes.taskFlowShell.innerHTML.includes("导入任务"));
+  }
+
+  {
+    const context = loadFrontend();
+    const { app, nodes } = context;
+    nodes.samplePageShell = { dataset: { categoryId: "cat_import" }, innerHTML: "" };
+    nodes.samplePagerTop = { innerHTML: "" };
+    nodes.samplePagerBottom = { innerHTML: "" };
+    nodes.samplePoolCount = { innerText: "" };
+    nodes.samplePoolGrid = { innerHTML: "" };
+    app._samplePagePrefetchDisabled = true;
+    app.view.module = "samples";
+    app.view.selectedCategoryId = "cat_import";
+    app.view.samplePage = 1;
+    app.view.samplePageSize = 50;
+    app.updateServerStatus = () => {};
+    app.renderNav = () => {};
+    app.renderHeader = () => {};
+    let fullRenders = 0;
+    app.render = () => { fullRenders++; };
+    app.renderContent = () => { fullRenders++; };
+    app.renderSamples = () => { fullRenders++; };
+    app.reloadFromServer = async () => { throw new Error("/api/state should not be used after bundle import"); };
+    app.data.projects = [];
+    app.data.sampleLibrary.categories = [{ id: "cat_import", name: "旧样机池", sampleCount: 0, samples: [] }];
+    app.serverRevision = 1;
+    let categorySummaryFetches = 0;
+    let samplePageFetches = 0;
+    app.fetchProjectSummary = async () => [];
+    app.fetchSampleCategoriesSummary = async () => {
+      categorySummaryFetches++;
+      return [{ id: "cat_import", name: "导入池", sampleCount: 1, statusCounts: { "闲置": 1 }, problemCounts: { ok: 1 } }];
+    };
+    app.fetchProjectDetail = async () => {
+      throw new Error("project detail should not be fetched when import only affects samples");
+    };
+    app.fetchSamplePage = async (categoryId, params) => {
+      samplePageFetches++;
+      assert.equal(categoryId, "cat_import");
+      assert.equal(params.pageSize, 50);
+      return {
+        page: 1,
+        pageSize: 50,
+        total: 1,
+        totalPages: 1,
+        stats: { totalInCategory: 1, statusCounts: { "闲置": 1 }, problemCounts: { ok: 1 } },
+        category: { id: "cat_import", name: "导入池" },
+        items: [{ id: "sample_import", sn: "SN-IMPORT-001", status: "闲置" }],
+      };
+    };
+
+    const synced = await app.applyImportBundleMutationResult({
+      ok: true,
+      revision: 2,
+      updated_at: "2026-06-03T11:10:00",
+      mutationSummary: {
+        projectIds: [],
+        stageIds: [],
+        taskIds: [],
+        sampleCategoryIds: ["cat_import"],
+        sampleIds: ["sample_import"],
+        requiresFullState: false,
+      },
+    });
+
+    assert.equal(synced, true);
+    assert.equal(categorySummaryFetches, 1);
+    assert.equal(samplePageFetches, 1);
+    assert.equal(fullRenders, 0);
+    assert.equal(app.serverRevision, 2);
+    assert.equal(app.data.sampleLibrary.categories[0].name, "导入池");
+    assert.equal(app.data.sampleLibrary.categories[0].samples[0].id, "sample_import");
+    assert.equal(nodes.samplePoolCount.innerText, "显示 1 / 1 台");
+    assert.ok(nodes.samplePoolGrid.innerHTML.includes("sample_import"));
   }
 
   console.log("frontend pagination performance tests passed");

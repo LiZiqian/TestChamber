@@ -349,6 +349,25 @@ def backfill_query_state_columns(conn: sqlite3.Connection) -> None:
             )
 
 
+def backfill_sample_identity_columns(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, data_json, board_sn, is_reassembled
+        FROM sample_records
+        WHERE deleted_at IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        sample = json_obj(row["data_json"], {}) or {}
+        board_sn = str(sample.get("boardSn") or "").strip()
+        is_reassembled = 1 if sample_is_reassembled(sample) else 0
+        if str(row["board_sn"] or "") != board_sn or int(row["is_reassembled"] or 0) != is_reassembled:
+            conn.execute(
+                "UPDATE sample_records SET board_sn = ?, is_reassembled = ? WHERE id = ?",
+                (board_sn, is_reassembled, row["id"]),
+            )
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute(
@@ -397,6 +416,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             sample_no TEXT,
             sn TEXT,
             imei TEXT,
+            board_sn TEXT,
+            is_reassembled INTEGER NOT NULL DEFAULT 0,
             status TEXT,
             has_problem INTEGER NOT NULL DEFAULT 0,
             effective_status TEXT,
@@ -413,9 +434,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
     ensure_table_column(conn, "sample_records", "has_problem", "INTEGER NOT NULL DEFAULT 0")
     ensure_table_column(conn, "sample_records", "effective_status", "TEXT")
+    ensure_table_column(conn, "sample_records", "board_sn", "TEXT")
+    ensure_table_column(conn, "sample_records", "is_reassembled", "INTEGER NOT NULL DEFAULT 0")
+    backfill_sample_identity_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category ON sample_records(category_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_sn ON sample_records(sn)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_imei ON sample_records(imei)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_board_sn ON sample_records(board_sn)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_identity_active ON sample_records(deleted_at, is_reassembled, sn, imei, board_sn)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_status ON sample_records(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_active ON sample_records(category_id, deleted_at, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sample_records_category_created ON sample_records(category_id, deleted_at, created_at, id)")
@@ -527,6 +553,25 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_flow_created ON project_tasks(stage_id, deleted_at, flow_status, created_at, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_stage_sku_created ON project_tasks(stage_id, deleted_at, sku_index, created_at, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_tasks_project_created ON project_tasks(project_id, deleted_at, created_at, id)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS project_task_samples (
+            task_id TEXT NOT NULL,
+            sample_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            stage_id TEXT NOT NULL,
+            test_item TEXT,
+            status TEXT,
+            flow_status TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(task_id, sample_id),
+            FOREIGN KEY(task_id) REFERENCES project_tasks(id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_task_samples_sample ON project_task_samples(sample_id, flow_status, task_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_task_samples_task ON project_task_samples(task_id)")
+    backfill_project_task_samples(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS task_logs (
@@ -902,13 +947,15 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
             conn.execute(
                 """
                 INSERT INTO sample_records
-                (id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                (id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, has_problem, effective_status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(id) DO UPDATE SET
                     category_id = excluded.category_id,
                     sample_no = excluded.sample_no,
                     sn = excluded.sn,
                     imei = excluded.imei,
+                    board_sn = excluded.board_sn,
+                    is_reassembled = excluded.is_reassembled,
                     status = excluded.status,
                     has_problem = excluded.has_problem,
                     effective_status = excluded.effective_status,
@@ -925,6 +972,8 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
                     str(sample.get("sampleNo") or ""),
                     str(sample.get("sn") or ""),
                     str(sample.get("imei") or ""),
+                    str(sample.get("boardSn") or ""),
+                    1 if sample_is_reassembled(sample) else 0,
                     str(sample.get("status") or ""),
                     1 if sample_has_problem(sample) else 0,
                     sample_effective_status(sample),
@@ -1103,7 +1152,7 @@ def load_sample_library(conn: sqlite3.Connection, *, include_photos: bool = True
 
     sample_rows = conn.execute(
         """
-        SELECT id, category_id, sample_no, sn, imei, status, location, owner, borrower, data_json
+        SELECT id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, location, owner, borrower, data_json
         FROM sample_records
         WHERE deleted_at IS NULL
         ORDER BY created_at, id
@@ -1121,6 +1170,8 @@ def load_sample_library(conn: sqlite3.Connection, *, include_photos: bool = True
             "sampleNo": row["sample_no"] or sample.get("sampleNo") or "",
             "sn": row["sn"] or sample.get("sn") or "",
             "imei": row["imei"] or sample.get("imei") or "",
+            "boardSn": row["board_sn"] or sample.get("boardSn") or "",
+            "isReassembled": bool(row["is_reassembled"]) if row["is_reassembled"] is not None else sample_is_reassembled(sample),
             "status": row["status"] or sample.get("status") or "",
             "location": row["location"] or sample.get("location") or "",
             "owner": row["owner"] or sample.get("owner") or "",
@@ -1433,6 +1484,7 @@ def sync_project_library(conn: sqlite3.Connection, data: dict, *, allow_empty: b
                         str(task.get("completedAt") or task.get("endDate") or ""),
                     ),
                 )
+                replace_task_sample_links(conn, task_id, project_id, stage_id, task, sample_ids)
                 conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
                 seen_log_ids: set[str] = set()
                 for log in task_logs:
@@ -1467,9 +1519,11 @@ def sync_project_library(conn: sqlite3.Connection, data: dict, *, allow_empty: b
     if active_task_ids:
         placeholders = ",".join("?" for _ in active_task_ids)
         conn.execute(f"DELETE FROM task_logs WHERE task_id NOT IN ({placeholders})", active_task_ids)
+        conn.execute(f"DELETE FROM project_task_samples WHERE task_id NOT IN ({placeholders})", active_task_ids)
         conn.execute(f"DELETE FROM project_tasks WHERE id NOT IN ({placeholders})", active_task_ids)
     else:
         conn.execute("DELETE FROM task_logs")
+        conn.execute("DELETE FROM project_task_samples")
         conn.execute("DELETE FROM project_tasks")
 
     if active_stage_ids:
@@ -1741,6 +1795,70 @@ def task_flow_status(task: dict) -> str:
     if status in ("进行中", "Testing"):
         return "进行中"
     return "待下发"
+
+
+def replace_task_sample_links(
+    conn: sqlite3.Connection,
+    task_id: str,
+    project_id: str,
+    stage_id: str,
+    task: dict,
+    sample_ids: list[str] | None = None,
+) -> None:
+    task_id = str(task_id or "")
+    if not task_id:
+        return
+    conn.execute("DELETE FROM project_task_samples WHERE task_id = ?", (task_id,))
+    ids = sample_ids if sample_ids is not None else [str(x) for x in (task.get("sampleIds") or [])]
+    seen: set[str] = set()
+    ts = str(task.get("updatedAt") or now_iso())
+    flow_status = task_flow_status(task)
+    for sample_id in ids:
+        sid = str(sample_id or "").strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        conn.execute(
+            """
+            INSERT INTO project_task_samples
+            (task_id, sample_id, project_id, stage_id, test_item, status, flow_status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                sid,
+                str(project_id or ""),
+                str(stage_id or ""),
+                str(task.get("testItem") or ""),
+                str(task.get("status") or ""),
+                flow_status,
+                ts,
+            ),
+        )
+
+
+def backfill_project_task_samples(conn: sqlite3.Connection) -> None:
+    existing = conn.execute("SELECT COUNT(*) AS count FROM project_task_samples").fetchone()
+    if int(existing["count"] if existing else 0) > 0:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, project_id, stage_id, test_item, status, sample_ids_json, data_json
+        FROM project_tasks
+        WHERE deleted_at IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        task = json_obj(row["data_json"], {}) or {}
+        task["id"] = row["id"]
+        task["projectId"] = row["project_id"]
+        task["stageId"] = row["stage_id"]
+        task["testItem"] = row["test_item"] or task.get("testItem") or ""
+        task["status"] = row["status"] or task.get("status") or ""
+        sample_ids = json_obj(row["sample_ids_json"], [])
+        if not isinstance(sample_ids, list):
+            sample_ids = []
+        replace_task_sample_links(conn, str(row["id"] or ""), str(row["project_id"] or ""), str(row["stage_id"] or ""), task, [str(x) for x in sample_ids])
 
 
 def person_name_from_text(text: object) -> str:
@@ -2211,12 +2329,15 @@ def sample_sql_filter_parts(category_id: str, query: dict[str, list[str]], *, in
 
 def sample_from_db_row(row: sqlite3.Row) -> dict:
     sample = json_obj(row["data_json"], {}) or {}
+    keys = set(row.keys())
     sample.update({
         "id": row["id"],
         "categoryId": row["category_id"],
         "sampleNo": row["sample_no"] or sample.get("sampleNo") or "",
         "sn": row["sn"] or sample.get("sn") or "",
         "imei": row["imei"] or sample.get("imei") or "",
+        "boardSn": (row["board_sn"] if "board_sn" in keys else None) or sample.get("boardSn") or "",
+        "isReassembled": bool(row["is_reassembled"]) if "is_reassembled" in keys and row["is_reassembled"] is not None else sample_is_reassembled(sample),
         "status": row["status"] or sample.get("status") or "",
         "location": row["location"] or sample.get("location") or "",
         "owner": row["owner"] or sample.get("owner") or "",
@@ -2224,9 +2345,9 @@ def sample_from_db_row(row: sqlite3.Row) -> dict:
         "photos": [],
         "photosLoaded": False,
     })
-    if "effective_status" in row.keys():
+    if "effective_status" in keys:
         sample["effectiveStatus"] = sample_effective_status(sample)
-    if "has_problem" in row.keys():
+    if "has_problem" in keys:
         sample["hasProblem"] = bool(row["has_problem"])
     return sample
 
@@ -2337,7 +2458,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
 
         rows = conn.execute(
             f"""
-            SELECT id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json
+            SELECT id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, has_problem, effective_status, location, owner, borrower, data_json
             FROM sample_records
             WHERE {" AND ".join(where)}
             ORDER BY created_at, id
@@ -2400,7 +2521,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
 
     rows = conn.execute(
         f"""
-        SELECT id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json
+        SELECT id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, has_problem, effective_status, location, owner, borrower, data_json
         FROM sample_records
         WHERE {" AND ".join(where)}
         ORDER BY created_at, id
@@ -2447,6 +2568,559 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
     }
 
 
+def query_id_list(query: dict[str, list[str]], name: str, *, max_items: int = 500) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in query.get(name) or []:
+        for part in str(raw or "").split(","):
+            value = part.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+            if len(result) >= max_items:
+                return result
+    return result
+
+
+def sample_candidate_keyword_where(keyword: str, *, negate: bool = False) -> tuple[str, list[object]]:
+    like = f"%{keyword.lower()}%"
+    expr = """
+        (LOWER(r.sample_no) LIKE ? OR LOWER(r.sn) LIKE ? OR LOWER(r.imei) LIKE ?
+         OR LOWER(r.owner) LIKE ? OR LOWER(r.borrower) LIKE ? OR LOWER(r.location) LIKE ?
+         OR LOWER(c.name) LIKE ? OR LOWER(r.data_json) LIKE ?)
+    """
+    if negate:
+        expr = f"NOT {expr}"
+    return expr, [like, like, like, like, like, like, like, like]
+
+
+def open_task_occupancy_for_sample_ids(conn: sqlite3.Connection, sample_ids: list[str], *, exclude_task_id: str = "") -> dict[str, list[dict]]:
+    ids = [str(x or "").strip() for x in sample_ids if str(x or "").strip()]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    where = [
+        f"sample_id IN ({placeholders})",
+        "flow_status NOT IN ('正常完成', '异常终止')",
+    ]
+    args: list[object] = [*ids]
+    if exclude_task_id:
+        where.append("task_id != ?")
+        args.append(exclude_task_id)
+    rows = conn.execute(
+        f"""
+        SELECT sample_id, task_id, project_id, stage_id, test_item, status
+        FROM project_task_samples
+        WHERE {" AND ".join(where)}
+        ORDER BY updated_at DESC, task_id
+        """,
+        args,
+    ).fetchall()
+    occupancy: dict[str, list[dict]] = {}
+    for row in rows:
+        sid = str(row["sample_id"] or "")
+        if not sid:
+            continue
+        occupancy.setdefault(sid, []).append({
+            "taskId": str(row["task_id"] or ""),
+            "projectId": str(row["project_id"] or ""),
+            "stageId": str(row["stage_id"] or ""),
+            "testItem": str(row["test_item"] or ""),
+            "status": str(row["status"] or ""),
+        })
+    return occupancy
+
+
+def task_sample_candidate_from_row(row: sqlite3.Row) -> dict:
+    sample = sample_from_db_row(row)
+    sample["categoryName"] = row["category_name"] or ""
+    sample["effectiveStatus"] = sample_effective_status(sample)
+    sample["hasProblem"] = sample_has_problem(sample)
+    return sample
+
+
+def decorate_task_sample_candidates(
+    samples: list[dict],
+    *,
+    selected_ids: set[str],
+    occupancy: dict[str, list[dict]],
+) -> list[dict]:
+    for sample in samples:
+        sid = str(sample.get("id") or "")
+        selected = sid in selected_ids
+        status = sample_record_status(sample)
+        occupied_tasks = occupancy.get(sid, [])
+        status_blocked = status != "闲置"
+        selectable = selected or (not status_blocked and not occupied_tasks)
+        if selected:
+            disabled_reason = ""
+        elif occupied_tasks:
+            disabled_reason = "样机已被其他未完成任务占用"
+        elif status_blocked:
+            disabled_reason = f"当前状态为「{status}」，不能加入测试任务"
+        else:
+            disabled_reason = ""
+        sample["alreadySelected"] = selected
+        sample["selectable"] = selectable
+        sample["disabledReason"] = disabled_reason
+        sample["occupyingTasks"] = occupied_tasks
+    return samples
+
+
+def sample_identity_value(value: object) -> str:
+    return str(value or "").strip()
+
+
+def sample_identity_key(value: object) -> str:
+    return sample_identity_value(value).lower()
+
+
+def sample_identity_fields(sample: dict) -> list[dict]:
+    return [
+        {"field": "sn", "label": "SN", "value": sample_identity_value(sample.get("sn"))},
+        {"field": "imei", "label": "IMEI", "value": sample_identity_value(sample.get("imei"))},
+        {"field": "boardSn", "label": "主板SN", "value": sample_identity_value(sample.get("boardSn"))},
+    ]
+
+
+def sample_display_code(sample: dict) -> str:
+    sn = sample_identity_value(sample.get("sn"))
+    imei = sample_identity_value(sample.get("imei"))
+    board_sn = sample_identity_value(sample.get("boardSn"))
+    if sn:
+        return f"SN#{sn[-6:]}"
+    if imei:
+        return f"IMEI#{imei[-6:]}"
+    if board_sn:
+        return f"主板SN#{board_sn[-6:]}"
+    return sample_identity_value(sample.get("sampleNo")) or "未录入SN/IMEI/主板SN"
+
+
+def compact_sample_identity_row(row: sqlite3.Row) -> dict:
+    sample = sample_from_db_row(row)
+    return {
+        "id": str(sample.get("id") or ""),
+        "categoryId": str(sample.get("categoryId") or ""),
+        "categoryName": str(row["category_name"] or "") if "category_name" in row.keys() else "",
+        "sampleNo": str(sample.get("sampleNo") or ""),
+        "sn": str(sample.get("sn") or ""),
+        "imei": str(sample.get("imei") or ""),
+        "boardSn": str(sample.get("boardSn") or ""),
+        "isReassembled": sample_is_reassembled(sample),
+        "status": str(sample.get("status") or ""),
+        "code": sample_display_code(sample),
+    }
+
+
+def sample_identity_match_field(sample: dict, key: str) -> dict | None:
+    for item in sample_identity_fields(sample):
+        if item["value"] and item["value"].lower() == key:
+            return item
+    return None
+
+
+def check_sample_identity_conflicts(conn: sqlite3.Connection, payload: dict) -> dict:
+    raw_samples = payload.get("samples")
+    if not isinstance(raw_samples, list):
+        raw_samples = [payload]
+    default_category_id = str(payload.get("categoryId") or payload.get("excludeCategoryId") or "")
+    entries: list[dict] = []
+    values: list[str] = []
+    seen_values: set[str] = set()
+    for pos, raw in enumerate(raw_samples):
+        if not isinstance(raw, dict):
+            continue
+        sample = dict(raw)
+        sample["_index"] = raw.get("index", pos)
+        sample["_categoryId"] = str(raw.get("categoryId") or default_category_id or "")
+        sample["_excludeSampleId"] = str(raw.get("excludeSampleId") or "")
+        if sample_is_reassembled(sample):
+            continue
+        for field in sample_identity_fields(sample):
+            key = field["value"].lower()
+            if not key:
+                continue
+            entry = {"sample": sample, "field": field, "key": key}
+            entries.append(entry)
+            if key not in seen_values:
+                seen_values.add(key)
+                values.append(key)
+
+    results = [{
+        "index": raw.get("index", pos) if isinstance(raw, dict) else pos,
+        "hasConflict": False,
+        "conflict": None,
+    } for pos, raw in enumerate(raw_samples)]
+    if not entries:
+        return {"results": results, "conflicts": [], "count": 0}
+
+    entries_by_key: dict[str, list[dict]] = {}
+    for entry in entries:
+        entries_by_key.setdefault(entry["key"], []).append(entry)
+
+    conflicts_by_index: dict[object, dict] = {}
+    chunk_size = 250
+    for start in range(0, len(values), chunk_size):
+        chunk = values[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"""
+            SELECT r.id, r.category_id, c.name AS category_name,
+                   r.sample_no, r.sn, r.imei, r.board_sn, r.is_reassembled,
+                   r.status, r.has_problem, r.effective_status, r.location, r.owner, r.borrower, r.data_json
+            FROM sample_records r
+            JOIN sample_categories c ON c.id = r.category_id
+            WHERE r.deleted_at IS NULL
+              AND c.deleted_at IS NULL
+              AND COALESCE(r.is_reassembled, 0) = 0
+              AND (
+                r.sn COLLATE NOCASE IN ({placeholders})
+                OR r.imei COLLATE NOCASE IN ({placeholders})
+                OR r.board_sn COLLATE NOCASE IN ({placeholders})
+              )
+            ORDER BY c.sort_order, c.id, r.created_at, r.id
+            """,
+            [*chunk, *chunk, *chunk],
+        ).fetchall()
+        for row in rows:
+            existing = compact_sample_identity_row(row)
+            existing_fields = sample_identity_fields(existing)
+            for existing_field in existing_fields:
+                existing_key = existing_field["value"].lower()
+                if not existing_key or existing_key not in entries_by_key:
+                    continue
+                for entry in entries_by_key[existing_key]:
+                    incoming = entry["sample"]
+                    index = incoming["_index"]
+                    if index in conflicts_by_index:
+                        continue
+                    if incoming.get("_excludeSampleId") and str(existing["id"]) == incoming["_excludeSampleId"]:
+                        continue
+                    category_id = str(incoming.get("_categoryId") or "")
+                    scope = "category" if category_id and str(existing["categoryId"]) == category_id else "global"
+                    conflicts_by_index[index] = {
+                        "index": index,
+                        "scope": scope,
+                        "categoryId": existing["categoryId"],
+                        "categoryName": existing["categoryName"],
+                        "sample": existing,
+                        "conflictId": existing_field["value"],
+                        "incomingField": entry["field"]["field"],
+                        "incomingLabel": entry["field"]["label"],
+                        "existingField": existing_field["field"],
+                        "existingLabel": existing_field["label"],
+                    }
+
+    for result in results:
+        index = result["index"]
+        conflict = conflicts_by_index.get(index)
+        if conflict:
+            result["hasConflict"] = True
+            result["conflict"] = conflict
+
+    conflicts = [result["conflict"] for result in results if result.get("conflict")]
+    return {"results": results, "conflicts": conflicts, "count": len(conflicts)}
+
+
+def list_task_sample_candidates_page(conn: sqlite3.Connection, query: dict[str, list[str]]) -> dict:
+    page, page_size = parse_page_params(query, default_size=50, max_size=100)
+    task_id = first_query_value(query, "taskId", "").strip()
+    selected_ids = query_id_list(query, "selectedIds", max_items=500)
+    selected_set = set(selected_ids)
+    category_id = first_query_value(query, "categoryId", "").strip()
+    keyword = first_query_value(query, "keyword", "").strip().lower()
+    exclude_keyword = first_query_value(query, "excludeKeyword", "").strip().lower()
+    status = first_query_value(query, "status", "").strip()
+
+    categories = list_sample_categories_summary(conn)
+    where = ["r.deleted_at IS NULL", "c.deleted_at IS NULL"]
+    args: list[object] = []
+    if category_id:
+        where.append("r.category_id = ?")
+        args.append(category_id)
+    if selected_ids:
+        placeholders = ",".join("?" for _ in selected_ids)
+        where.append(f"r.id NOT IN ({placeholders})")
+        args.extend(selected_ids)
+    if status:
+        where.append(f"{sample_usage_status_sql_expr('r.status')} = ?")
+        args.append(status)
+    if keyword:
+        expr, expr_args = sample_candidate_keyword_where(keyword)
+        where.append(expr)
+        args.extend(expr_args)
+    if exclude_keyword:
+        expr, expr_args = sample_candidate_keyword_where(exclude_keyword, negate=True)
+        where.append(expr)
+        args.extend(expr_args)
+
+    total = int(conn.execute(
+        f"""
+        SELECT COUNT(*) AS count
+        FROM sample_records r
+        JOIN sample_categories c ON c.id = r.category_id
+        WHERE {" AND ".join(where)}
+        """,
+        args,
+    ).fetchone()["count"] or 0)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    offset = (page - 1) * page_size
+
+    rows = conn.execute(
+        f"""
+        SELECT r.id, r.category_id, c.name AS category_name,
+               r.sample_no, r.sn, r.imei, r.board_sn, r.is_reassembled, r.status, r.has_problem, r.effective_status,
+               r.location, r.owner, r.borrower, r.data_json
+        FROM sample_records r
+        JOIN sample_categories c ON c.id = r.category_id
+        WHERE {" AND ".join(where)}
+        ORDER BY c.sort_order, c.id, r.created_at, r.id
+        LIMIT ? OFFSET ?
+        """,
+        [*args, page_size, offset],
+    ).fetchall()
+    items = [task_sample_candidate_from_row(row) for row in rows]
+
+    selected_items: list[dict] = []
+    if selected_ids:
+        placeholders = ",".join("?" for _ in selected_ids)
+        selected_rows = conn.execute(
+            f"""
+            SELECT r.id, r.category_id, c.name AS category_name,
+                   r.sample_no, r.sn, r.imei, r.board_sn, r.is_reassembled, r.status, r.has_problem, r.effective_status,
+                   r.location, r.owner, r.borrower, r.data_json
+            FROM sample_records r
+            JOIN sample_categories c ON c.id = r.category_id
+            WHERE r.deleted_at IS NULL AND c.deleted_at IS NULL AND r.id IN ({placeholders})
+            ORDER BY c.sort_order, c.id, r.created_at, r.id
+            """,
+            selected_ids,
+        ).fetchall()
+        selected_by_id = {str(row["id"] or ""): task_sample_candidate_from_row(row) for row in selected_rows}
+        selected_items = [selected_by_id[sid] for sid in selected_ids if sid in selected_by_id]
+
+    all_candidate_ids = [str(item.get("id") or "") for item in [*items, *selected_items]]
+    occupancy = open_task_occupancy_for_sample_ids(conn, all_candidate_ids, exclude_task_id=task_id)
+    decorate_task_sample_candidates(items, selected_ids=selected_set, occupancy=occupancy)
+    decorate_task_sample_candidates(selected_items, selected_ids=selected_set, occupancy=occupancy)
+
+    return {
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "totalPages": total_pages,
+        "items": items,
+        "selectedItems": selected_items,
+        "selectedCount": len(selected_ids),
+        "categories": categories,
+        "filters": {
+            "taskId": task_id,
+            "categoryId": category_id,
+            "keyword": keyword,
+            "excludeKeyword": exclude_keyword,
+            "status": status,
+        },
+    }
+
+
+def sample_task_result_photos(task: dict, sample_id: str, photos_by_id: dict[str, dict]) -> list[dict]:
+    photos: list[dict] = []
+    for upload in task.get("resultUploads") or []:
+        if not isinstance(upload, dict):
+            continue
+        for item in upload.get("samples") or []:
+            if not isinstance(item, dict) or str(item.get("sampleId") or item.get("sid") or "") != str(sample_id):
+                continue
+            for ref in item.get("photos") or []:
+                if not isinstance(ref, dict) or not ref.get("id"):
+                    continue
+                full = photos_by_id.get(str(ref.get("id") or ""), {})
+                photos.append({
+                    "id": str(ref.get("id") or ""),
+                    "name": str(ref.get("name") or full.get("name") or "结果图片"),
+                    "url": str(ref.get("url") or full.get("url") or ""),
+                    "thumbUrl": str(ref.get("thumbUrl") or ref.get("thumbnailUrl") or full.get("thumbUrl") or full.get("thumbnailUrl") or ""),
+                    "thumbnailUrl": str(ref.get("thumbnailUrl") or ref.get("thumbUrl") or full.get("thumbnailUrl") or full.get("thumbUrl") or ""),
+                    "uploadedAt": str(ref.get("uploadedAt") or full.get("uploadedAt") or upload.get("time") or ""),
+                    "result": str(upload.get("result") or ""),
+                    "user": str(upload.get("user") or ""),
+                    "uploadTime": str(upload.get("time") or ""),
+                })
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for photo in photos:
+        key = f"{photo.get('uploadTime') or ''}_{photo.get('id') or ''}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(photo)
+    return unique
+
+
+def sample_history_row_for(sample_id: str, item: dict, photos_by_id: dict[str, dict]) -> dict:
+    task = item.get("task") if isinstance(item.get("task"), dict) else None
+    logs = item.get("logs") if isinstance(item.get("logs"), list) else []
+    project_name = str(item.get("projectName") or "")
+    stage_name = str(item.get("stageName") or "")
+    test_item = str(item.get("testItem") or "")
+    if task:
+        test_item = str(task.get("testItem") or test_item or "-")
+        result = str(task.get("latestResult") or task.get("result") or "-")
+        date = str(task.get("resultDate") or task.get("completedAt") or task.get("planDate") or (logs[-1].get("time") if logs else "") or "-")
+        sample_ids = {str(x) for x in task.get("sampleIds") or [] if str(x or "")}
+        sample_ids.update(str(x.get("sampleId") or "") for x in task.get("removedSampleRecords") or [] if isinstance(x, dict) and x.get("sampleId"))
+        task_sample_count = len(sample_ids)
+        sample_fault_records = [x for x in task.get("sampleFaultRecords") or [] if isinstance(x, dict) and str(x.get("sampleId") or "") == str(sample_id)]
+        fault_marked = any(log.get("faultMarked") or log.get("flowStatus") == "故障" for log in logs)
+        fault_marked = fault_marked or bool((task.get("sampleFaults") or {}).get(sample_id, {}).get("fault"))
+        fault_marked = fault_marked or any(x.get("fault") or x.get("problem") for x in sample_fault_records)
+        problems = []
+        for value in [
+            *[log.get("problemDescription") for log in logs],
+            (task.get("sampleFaults") or {}).get(sample_id, {}).get("problem"),
+            *[x.get("problem") for x in sample_fault_records],
+        ]:
+            text = str(value or "").strip()
+            if text and text not in problems:
+                problems.append(text)
+        result_photos = sample_task_result_photos(task, sample_id, photos_by_id)
+        status = task_flow_status(task)
+    else:
+        result = "-"
+        date = str((logs[-1].get("time") if logs else "") or "-")
+        task_sample_count = 0
+        fault_marked = any(log.get("faultMarked") or log.get("flowStatus") == "故障" for log in logs)
+        problems = []
+        for log in logs:
+            text = str(log.get("problemDescription") or "").strip()
+            if text and text not in problems:
+                problems.append(text)
+        result_photos = []
+        status = "历史记录"
+
+    return {
+        "key": str(item.get("key") or (task or {}).get("id") or ""),
+        "task": task,
+        "projectName": project_name or "-",
+        "stageName": stage_name or "-",
+        "testItem": test_item or "-",
+        "logs": logs,
+        "status": status,
+        "result": result,
+        "date": date,
+        "taskSampleCount": task_sample_count,
+        "faultMarked": bool(fault_marked),
+        "problems": problems,
+        "resultPhotos": result_photos,
+        "sortTime": str((task or {}).get("completedAt") or (task or {}).get("resultDate") or (task or {}).get("startDate") or (logs[-1].get("time") if logs else "") or ""),
+    }
+
+
+def list_sample_history_page(conn: sqlite3.Connection, sample_id: str, query: dict[str, list[str]]) -> dict:
+    sample_id = str(sample_id or "")
+    if not sample_id:
+        raise KeyError("缺少样机 ID")
+    sample_row = conn.execute(
+        "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+        (sample_id,),
+    ).fetchone()
+    if not sample_row:
+        raise KeyError("样机不存在")
+
+    page, page_size = parse_page_params(query, default_size=20, max_size=50)
+    event_rows = conn.execute(
+        """
+        SELECT id, time, task_id, project_id, stage_id, test_item, data_json
+        FROM sample_events
+        WHERE sample_id = ?
+        ORDER BY time, id
+        """,
+        (sample_id,),
+    ).fetchall()
+    rows_by_key: dict[str, dict] = {}
+    task_ids: set[str] = set()
+    for row in event_rows:
+        log = json_obj(row["data_json"], None)
+        if not isinstance(log, dict):
+            continue
+        task_id = str(row["task_id"] or log.get("taskId") or "")
+        key = task_id or f"log_{row['id']}"
+        if task_id:
+            task_ids.add(task_id)
+        item = rows_by_key.setdefault(key, {
+            "key": key,
+            "task": None,
+            "projectName": str(log.get("projectName") or ""),
+            "stageName": str(log.get("stageName") or ""),
+            "testItem": str(row["test_item"] or log.get("testItem") or "-"),
+            "logs": [],
+        })
+        item["logs"].append(log)
+        item["projectName"] = item["projectName"] or str(log.get("projectName") or "")
+        item["stageName"] = item["stageName"] or str(log.get("stageName") or "")
+
+    link_rows = conn.execute(
+        "SELECT DISTINCT task_id FROM project_task_samples WHERE sample_id = ?",
+        (sample_id,),
+    ).fetchall()
+    for row in link_rows:
+        tid = str(row["task_id"] or "")
+        if tid:
+            task_ids.add(tid)
+
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        task_rows = conn.execute(
+            f"""
+            SELECT t.id, t.project_id, t.stage_id, t.progress_id, t.category, t.test_item, t.sku_index,
+                   t.status, t.flow_status, t.owner, t.sample_ids_json, t.data_json,
+                   t.created_at, t.updated_at, t.completed_at, t.deleted_at,
+                   p.name AS project_name, s.name AS stage_name
+            FROM project_tasks t
+            LEFT JOIN project_records p ON p.id = t.project_id
+            LEFT JOIN project_stages s ON s.id = t.stage_id
+            WHERE t.id IN ({placeholders})
+            """,
+            list(task_ids),
+        ).fetchall()
+        for row in task_rows:
+            task = task_from_db_row(row)
+            key = str(task.get("id") or "")
+            item = rows_by_key.setdefault(key, {
+                "key": key,
+                "task": None,
+                "projectName": "",
+                "stageName": "",
+                "testItem": "",
+                "logs": [],
+            })
+            item["task"] = task
+            item["projectName"] = str(row["project_name"] or item.get("projectName") or "")
+            item["stageName"] = str(row["stage_name"] or item.get("stageName") or "")
+            item["testItem"] = str(task.get("testItem") or item.get("testItem") or "-")
+
+    photos_by_id = {str(photo.get("id") or ""): photo for photo in load_sample_photos(conn, sample_id)}
+    history_rows = [sample_history_row_for(sample_id, item, photos_by_id) for item in rows_by_key.values()]
+    history_rows.sort(key=lambda item: str(item.get("sortTime") or ""), reverse=True)
+    total = len(history_rows)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    offset = (page - 1) * page_size
+    page_items = history_rows[offset:offset + page_size]
+    for item in page_items:
+        item.pop("sortTime", None)
+    return {
+        "sampleId": sample_id,
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "totalPages": total_pages,
+        "items": page_items,
+    }
+
+
 def load_sample_category_detail(conn: sqlite3.Connection, category_id: str, *, include_photos: bool = False) -> dict | None:
     category_row = conn.execute(
         """
@@ -2470,7 +3144,7 @@ def load_sample_category_detail(conn: sqlite3.Connection, category_id: str, *, i
     photo_counts = {} if include_photos else load_sample_photo_counts_for(conn, [])
     sample_rows = conn.execute(
         """
-        SELECT id, category_id, sample_no, sn, imei, status, location, owner, borrower, data_json
+        SELECT id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, location, owner, borrower, data_json
         FROM sample_records
         WHERE category_id = ? AND deleted_at IS NULL
         ORDER BY created_at, id
@@ -3336,6 +4010,69 @@ def _diff_fields(current_item: dict, incoming_item: dict, skip_keys: set = set()
     return diffs
 
 
+def _sorted_nonempty_ids(values) -> list[str]:
+    return sorted({str(value) for value in values if str(value or "").strip()})
+
+
+def _build_import_mutation_summary(current_data: dict,
+                                   project_id_map: dict,
+                                   stage_id_map: dict,
+                                   task_id_map: dict,
+                                   sample_id_map: dict,
+                                   touched_structure_project_ids: set[str]) -> dict:
+    """Return the smallest frontend sync scope after a successful bundle import."""
+    project_ids = {str(value) for value in project_id_map.values() if value}
+    project_ids.update(str(value) for value in touched_structure_project_ids if value)
+    stage_ids = {str(value) for value in stage_id_map.values() if value}
+    task_ids = {str(value) for value in task_id_map.values() if value}
+    sample_ids = {str(value) for value in sample_id_map.values() if value}
+    sample_category_ids: set[str] = set()
+
+    for project in current_data.get("projects") or []:
+        if not isinstance(project, dict):
+            continue
+        pid = str(project.get("id") or "")
+        project_touched = pid in project_ids
+        for stage in project.get("stages") or []:
+            if not isinstance(stage, dict):
+                continue
+            sid = str(stage.get("id") or "")
+            if project_touched and sid:
+                stage_ids.add(sid)
+            if sid in stage_ids and pid:
+                project_ids.add(pid)
+            for task in stage.get("tasks") or []:
+                if not isinstance(task, dict):
+                    continue
+                tid = str(task.get("id") or "")
+                if tid and tid in task_ids:
+                    if sid:
+                        stage_ids.add(sid)
+                    if pid:
+                        project_ids.add(pid)
+
+    for category in (current_data.get("sampleLibrary") or {}).get("categories") or []:
+        if not isinstance(category, dict):
+            continue
+        cid = str(category.get("id") or "")
+        for sample in category.get("samples") or []:
+            if not isinstance(sample, dict):
+                continue
+            sid = str(sample.get("id") or "")
+            if sid and sid in sample_ids and cid:
+                sample_category_ids.add(cid)
+
+    return {
+        "summaryVersion": 1,
+        "projectIds": _sorted_nonempty_ids(project_ids),
+        "stageIds": _sorted_nonempty_ids(stage_ids),
+        "taskIds": _sorted_nonempty_ids(task_ids),
+        "sampleCategoryIds": _sorted_nonempty_ids(sample_category_ids),
+        "sampleIds": _sorted_nonempty_ids(sample_ids),
+        "requiresFullState": False,
+    }
+
+
 def commit_import_bundle(payload: dict) -> dict:
     """执行导入写入"""
     preview_id = payload.get("previewId", "")
@@ -3521,6 +4258,7 @@ def commit_import_bundle(payload: dict) -> dict:
                                 curr_p[fname] = inc_p[fname]
                         stats["projectsMerged"] += 1
                         project_id_map[inc_id] = target_id
+                        touched_structure_project_ids.add(target_id)
                 elif etype == "stage":
                     # 在当前主库中查找 stage
                     for proj_id, proj in curr_projects.items():
@@ -3532,6 +4270,9 @@ def commit_import_bundle(payload: dict) -> dict:
                                         choice = field_choices.get(fname, "current")
                                         if choice == "incoming" and fname in inc_stage:
                                             stage[fname] = inc_stage[fname]
+                                if inc_id:
+                                    stage_id_map[inc_id] = target_id
+                                touched_structure_project_ids.add(proj_id)
                                 break
                 elif etype == "task":
                     for proj_id, proj in curr_projects.items():
@@ -3544,6 +4285,9 @@ def commit_import_bundle(payload: dict) -> dict:
                                             choice = field_choices.get(fname, "current")
                                             if choice == "incoming" and fname in inc_task:
                                                 task[fname] = inc_task[fname]
+                                    if inc_id:
+                                        task_id_map[inc_id] = target_id
+                                    touched_structure_project_ids.add(proj_id)
                                     break
                 elif etype == "sample":
                     for cat_id, cat in curr_categories.items():
@@ -3657,6 +4401,7 @@ def commit_import_bundle(payload: dict) -> dict:
                                                 existing_hashes.add(_content_hash(item))
                                     stats["tasksMerged"] += 1
                                     task_id_map[inc_tid] = target_id
+                                    touched_structure_project_ids.add(proj_id)
                                     break
             elif action == "rename_import":
                 new_name = d.get("newName", "").strip()
@@ -3943,7 +4688,23 @@ def commit_import_bundle(payload: dict) -> dict:
     _cleanup_preview_temp(preview_id)
     del _IMPORT_PREVIEWS[preview_id]
 
-    return {"ok": True, "stats": stats, "newRevision": resp.get("revision", 0), "updated_at": resp.get("updated_at", "")}
+    revision = resp.get("revision", 0)
+    mutation_summary = _build_import_mutation_summary(
+        current_data,
+        project_id_map,
+        stage_id_map,
+        task_id_map,
+        sample_id_map,
+        touched_structure_project_ids,
+    )
+    return {
+        "ok": True,
+        "stats": stats,
+        "revision": revision,
+        "newRevision": revision,
+        "updated_at": resp.get("updated_at", ""),
+        "mutationSummary": mutation_summary,
+    }
 
 
 def _find_incoming_stage(incoming_projects_by_id: dict, stage_id: str) -> dict | None:
@@ -4407,6 +5168,57 @@ def commit_data_mutation(conn: sqlite3.Connection, data: dict, action: str, rema
     return {"revision": new_revision, "updated_at": updated_at}
 
 
+def commit_sample_asset_mutation(
+    conn: sqlite3.Connection,
+    sample_id: str,
+    action: str,
+    remark: str,
+    client_ip: str,
+    *,
+    user: str = "",
+) -> dict:
+    state_row = conn.execute("SELECT data_json, revision FROM app_state WHERE id = 1").fetchone()
+    current_revision = int(state_row["revision"]) if state_row else 1
+    new_revision = current_revision + 1
+    updated_at = now_iso()
+
+    sample_row = conn.execute(
+        "SELECT data_json FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+        (sample_id,),
+    ).fetchone()
+    if not sample_row:
+        raise KeyError("样机不存在")
+    sample_json = json_obj(sample_row["data_json"], {}) or {}
+    sample_json["updatedAt"] = updated_at
+    conn.execute(
+        "UPDATE sample_records SET data_json = ?, updated_at = ? WHERE id = ?",
+        (json_dumps(sample_json), updated_at, sample_id),
+    )
+
+    stored = json_obj(state_row["data_json"] if state_row else None, {}) or split_state_for_storage(empty_data())
+    stored["version"] = APP_VERSION
+    if state_row:
+        conn.execute(
+            "UPDATE app_state SET data_json = ?, revision = ?, updated_at = ? WHERE id = 1",
+            (json_dumps(stored), new_revision, updated_at),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO app_state (id, data_json, revision, updated_at) VALUES (1, ?, ?, ?)",
+            (json_dumps(stored), new_revision, updated_at),
+        )
+    conn.execute(
+        """
+        INSERT INTO audit_log
+        (time, user, action, remark, revision_before, revision_after, client_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+    )
+    conn.commit()
+    return {"revision": new_revision, "updated_at": updated_at, "photos": load_sample_photos(conn, sample_id)}
+
+
 def write_task_logs(conn: sqlite3.Connection, task: dict, project_id: str, stage_id: str) -> None:
     task_id = str(task.get("id") or "")
     conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
@@ -4506,10 +5318,12 @@ def upsert_task_record(conn: sqlite3.Connection, task: dict, project_id: str, st
             ),
         )
     write_task_logs(conn, task, project_id, stage_id)
+    replace_task_sample_links(conn, task_id, project_id, stage_id, task, sample_ids)
 
 
 def delete_task_record(conn: sqlite3.Connection, task_id: str) -> None:
     conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM project_task_samples WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM project_tasks WHERE id = ?", (task_id,))
 
 
@@ -4584,6 +5398,7 @@ def delete_project_record(conn: sqlite3.Connection, project_id: str) -> None:
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
         conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({placeholders})", task_ids)
+        conn.execute(f"DELETE FROM project_task_samples WHERE task_id IN ({placeholders})", task_ids)
     conn.execute("DELETE FROM project_tasks WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM project_stages WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM project_records WHERE id = ?", (project_id,))
@@ -4659,6 +5474,7 @@ def delete_stage_record(conn: sqlite3.Connection, stage_id: str) -> None:
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
         conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({placeholders})", task_ids)
+        conn.execute(f"DELETE FROM project_task_samples WHERE task_id IN ({placeholders})", task_ids)
     conn.execute("DELETE FROM project_tasks WHERE stage_id = ?", (stage_id,))
     conn.execute("DELETE FROM project_stages WHERE id = ?", (stage_id,))
 
@@ -4744,7 +5560,7 @@ def update_sample_record(conn: sqlite3.Connection, sample: dict, *, create_if_mi
         conn.execute(
             """
             UPDATE sample_records
-            SET category_id = ?, sample_no = ?, sn = ?, imei = ?, status = ?, has_problem = ?, effective_status = ?, location = ?,
+            SET category_id = ?, sample_no = ?, sn = ?, imei = ?, board_sn = ?, is_reassembled = ?, status = ?, has_problem = ?, effective_status = ?, location = ?,
                 owner = ?, borrower = ?, data_json = ?, updated_at = ?, deleted_at = NULL
             WHERE id = ?
             """,
@@ -4753,6 +5569,8 @@ def update_sample_record(conn: sqlite3.Connection, sample: dict, *, create_if_mi
                 str(sample.get("sampleNo") or ""),
                 str(sample.get("sn") or ""),
                 str(sample.get("imei") or ""),
+                str(sample.get("boardSn") or ""),
+                1 if sample_is_reassembled(sample) else 0,
                 str(sample.get("status") or ""),
                 1 if sample_has_problem(sample) else 0,
                 sample_effective_status(sample),
@@ -4769,8 +5587,8 @@ def update_sample_record(conn: sqlite3.Connection, sample: dict, *, create_if_mi
         conn.execute(
             """
             INSERT INTO sample_records
-            (id, category_id, sample_no, sn, imei, status, has_problem, effective_status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            (id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, has_problem, effective_status, location, owner, borrower, data_json, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
                 sample_id,
@@ -4778,6 +5596,8 @@ def update_sample_record(conn: sqlite3.Connection, sample: dict, *, create_if_mi
                 str(sample.get("sampleNo") or ""),
                 str(sample.get("sn") or ""),
                 str(sample.get("imei") or ""),
+                str(sample.get("boardSn") or ""),
+                1 if sample_is_reassembled(sample) else 0,
                 str(sample.get("status") or ""),
                 1 if sample_has_problem(sample) else 0,
                 sample_effective_status(sample),
@@ -4844,32 +5664,29 @@ def detect_task_mutation_occupancy_conflicts(
     target_sample_ids = {str(x) for x in (task.get("sampleIds") or []) if str(x)}
     if not target_sample_ids:
         return []
+    placeholders = ",".join("?" for _ in target_sample_ids)
     rows = conn.execute(
-        """
-        SELECT id, project_id, stage_id, test_item, status, sample_ids_json, data_json
-        FROM project_tasks
-        WHERE deleted_at IS NULL AND id != ?
+        f"""
+        SELECT sample_id, task_id, project_id, stage_id, test_item, status, flow_status
+        FROM project_task_samples
+        WHERE sample_id IN ({placeholders})
+          AND task_id != ?
+          AND flow_status NOT IN ('正常完成', '异常终止')
         """,
-        (task_id,),
+        (*target_sample_ids, task_id),
     ).fetchall()
     conflicts_by_sample: dict[str, list[dict]] = {}
     for row in rows:
-        other = json_obj(row["data_json"], {}) or {}
-        other["id"] = row["id"]
-        other["status"] = row["status"] or other.get("status") or ""
-        if task_flow_status(other) in ("正常完成", "异常终止"):
+        sid = str(row["sample_id"] or "")
+        if not sid:
             continue
-        sample_ids = json_obj(row["sample_ids_json"], [])
-        if not isinstance(sample_ids, list):
-            sample_ids = []
-        for sid in target_sample_ids.intersection({str(x) for x in sample_ids}):
-            conflicts_by_sample.setdefault(sid, []).append({
-                "taskId": str(row["id"] or ""),
-                "projectId": str(row["project_id"] or ""),
-                "stageId": str(row["stage_id"] or ""),
-                "testItem": str(row["test_item"] or other.get("testItem") or ""),
-                "status": str(row["status"] or other.get("status") or ""),
-            })
+        conflicts_by_sample.setdefault(sid, []).append({
+            "taskId": str(row["task_id"] or ""),
+            "projectId": str(row["project_id"] or ""),
+            "stageId": str(row["stage_id"] or ""),
+            "testItem": str(row["test_item"] or ""),
+            "status": str(row["status"] or ""),
+        })
     conflicts = []
     for sid, tasks in conflicts_by_sample.items():
         conflicts.append({
@@ -4944,7 +5761,7 @@ def detect_task_mutation_sample_status_blockers(
     placeholders = ",".join("?" for _ in added_by_sample)
     rows = conn.execute(
         f"""
-        SELECT id, sample_no, sn, imei, status, data_json
+        SELECT id, sample_no, sn, imei, board_sn, is_reassembled, status, data_json
         FROM sample_records
         WHERE deleted_at IS NULL AND id IN ({placeholders})
         """,
@@ -4957,6 +5774,8 @@ def detect_task_mutation_sample_status_blockers(
         sample["sampleNo"] = row["sample_no"] or sample.get("sampleNo") or ""
         sample["sn"] = row["sn"] or sample.get("sn") or ""
         sample["imei"] = row["imei"] or sample.get("imei") or ""
+        sample["boardSn"] = row["board_sn"] or sample.get("boardSn") or ""
+        sample["isReassembled"] = bool(row["is_reassembled"]) if row["is_reassembled"] is not None else sample_is_reassembled(sample)
         sample["status"] = row["status"] or sample.get("status") or ""
         status = sample_record_status(sample)
         if status == "闲置":
@@ -5514,6 +6333,12 @@ class Handler(BaseHTTPRequestHandler):
             return unquote(parts[2])
         return None
 
+    def _sample_history_route(self, path: str) -> str | None:
+        parts = path.strip("/").split("/")
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "samples" and parts[3] == "history":
+            return unquote(parts[2])
+        return None
+
     def _stage_tasks_route(self, path: str) -> str | None:
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[0] == "api" and parts[1] == "stages" and parts[3] == "tasks":
@@ -5674,6 +6499,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
+        if path == "/api/task-sample-candidates":
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        result = list_task_sample_candidates_page(conn, query)
+                self._send_json({"ok": True, **result})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         sample_category_detail_id = self._sample_category_detail_route(path)
         if sample_category_detail_id:
             try:
@@ -5763,6 +6598,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
+        history_sample_id = self._sample_history_route(path)
+        if history_sample_id:
+            try:
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        result = list_sample_history_page(conn, history_sample_id, query)
+                self._send_json({"ok": True, **result})
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, 404)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         if path in ("/", "/index.html"):
             if not INDEX_PATH.exists():
                 self._send_json({"ok": False, "error": "index.html 不存在"}, 404)
@@ -5816,6 +6664,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
+        if path == "/api/sample-identity-check":
+            try:
+                payload = json.loads(self._read_body(max_bytes=MAX_UPLOAD_BYTES).decode("utf-8") or "{}")
+                with DB_LOCK:
+                    with connect_db() as conn:
+                        result = check_sample_identity_conflicts(conn, payload)
+                self._send_json({"ok": True, **result})
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         route = self._sample_photo_route(unquote(parsed.path))
         if not route or route[1] is not None:
             self._send_json({"ok": False, "error": "Not Found"}, 404)
@@ -5836,13 +6697,13 @@ class Handler(BaseHTTPRequestHandler):
 
             with DB_LOCK:
                 with connect_db() as conn:
-                    data, _, _ = compose_state(conn)
-                    _, sample = find_sample(data, sample_id)
-                    if not sample:
+                    sample_row = conn.execute(
+                        "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                        (sample_id,),
+                    ).fetchone()
+                    if not sample_row:
                         self._send_json({"ok": False, "error": "样机不存在"}, 404)
                         return
-                    if not isinstance(sample.get("photos"), list):
-                        sample["photos"] = []
                     uploaded = []
                     for idx, file_item in enumerate(image_files):
                         meta = store_asset_bytes(
@@ -5867,10 +6728,14 @@ class Handler(BaseHTTPRequestHandler):
                             )
                             attach_thumbnail_meta(meta, thumb_meta)
                         uploaded.append(meta)
-                        sample["photos"].append(meta)
-                    sample["updatedAt"] = now_iso()
-                    result = commit_data_mutation(conn, data, "upload_sample_photos", fields.get("remark", "上传样机外观照片"), self.client_address[0])
-                    self._send_json({"ok": True, **result, "uploaded": uploaded, "photos": sample["photos"]})
+                    result = commit_sample_asset_mutation(
+                        conn,
+                        sample_id,
+                        "upload_sample_photos",
+                        fields.get("remark", "上传样机外观照片"),
+                        self.client_address[0],
+                    )
+                    self._send_json({"ok": True, **result, "uploaded": uploaded})
         except ValueError as e:
             self._send_json({"ok": False, "error": str(e)}, 400)
         except Exception as e:
@@ -5887,9 +6752,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with DB_LOCK:
                 with connect_db() as conn:
-                    data, _, _ = compose_state(conn)
-                    _, sample = find_sample(data, sample_id)
-                    if not sample:
+                    sample_row = conn.execute(
+                        "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                        (sample_id,),
+                    ).fetchone()
+                    if not sample_row:
                         self._send_json({"ok": False, "error": "样机不存在"}, 404)
                         return
                     asset_rows = conn.execute(
@@ -5899,6 +6766,9 @@ class Handler(BaseHTTPRequestHandler):
                         """,
                         (sample_id, photo_id, thumbnail_asset_id(photo_id)),
                     ).fetchall()
+                    if not asset_rows:
+                        self._send_json({"ok": False, "error": "照片不存在"}, 404)
+                        return
                     for asset in asset_rows:
                         try:
                             target = path_inside_data(asset["relative_path"])
@@ -5913,10 +6783,8 @@ class Handler(BaseHTTPRequestHandler):
                         """,
                         (now_iso(), sample_id, photo_id, thumbnail_asset_id(photo_id)),
                     )
-                    sample["photos"] = [p for p in (sample.get("photos") or []) if str(p.get("id")) != str(photo_id)]
-                    sample["updatedAt"] = now_iso()
-                    result = commit_data_mutation(conn, data, "delete_sample_photo", "删除样机外观照片", self.client_address[0])
-                    self._send_json({"ok": True, **result, "photos": sample["photos"]})
+                    result = commit_sample_asset_mutation(conn, sample_id, "delete_sample_photo", "删除样机外观照片", self.client_address[0])
+                    self._send_json({"ok": True, **result})
         except Exception as e:
             self._send_json({"ok": False, "error": str(e)}, 500)
 
@@ -5964,7 +6832,8 @@ class Handler(BaseHTTPRequestHandler):
                         conn.execute("UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1", (new_revision, ts))
                         conn.execute(
                             """
-                            INSERT INTO change_log (time, user, action, remark, base_revision, new_revision, client_ip)
+                            INSERT INTO audit_log
+                            (time, user, action, remark, revision_before, revision_after, client_ip)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                             """,
                             (ts, str(payload.get("user") or "管理员"), "rename_sample_photo", f"重命名样机照片：{name}", current_revision, new_revision, self.client_address[0]),

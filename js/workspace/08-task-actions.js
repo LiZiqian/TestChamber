@@ -399,6 +399,7 @@ Object.assign(app, {
       });
       return !saved;
     }, "确认", { className: "temp-change-modal", headerHint: `任务：${Utils.esc(t.testItem || "-")}` });
+    setTimeout(() => this.initTaskSamplePicker("tempSamplePick"), 0);
   },
 
   // 阻塞任务

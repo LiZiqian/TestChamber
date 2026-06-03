@@ -91,13 +91,13 @@ Object.assign(app, {
       if (selfDup) { this.markFieldInvalid(document.getElementById(selfDup.field), selfDup.msg); return true; }
 
       if (identityChanged || reassembledChanged) {
-        // 池内查重
-        const inCat = this._checkInCategoryDuplicate(found.category, newSn, newImei, newBoardSn, nextReassembled, s.id, "sd");
-        if (inCat) { this.markFieldInvalid(document.getElementById(inCat.fieldId), inCat.msg); return true; }
-
-        // 跨池查重
-        const global = this._checkGlobalDuplicate(newSn, newImei, newBoardSn, nextReassembled, found.category.id, s.id, "sd");
-        if (global) { this.markFieldInvalid(document.getElementById(global.fieldId), global.msg); return true; }
+        try {
+          const duplicate = await this._checkServerIdentityDuplicate(newSn, newImei, newBoardSn, nextReassembled, found.category.id, s.id, "sd");
+          if (duplicate) { this.markFieldInvalid(document.getElementById(duplicate.fieldId), duplicate.msg); return true; }
+        } catch (e) {
+          alert("样机身份查重失败：" + (e.message || e));
+          return true;
+        }
       }
       const location = document.getElementById("sdLocation").value.trim();
 
@@ -175,7 +175,7 @@ Object.assign(app, {
     if (readonly) {
       const body = document.getElementById("modalBody");
       body?.querySelectorAll(".sample-archive-content input, .sample-archive-content select, .sample-archive-content textarea").forEach(el => { el.disabled = true; });
-      body?.querySelectorAll(".sample-archive-content button:not(.sample-history-photo):not(.sample-photo-thumb):not(.sample-history-summary):not(.sample-reassembly-link)").forEach(el => { el.disabled = true; });
+      body?.querySelectorAll(".sample-archive-content button:not(.sample-history-photo):not(.sample-photo-thumb):not(.sample-history-summary):not(.sample-reassembly-link):not(.sample-history-page-btn)").forEach(el => { el.disabled = true; });
     }
   },
 
