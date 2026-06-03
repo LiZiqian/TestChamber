@@ -117,6 +117,11 @@ Object.assign(app, {
             stage.tasks.push(task);
           }
         });
+        if (result.stats) {
+          stage.taskCount = Number(result.stats.totalInStage ?? result.total ?? stage.taskCount ?? 0);
+          stage.statusCounts = result.stats.statusCounts || stage.statusCounts || {};
+          stage.ownerNames = result.stats.ownerNames || stage.ownerNames || [];
+        }
         this._taskFlowPageCache = { key, stageId: stage.id, ...result, rows };
         if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
           this.renderPreserveScroll();
@@ -134,31 +139,34 @@ Object.assign(app, {
 
   workspaceTaskFlowHtml(project, stage) {
     const f = this.view.taskFlowFilters || {};
-    const allRows = this.taskRowsForStage(stage);
     const params = this.taskFlowQueryParams(stage);
     const cacheKey = this.taskFlowCacheKey(stage, params);
     const cached = this._taskFlowPageCache?.key === cacheKey ? this._taskFlowPageCache : null;
     if (!cached) this.loadTaskFlowPage(project, stage, cacheKey, params);
+    const localRows = cached ? [] : (this._statePartial ? [] : this.taskRowsForStage(stage));
+    const stageTaskTotal = Number(stage.taskCount ?? localRows.length) || 0;
     const pageSize = params.pageSize;
-    const total = cached?.total ?? allRows.length;
+    const total = cached?.total ?? stageTaskTotal;
     const totalPages = cached?.totalPages ?? Math.max(1, Math.ceil(total / pageSize));
     const page = Math.min(Math.max(1, cached?.page || params.page), totalPages);
     this.view.taskFlowPage = page;
     const rows = cached?.rows || [];
     const pagerHtml = this.taskFlowPagerHtml(page, totalPages, total, pageSize, { loading: !cached });
 
-    const statusCounts = cached?.stats?.statusCounts || {};
-    const infos = allRows.map(row => this.taskInfoForRow(stage, row));
+    const statusCounts = cached?.stats?.statusCounts || stage.statusCounts || {};
+    const ownerNames = cached?.stats?.ownerNames || stage.ownerNames || [];
+    const hasServerCounts = cached || Object.keys(statusCounts).length > 0 || typeof stage.taskCount !== "undefined";
+    const infos = (cached ? rows : localRows).map(row => this.taskInfoForRow(stage, row));
     const localStatusCounts = cached ? {} : infos.reduce((acc, i) => {
       acc[i.flowStatus] = (acc[i.flowStatus] || 0) + 1;
       return acc;
     }, {});
-    const pendingTasks = cached ? (statusCounts["待下发"] || 0) : (localStatusCounts["待下发"] || 0);
-    const runningTasks = cached ? (statusCounts["进行中"] || 0) : (localStatusCounts["进行中"] || 0);
-    const blockedTasks = cached ? (statusCounts["阻塞中"] || 0) : (localStatusCounts["阻塞中"] || 0);
-    const abnormalTasks = cached ? (statusCounts["异常终止"] || 0) : (localStatusCounts["异常终止"] || 0);
-    const finishedTasks = cached ? (statusCounts["正常完成"] || 0) : (localStatusCounts["正常完成"] || 0);
-    const totalTasks = cached?.stats?.totalInStage ?? allRows.length;
+    const pendingTasks = hasServerCounts ? (statusCounts["待下发"] || 0) : (localStatusCounts["待下发"] || 0);
+    const runningTasks = hasServerCounts ? (statusCounts["进行中"] || 0) : (localStatusCounts["进行中"] || 0);
+    const blockedTasks = hasServerCounts ? (statusCounts["阻塞中"] || 0) : (localStatusCounts["阻塞中"] || 0);
+    const abnormalTasks = hasServerCounts ? (statusCounts["异常终止"] || 0) : (localStatusCounts["异常终止"] || 0);
+    const finishedTasks = hasServerCounts ? (statusCounts["正常完成"] || 0) : (localStatusCounts["正常完成"] || 0);
+    const totalTasks = cached?.stats?.totalInStage ?? stageTaskTotal;
 
     const optHtml = (values, cur) => {
       const arr = [...new Set((values || []).map(v => String(v ?? "").trim()).filter(v => v))].sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
@@ -204,7 +212,7 @@ Object.assign(app, {
           </div>
           <div class="task-filter-item filter-person">
             <label>执行人</label>
-            <select onchange="app.setTaskFlowFilter('ownerName',this.value)">${optHtml(infos.map(i => i.ownerName), f.ownerName)}</select>
+            <select onchange="app.setTaskFlowFilter('ownerName',this.value)">${optHtml(ownerNames.length ? ownerNames : infos.map(i => i.ownerName), f.ownerName)}</select>
           </div>
           <div class="task-filter-item filter-status">
             <label>状态</label>

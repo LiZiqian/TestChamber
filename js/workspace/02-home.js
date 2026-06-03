@@ -16,26 +16,32 @@ Object.assign(app, {
 
     // 各阶段统计
     const stageStats = p.stages.map(st => {
-      const progress = st.progress || [], tasks = this.activeStageTasks(st);
+      const progress = st.progress || [];
+      const tasks = this.activeStageTasks(st);
+      const statusCounts = st.statusCounts || {};
+      const hasServerTaskStats = typeof st.taskCount !== "undefined" || Object.keys(statusCounts).length > 0;
+      const countStatus = status => hasServerTaskStats
+        ? Number(statusCounts[status] || 0)
+        : tasks.filter(t => this.taskFlowStatus(t) === status).length;
       const total = progress.length;
       const plannedSampleCount = progress.reduce((sum, item) => sum + (this.getProgressRequiredSampleCount(st, item) || 0), 0);
-      const taskFlowStatuses = tasks.map(t => this.taskFlowStatus(t));
-      const executedTasks = taskFlowStatuses.filter(x => ["正常完成", "异常终止"].includes(x)).length;
+      const pass = countStatus("正常完成");
+      const fail = countStatus("异常终止");
+      const testing = countStatus("进行中");
+      const pending = countStatus("待下发");
+      const blocked = countStatus("阻塞中");
+      const executedTasks = pass + fail;
       const usedSampleRuns = tasks
         .filter(t => this.taskFlowStatus(t) !== "待下发")
         .reduce((sum, t) => sum + (t.sampleIds || []).length, 0);
       const runningTasks = tasks.filter(t => this.taskFlowStatus(t) === "进行中");
       const runningSampleCount = new Set(runningTasks.flatMap(t => t.sampleIds || [])).size;
-      const pass = taskFlowStatuses.filter(x => x === "正常完成").length;
-      const fail = taskFlowStatuses.filter(x => x === "异常终止").length;
-      const testing = taskFlowStatuses.filter(x => x === "进行中").length;
-      const pending = taskFlowStatuses.filter(x => x === "待下发").length;
-      const blocked = taskFlowStatuses.filter(x => x === "阻塞中").length;
       const passRate = (pass + fail) ? ((pass / (pass + fail)) * 100).toFixed(1) : "0.0";
       const sampleIds = [...new Set(tasks.flatMap(t => t.sampleIds || []))];
+      const taskCount = Number(st.taskCount ?? tasks.length) || 0;
       return {
-        stage: st, total, plannedSampleCount, executedTasks, usedSampleRuns, runningTasks: runningTasks.length,
-        runningSampleCount, pass, fail, testing, pending, blocked, passRate, tasks: tasks.length, sampleCount: sampleIds.length
+        stage: st, total, plannedSampleCount, executedTasks, usedSampleRuns, runningTasks: hasServerTaskStats ? testing : runningTasks.length,
+        runningSampleCount, pass, fail, testing, pending, blocked, passRate, tasks: taskCount, sampleCount: sampleIds.length
       };
     });
 
@@ -98,6 +104,7 @@ Object.assign(app, {
         <div class="add-card-label">新增阶段</div>
       </div>`;
 
+    const sampleOwnerCounts = this.sampleOwnerCountsByMemberKey();
     document.getElementById("content").innerHTML = `
       <div class="card project-config-card">
         <div class="project-config-intro">
@@ -117,7 +124,7 @@ Object.assign(app, {
             </div>
           </div>
         </div>
-        ${this.workspaceMembersHtml(p)}
+        ${this.workspaceMembersHtml(p, sampleOwnerCounts)}
         ${this.workspaceLocationsHtml(p)}
       </div>
 
@@ -125,13 +132,26 @@ Object.assign(app, {
     `;
   },
 
-  workspaceMembersHtml(project) {
+  sampleOwnerCountsByMemberKey() {
+    const counts = new Map();
+    (this.data?.sampleLibrary?.categories || []).forEach(category => {
+      (category.samples || []).forEach(sample => {
+        const identity = Utils.personIdentityFromText(sample.owner || "");
+        const key = Utils.memberIdentityKey(identity.name, identity.employeeNo);
+        if (key === "||") return;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+    });
+    return counts;
+  },
+
+  workspaceMembersHtml(project, sampleOwnerCounts = null) {
     if (!Array.isArray(project.members)) project.members = [];
     const collapsed = this.isCollapsed('members');
     const activeMembers = this.projectActiveMembers(project);
     const rows = activeMembers
       .map(m => {
-        const stat = this.memberWorkStats(project, m);
+        const stat = this.memberWorkStats(project, m, sampleOwnerCounts);
         const identity = Utils.personText(m.name, m.employeeNo);
         return `
           <div class="project-member-card" ondblclick="app.editProjectMember('${m.id}')">
@@ -404,7 +424,7 @@ Object.assign(app, {
       Utils.toast("人员已移出");
     }, { title: "移出人员", okText: "移出", okClass: "btn btn-danger" });
   },
-  memberWorkStats(project, member) {
+  memberWorkStats(project, member, sampleOwnerCounts = null) {
     let tasks = 0, hours = 0;
     (project.stages || []).forEach(stage => {
       (stage.tasks || []).forEach(t => {
@@ -419,7 +439,10 @@ Object.assign(app, {
         }
       });
     });
-    const ownedSamples = this.allSamples().filter(sample => Utils.personMatchesMember(sample.owner, member)).length;
+    const memberKey = Utils.memberIdentityKey(member.name, member.employeeNo);
+    const ownedSamples = sampleOwnerCounts instanceof Map
+      ? (sampleOwnerCounts.get(memberKey) || 0)
+      : this.allSamples().filter(sample => Utils.personMatchesMember(sample.owner, member)).length;
     return { tasks, hours, ownedSamples };
   },
 

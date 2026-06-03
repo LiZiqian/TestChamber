@@ -39,10 +39,10 @@ button, input, select, textarea { font-family: inherit }
   background: linear-gradient(135deg, var(--primary), var(--primary2));
   color: #fff; font-weight: 700;
 }
-.nav-item.has-sub { cursor: default }
+.nav-item.has-sub { cursor: pointer }
 .nav-item-main {
   display: flex; gap: 9px; align-items: center; flex: 1; min-width: 0;
-  cursor: pointer; border-radius: 10px;
+  cursor: inherit; border-radius: 10px;
 }
 .nav-item-main:hover { background: none }
 .nav-toggle {

@@ -37,8 +37,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, unquote_to_bytes, urlparse
 
 
-APP_VERSION = "V7"
-SERVER_VERSION = "TestChamberServer/V7"
+APP_VERSION = "7.1.0"
+SERVER_VERSION = "TestChamberServer/7.1.0"
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
 SAMPLE_DATA_DIR = DATA_DIR / "samples"
@@ -1619,6 +1619,46 @@ def load_project_detail(conn: sqlite3.Connection, project_id: str, *, include_ta
         project.setdefault("stages", []).append(stage)
         stage_map[row["id"]] = stage
 
+    if stage_map:
+        for stage in stage_map.values():
+            stage["statusCounts"] = {}
+            stage["taskCount"] = 0
+            stage["ownerNames"] = []
+
+        status_rows = conn.execute(
+            """
+            SELECT stage_id, COALESCE(flow_status, '待下发') AS flow_status, COUNT(*) AS count
+            FROM project_tasks
+            WHERE project_id = ? AND deleted_at IS NULL
+            GROUP BY stage_id, flow_status
+            """,
+            (project_id,),
+        ).fetchall()
+        for row in status_rows:
+            stage = stage_map.get(row["stage_id"])
+            if not stage:
+                continue
+            counts = stage.setdefault("statusCounts", {})
+            count = int(row["count"] or 0)
+            counts[str(row["flow_status"] or "待下发")] = count
+            stage["taskCount"] = int(stage.get("taskCount") or 0) + count
+
+        owner_rows = conn.execute(
+            """
+            SELECT stage_id, owner
+            FROM project_tasks
+            WHERE project_id = ? AND deleted_at IS NULL AND COALESCE(owner, '') <> ''
+            GROUP BY stage_id, owner
+            ORDER BY owner
+            """,
+            (project_id,),
+        ).fetchall()
+        for row in owner_rows:
+            stage = stage_map.get(row["stage_id"])
+            if not stage:
+                continue
+            stage.setdefault("ownerNames", []).append(str(row["owner"] or ""))
+
     if not include_tasks or not stage_map:
         return project
 
@@ -1881,6 +1921,17 @@ def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[s
             base_args,
         ).fetchall()
         status_counts = {str(row["flow_status"] or "待下发"): int(row["count"] or 0) for row in status_rows}
+        owner_rows = conn.execute(
+            f"""
+            SELECT owner
+            FROM project_tasks
+            WHERE {" AND ".join(base_where)} AND COALESCE(owner, '') <> ''
+            GROUP BY owner
+            ORDER BY owner
+            """,
+            base_args,
+        ).fetchall()
+        owner_names = [str(row["owner"] or "") for row in owner_rows if str(row["owner"] or "").strip()]
 
         rows = conn.execute(
             f"""
@@ -1924,6 +1975,7 @@ def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[s
                 "totalInStage": base_total,
                 "filtered": total,
                 "statusCounts": status_counts,
+                "ownerNames": owner_names,
             },
             "rows": page_rows,
         }
@@ -1962,8 +2014,12 @@ def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[s
 
     all_rows: list[dict] = []
     status_counts: dict[str, int] = {}
+    owner_names: set[str] = set()
     for idx, row in enumerate(rows):
         task = task_from_db_row(row)
+        owner = str(task.get("owner") or "").strip()
+        if owner:
+            owner_names.add(owner)
         progress = progress_by_id.get(str(task.get("progressId") or ""))
         flow_status = task_flow_status(task)
         status_counts[flow_status] = status_counts.get(flow_status, 0) + 1
@@ -1993,6 +2049,7 @@ def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[s
             "totalInStage": len(rows),
             "filtered": len(all_rows),
             "statusCounts": status_counts,
+            "ownerNames": sorted(owner_names),
         },
         "rows": page_rows,
     }

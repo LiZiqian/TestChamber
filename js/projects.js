@@ -4,6 +4,17 @@
 
 Object.assign(app, {
 
+  renderProjectLoading(project) {
+    const name = project?.name || "项目";
+    const content = document.getElementById("content");
+    if (!content) return;
+    content.innerHTML = `
+      <div class="card empty">
+        <b>正在加载 ${Utils.esc(name)}...</b>
+        <span class="path">阶段、人员和任务分页数据正在按需读取。</span>
+      </div>`;
+  },
+
   renderProjects() {
     const content = document.getElementById("content");
     content.innerHTML = `
@@ -293,7 +304,15 @@ Object.assign(app, {
     this.view.selectedStageId = null;
     this.view.stageStrategyId = null;
     this.view.module = "projectWorkspace";
-    this.render();
+    const current = (this.data.projects || []).find(project => String(project.id || "") === String(id));
+    if (current?._detailLoaded) {
+      this.view.selectedStageId = current.stages?.[0]?.id || null;
+      this.render();
+    } else {
+      this.renderNav();
+      this.renderHeader();
+      this.renderProjectLoading(current);
+    }
     const p = await this.ensureProjectLoaded(id, { includeTasks: false, render: false });
     if (!p) {
       this.view.module = "projects";

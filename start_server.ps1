@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 
 Write-Host "============================================"
@@ -6,6 +6,7 @@ Write-Host "TestChamber V7 Intranet Server"
 Write-Host "Current folder: $PWD"
 Write-Host "Port: 9398"
 Write-Host "============================================"
+Write-Host ""
 
 $pythonCommand = $null
 $pythonDisplay = $null
@@ -30,6 +31,37 @@ function Test-PythonCommand {
     }
 }
 
+function Write-WhereDiagnostic {
+    param([string]$CommandName)
+
+    Write-Host "  where $CommandName`:"
+    $items = & where.exe $CommandName 2>$null
+    if ($LASTEXITCODE -eq 0 -and $items) {
+        foreach ($item in $items) {
+            Write-Host "    $item"
+        }
+    } else {
+        Write-Host "    <not found>"
+    }
+}
+
+function Write-PythonDiagnostics {
+    Write-Host "Python diagnostics:"
+    if ($env:PYTHON_EXE) {
+        Write-Host "  PYTHON_EXE=$env:PYTHON_EXE"
+    } else {
+        Write-Host "  PYTHON_EXE=<not set>"
+    }
+    if ($env:CONDA_PREFIX) {
+        Write-Host "  CONDA_PREFIX=$env:CONDA_PREFIX"
+    } else {
+        Write-Host "  CONDA_PREFIX=<not set>"
+    }
+    Write-WhereDiagnostic "python"
+    Write-WhereDiagnostic "py"
+    Write-Host ""
+}
+
 function Use-PythonPath {
     param([string]$Path)
 
@@ -48,39 +80,113 @@ function Use-PythonPath {
     }
 }
 
-Use-PythonPath $env:PYTHON_EXE
-if ($env:CONDA_PREFIX) {
-    Use-PythonPath (Join-Path $env:CONDA_PREFIX "python.exe")
-}
+function Use-PythonCommand {
+    param([string[]]$Command)
 
-$commonPythonPaths = @(
-    (Join-Path $env:USERPROFILE "miniforge3\python.exe"),
-    (Join-Path $env:USERPROFILE "AppData\Local\miniforge3\python.exe"),
-    (Join-Path $env:LOCALAPPDATA "miniforge3\python.exe"),
-    "C:\ProgramData\miniforge3\python.exe",
-    "C:\Miniforge3\python.exe"
-)
-foreach ($path in $commonPythonPaths) {
-    Use-PythonPath $path
-}
-
-$pyLauncher = Get-Command py -ErrorAction SilentlyContinue
-if (-not $pythonCommand -and $pyLauncher) {
-    if (Test-PythonCommand @("py", "-3")) {
-        $pythonCommand = @("py", "-3")
-        $pythonDisplay = "py -3"
+    if ($script:pythonCommand) {
+        return
+    }
+    if (-not $Command -or $Command.Length -eq 0) {
+        return
+    }
+    if (Test-PythonCommand $Command) {
+        $script:pythonCommand = $Command
+        $script:pythonDisplay = ($Command -join " ")
     }
 }
 
-if (-not $pythonCommand) {
+function Find-Python {
+    Use-PythonPath $env:PYTHON_EXE
+    if ($env:CONDA_PREFIX) {
+        Use-PythonPath (Join-Path $env:CONDA_PREFIX "python.exe")
+    }
+
+    $baseDirs = @(
+        $env:USERPROFILE,
+        $env:LOCALAPPDATA,
+        "C:\ProgramData",
+        "C:\",
+        "D:\"
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    $distros = @(
+        "miniforge3",
+        "Miniforge3",
+        "mambaforge",
+        "Mambaforge",
+        "anaconda3",
+        "Anaconda3"
+    )
+
+    foreach ($baseDir in $baseDirs) {
+        foreach ($distro in $distros) {
+            Use-PythonPath (Join-Path (Join-Path $baseDir $distro) "python.exe")
+        }
+    }
+
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        Use-PythonCommand @("py", "-3")
+    }
+
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($python) {
-        if (Test-PythonCommand @("python")) {
-            $pythonCommand = @("python")
-            $pythonDisplay = "python"
+        Use-PythonCommand @("python")
+    }
+}
+
+function Normalize-UserPythonPath {
+    param([string]$Path)
+
+    if ($null -eq $Path) {
+        return ""
+    }
+    $clean = $Path.Trim()
+    if ($clean.Length -ge 2) {
+        $first = $clean[0]
+        $last = $clean[$clean.Length - 1]
+        if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+            $clean = $clean.Substring(1, $clean.Length - 2).Trim()
+        }
+    }
+    return $clean
+}
+
+function Prompt-PythonPath {
+    Write-Host "[ERROR] Python 3 was not found automatically."
+    Write-Host "If Miniforge, Mambaforge, Anaconda, or Python is installed, enter or drag python.exe here."
+    Write-Host "You can also enter the folder that contains python.exe."
+    Write-Host "Enter Q to quit."
+    Write-Host ""
+
+    while (-not $script:pythonCommand) {
+        $inputPath = Normalize-UserPythonPath (Read-Host "python.exe path")
+        if ([string]::IsNullOrWhiteSpace($inputPath)) {
+            Write-Host "[ERROR] Empty path. Please try again."
+            continue
+        }
+        if ($inputPath -ieq "q") {
+            Write-Host "User cancelled."
+            return
+        }
+
+        $candidate = $inputPath
+        if (Test-Path -LiteralPath $candidate -PathType Container) {
+            $candidate = Join-Path $candidate "python.exe"
+        }
+
+        Use-PythonPath $candidate
+        if (-not $script:pythonCommand) {
+            Write-Host "[ERROR] This is not a working Python 3 executable:"
+            Write-Host "  $inputPath"
+            Write-Host "Please enter a valid python.exe path, or Q to quit."
+            Write-Host ""
         }
     }
 }
+
+Write-PythonDiagnostics
+Find-Python
 
 if (-not (Test-Path ".\server.py")) {
     Write-Host "[ERROR] server.py was not found in this folder."
@@ -94,23 +200,24 @@ if (-not (Test-Path ".\index.html")) {
     exit 1
 }
 
+if (-not $pythonCommand) {
+    Prompt-PythonPath
+}
+
 if ($pythonCommand) {
     $pythonArgs = @()
     if ($pythonCommand.Length -gt 1) {
         $pythonArgs = $pythonCommand[1..($pythonCommand.Length - 1)]
     }
+    Write-Host ""
     Write-Host "Python:"
     & $pythonCommand[0] @pythonArgs --version
-    Write-Host "Using: $pythonDisplay"
+    Write-Host "Using:"
+    Write-Host $pythonDisplay
+    Write-Host ""
     & $pythonCommand[0] @pythonArgs server.py --host 0.0.0.0 --port 9398
 } else {
     Write-Host "[ERROR] Python 3 was not found."
-    Write-Host "If Miniforge is installed, start this file from 'Miniforge Prompt',"
-    Write-Host "or set PYTHON_EXE to your Miniforge python.exe path before running."
-    Write-Host "Example:"
-    Write-Host "set PYTHON_EXE=C:\Users\your_name\miniforge3\python.exe"
-    Write-Host "If Windows Store python aliases are enabled, disable them in:"
-    Write-Host "Settings > Apps > Advanced app settings > App execution aliases"
 }
 
 Read-Host "Press Enter to exit"

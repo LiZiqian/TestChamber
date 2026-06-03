@@ -116,8 +116,8 @@ Object.assign(app, {
         </div>` : "";
       const toggleBtn = hasSub ? `<span class="nav-toggle ${isExpanded ? 'expanded' : ''}" title="${isExpanded ? '折叠' : '展开'}子目录" onclick="event.stopPropagation();app._navToggle('${item.id}')"></span>` : "";
       return `
-        <div class="nav-item ${isActive(item.id) ? 'active' : ''} ${hasSub ? 'has-sub' : ''}" title="${Utils.esc(item.label)}">
-          <span class="nav-item-main" onclick="app.go('${item.id}')"><span class="nav-icon">${item.icon}</span><span class="nav-label">${Utils.esc(item.label)}</span></span>
+        <div class="nav-item ${isActive(item.id) ? 'active' : ''} ${hasSub ? 'has-sub' : ''}" title="${Utils.esc(item.label)}" onclick="app.go('${item.id}')">
+          <span class="nav-item-main"><span class="nav-icon">${item.icon}</span><span class="nav-label">${Utils.esc(item.label)}</span></span>
           ${toggleBtn}
         </div>
         ${subHtml}`;

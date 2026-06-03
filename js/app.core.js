@@ -3,7 +3,7 @@
    ======================================== */
 
 const app = {
-  version: "V7",
+  version: "7.1.0",
   data: null,
   serverRevision: 0,
   serverUpdatedAt: null,
