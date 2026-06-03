@@ -37,8 +37,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, unquote_to_bytes, urlparse
 
 
-APP_VERSION = "7.1.0"
-SERVER_VERSION = "TestChamberServer/7.1.0"
+APP_VERSION = "7.1.1"
+SERVER_VERSION = "TestChamberServer/7.1.1"
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
 SAMPLE_DATA_DIR = DATA_DIR / "samples"
