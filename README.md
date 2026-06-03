@@ -15,7 +15,7 @@ TestChamber V7 把“项目 -> 阶段 -> 测试任务 -> 样机 -> 结果 -> 履
 
 > [!NOTE]
 > - 当前版本：`7.1.0`
-> - 默认端口：`9398`
+> - 默认端口：`9398`（可自定义）
 > - 默认数据目录：`data/`
 > - 推荐运行环境：Windows + Python 3.9+ + Chrome / Edge
 
@@ -74,26 +74,27 @@ TestChamber V7 特别适合这些场景：
 ## 系统一眼看懂
 
 ```mermaid
-flowchart LR
-    A["项目"] --> B["阶段"]
-    B --> C["测试策略 / SKU / BOM"]
-    C --> D["任务"]
-    E["样机档案池"] --> F["样机"]
-    F --> D
-    D --> G["结果录入"]
-    G --> H["问题 / 照片 / 去向"]
-    H --> I["样机履历"]
-    I --> J["完整数据包导出 / 导入"]
+flowchart TB
+    Project["项目配置<br/>项目 / 阶段 / 策略"]
+    Sample["样机档案<br/>样机池 / 状态 / 标识"]
+    Task["任务执行<br/>配置 / 启动 / 阻塞"]
+    Result["结果沉淀<br/>结论 / 照片 / 去向"]
+    Archive["履历与迁移<br/>样机履历 / 数据包"]
+
+    Project --> Task
+    Sample --> Task
+    Task --> Result --> Archive
 ```
 
 技术结构：
 
 ```mermaid
 flowchart TB
-    Browser["浏览器 SPA<br/>Vanilla JS + CSS"] --> Server["Python ThreadingHTTPServer<br/>server.py"]
-    Server --> DB["SQLite WAL<br/>data/testchamber.sqlite"]
-    Server --> Assets["样机照片与缩略图<br/>data/samples/..."]
-    Server --> Bundle["导入导出数据包<br/>state + manifest + assets"]
+    Browser["浏览器 SPA<br/>Vanilla JS + CSS"]
+    Server["Python 服务<br/>server.py"]
+    Storage["本地数据<br/>SQLite / 照片 / 数据包"]
+
+    Browser --> Server --> Storage
 ```
 
 ## 快速部署
