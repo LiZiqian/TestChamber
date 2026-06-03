@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="760" viewBox="0 0 1120 760" role="img" aria-labelledby="title desc">
+  <title id="title">TestChamber V7 system workflow</title>
+  <desc id="desc">Project workflow and sample workflow converge into task execution, result entry, history, and data migration.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#cbd5e1" />
+    </marker>
+    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.12" />
+    </filter>
+  </defs>
+  <style>
+    .canvas { fill: transparent; }
+    .group-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #334155; }
+    .card-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+    .card-detail { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #64748b; }
+    .arrow { fill: none; stroke: #cbd5e1; stroke-width: 2; marker-end: url(#arrow); }
+    .group { rx: 8; filter: url(#cardShadow); }
+    .node { rx: 6; }
+  </style>
+
+  <rect class="canvas" width="1120" height="760" />
+
+  <rect class="group" x="44" y="34" width="492" height="276" fill="#f8fbff" stroke="#bfdbfe" stroke-width="2" />
+  <text class="group-title" x="290" y="62" text-anchor="middle">项目链路</text>
+  <rect class="node" x="104" y="86" width="372" height="86" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.5" />
+  <text class="card-title" x="290" y="123" text-anchor="middle">项目管理</text>
+  <text class="card-detail" x="290" y="148" text-anchor="middle">阶段 / 方案 / 人员</text>
+  <path class="arrow" d="M290 172 L290 198" />
+  <rect class="node" x="104" y="198" width="372" height="86" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.5" />
+  <text class="card-title" x="290" y="235" text-anchor="middle">测试任务工作表</text>
+  <text class="card-detail" x="290" y="260" text-anchor="middle">任务生成 / 筛选 / 跟踪</text>
+
+  <rect class="group" x="584" y="34" width="492" height="276" fill="#f7fef9" stroke="#bbf7d0" stroke-width="2" />
+  <text class="group-title" x="830" y="62" text-anchor="middle">样机链路</text>
+  <rect class="node" x="644" y="86" width="372" height="86" fill="#f0fdf4" stroke="#86efac" stroke-width="2.5" />
+  <text class="card-title" x="830" y="123" text-anchor="middle">样机档案库</text>
+  <text class="card-detail" x="830" y="148" text-anchor="middle">样机池 A / B</text>
+  <path class="arrow" d="M830 172 L830 198" />
+  <rect class="node" x="644" y="198" width="372" height="86" fill="#f0fdf4" stroke="#86efac" stroke-width="2.5" />
+  <text class="card-title" x="830" y="235" text-anchor="middle">样机卡片</text>
+  <text class="card-detail" x="830" y="260" text-anchor="middle">详情 / 履历 / 图片 / CT 数据</text>
+
+  <rect class="group" x="250" y="386" width="620" height="336" fill="#fffdf5" stroke="#fde68a" stroke-width="2" />
+  <text class="group-title" x="560" y="414" text-anchor="middle">执行闭环</text>
+  <rect class="node" x="350" y="440" width="420" height="78" fill="#fffbeb" stroke="#fbbf24" stroke-width="2.5" />
+  <text class="card-title" x="560" y="473" text-anchor="middle">任务执行</text>
+  <text class="card-detail" x="560" y="497" text-anchor="middle">执行人 / 样机 / 启动 / 阻塞</text>
+  <path class="arrow" d="M560 518 L560 546" />
+  <rect class="node" x="350" y="546" width="420" height="78" fill="#fff7ed" stroke="#fb923c" stroke-width="2.5" />
+  <text class="card-title" x="560" y="579" text-anchor="middle">结果录入</text>
+  <text class="card-detail" x="560" y="603" text-anchor="middle">结论 / 故障照片 / 分析照片 / 样机去向</text>
+  <path class="arrow" d="M560 624 L560 652" />
+  <rect class="node" x="350" y="652" width="420" height="78" fill="#f8fafc" stroke="#94a3b8" stroke-width="2.5" />
+  <text class="card-title" x="560" y="685" text-anchor="middle">履历与迁移</text>
+  <text class="card-detail" x="560" y="709" text-anchor="middle">样机履历 / 完整数据包</text>
+
+  <path class="arrow" d="M290 284 C290 340, 440 346, 505 440" />
+  <path class="arrow" d="M830 284 C830 340, 680 346, 615 440" />
+</svg>

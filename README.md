@@ -73,23 +73,14 @@ TestChamber V7 特别适合这些场景：
 
 ## 系统一眼看懂
 
-```mermaid
-flowchart TB
-    Project["项目配置<br/>项目 / 阶段 / 策略"]
-    Sample["样机档案<br/>样机池 / 状态 / 标识"]
-    Task["任务执行<br/>配置 / 启动 / 阻塞"]
-    Result["结果沉淀<br/>结论 / 照片 / 去向"]
-    Archive["履历与迁移<br/>样机履历 / 数据包"]
-
-    Project --> Task
-    Sample --> Task
-    Task --> Result --> Archive
-```
+<p align="center">
+  <img src="docs/testchamber-workflow.svg" alt="TestChamber V7 系统工作流" width="920">
+</p>
 
 技术结构：
 
 ```mermaid
-flowchart TB
+flowchart LR
     Browser["浏览器 SPA<br/>Vanilla JS + CSS"]
     Server["Python 服务<br/>server.py"]
     Storage["本地数据<br/>SQLite / 照片 / 数据包"]
