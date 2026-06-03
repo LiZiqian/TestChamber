@@ -79,14 +79,9 @@ TestChamber V7 特别适合这些场景：
 
 技术结构：
 
-```mermaid
-flowchart LR
-    Browser["浏览器 SPA<br/>Vanilla JS + CSS"]
-    Server["Python 服务<br/>server.py"]
-    Storage["本地数据<br/>SQLite / 照片 / 数据包"]
-
-    Browser --> Server --> Storage
-```
+<p align="center">
+  <img src="docs/testchamber-architecture.svg" alt="TestChamber V7 技术结构" width="760">
+</p>
 
 ## 快速部署
 

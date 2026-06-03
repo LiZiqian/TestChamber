@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="220" viewBox="0 0 920 220" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="title desc">
+  <title id="title">TestChamber V7 technical architecture</title>
+  <desc id="desc">The browser single page application talks to the Python server, which stores data in local SQLite, photo assets, and export bundles.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#cbd5e1" />
+    </marker>
+    <filter id="cardShadow" x="-10%" y="-15%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="7" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.14" />
+    </filter>
+  </defs>
+  <style>
+    .canvas { fill: transparent; }
+    .card { rx: 8; filter: url(#cardShadow); }
+    .card-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+    .card-detail { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #64748b; }
+    .arrow { fill: none; stroke: #cbd5e1; stroke-width: 2.5; marker-end: url(#arrow); }
+    .label { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #94a3b8; letter-spacing: 0.5px; }
+  </style>
+
+  <rect class="canvas" width="920" height="220" />
+
+  <text class="label" x="112" y="45" text-anchor="middle">CLIENT</text>
+  <rect class="card" x="42" y="64" width="224" height="104" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.5" />
+  <text class="card-title" x="154" y="106" text-anchor="middle">浏览器 SPA</text>
+  <text class="card-detail" x="154" y="134" text-anchor="middle">Vanilla JS + CSS</text>
+
+  <path class="arrow" d="M278 116 L354 116" />
+
+  <text class="label" x="460" y="45" text-anchor="middle">SERVER</text>
+  <rect class="card" x="348" y="64" width="224" height="104" fill="#fffbeb" stroke="#fbbf24" stroke-width="2.5" />
+  <text class="card-title" x="460" y="106" text-anchor="middle">Python 服务</text>
+  <text class="card-detail" x="460" y="134" text-anchor="middle">server.py / HTTP API</text>
+
+  <path class="arrow" d="M584 116 L660 116" />
+
+  <text class="label" x="808" y="45" text-anchor="middle">STORAGE</text>
+  <rect class="card" x="654" y="64" width="264" height="104" fill="#f0fdf4" stroke="#86efac" stroke-width="2.5" />
+  <text class="card-title" x="786" y="106" text-anchor="middle">本地数据</text>
+  <text class="card-detail" x="786" y="134" text-anchor="middle">SQLite / 照片 / 数据包</text>
+</svg>
