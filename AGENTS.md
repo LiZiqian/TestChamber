@@ -38,7 +38,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 ### 版本发布规则
 
 - `v7.0.0` 固定指向 2026-06-03 时 GitHub `origin/main` 的既有提交 `66ae30e`。
-- `v7.1.0` 是 7.1 系列性能和导航响应优化的统一 GitHub Release/tag 入口；当前发布显示版本为 `v7.1.2`。
+- `v7.1.0` 是 7.1 系列性能和导航响应优化的统一 GitHub Release/tag 入口；当前发布显示版本为 `v7.1.3`。
 - 7.1 系列每次 GitHub push 只递增最后一位 patch：`7.1.X` → `7.1.(X+1)`，`7.1` 主线保持不变。
 - 以后更新版本时，同步修改 `server.py` 的 `APP_VERSION` / `SERVER_VERSION`、`js/app.core.js` 的 `app.version`，并把 `index.html` 与 `css/style.css` 的静态资源 cachebuster 改为同一个语义版本号。
 - 发布前运行：`python -m py_compile server.py`、`python tests\test_server_core.py`、`python tests\test_import_conflicts.py`、`node tests\frontend_pagination_perf.test.cjs`、`node tests\frontend_status_transitions.test.cjs`。
@@ -158,7 +158,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 3. 阶段新增/编辑/删除/复制/排序、策略页内联阶段名与 SKU 编辑已切到 `commitStageMutation()`。
 4. 样机池新建/编辑、样机新增、样机批量导入已切到 `commitSampleCategoryMutation(createSamples)`。
 5. 任务表正式使用 `/api/stages/<stageId>/tasks` 服务端分页；样机池卡片使用 `/api/sample-categories` 摘要，池内样机使用 `/api/sample-categories/<catId>/samples` 分页。
-6. `index.html` 静态资源加 cachebuster，当前发布版本统一为 `v=7.1.2`，避免浏览器缓存旧 JS 影响验证。
+6. `index.html` 静态资源加 cachebuster，当前发布版本统一为 `v=7.1.3`，避免浏览器缓存旧 JS 影响验证。
 7. 已补 `tests/test_server_core.py` 覆盖项目增量、阶段增量、样机池创建与批量样机插入。
 8. 已推进到第五阶段：初始化不再直接拉全量 `/api/state`。
 

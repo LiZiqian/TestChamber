@@ -38,8 +38,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, unquote_to_bytes, urlparse
 
 
-APP_VERSION = "7.1.2"
-SERVER_VERSION = "TestChamberServer/7.1.2"
+APP_VERSION = "7.1.3"
+SERVER_VERSION = "TestChamberServer/7.1.3"
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
 SAMPLE_DATA_DIR = DATA_DIR / "samples"
@@ -3815,6 +3815,7 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
 
     if not zip_raw or len(zip_raw) < 4:
         raise ValueError("未找到有效的 zip 文件内容")
+    zip_bytes = len(zip_raw)
 
     # 解压到临时目录；上传 zip 立即落盘并清掉 multipart 内存引用。
     tmp_dir = tempfile.mkdtemp(prefix="tcv7_import_")
@@ -3861,10 +3862,10 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
             "_tmp_dir": str(tmp_path),
             "_payload_path": str(payload_path),
             "_revision": current_revision,
-            "_zip_bytes": len(zip_raw),
+            "_zip_bytes": zip_bytes,
             "_state_bytes": state_bytes,
             "_payload_bytes": payload_bytes,
-            "_cache_bytes": len(zip_raw) + payload_bytes,
+            "_cache_bytes": zip_bytes + payload_bytes,
         }
         _cleanup_expired_previews()
         if preview_id not in _IMPORT_PREVIEWS:
@@ -7223,6 +7224,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:
+                traceback.print_exc()
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 

@@ -57,16 +57,22 @@ def patched_server_data_dirs(root):
     old_data_dir = server.DATA_DIR
     old_sample_dir = server.SAMPLE_DATA_DIR
     old_backup_dir = server.BACKUP_DIR
+    old_db_path = server.DB_PATH
+    old_deployment_file = server.DEPLOYMENT_FILE
     try:
         server.DATA_DIR = Path(root)
         server.SAMPLE_DATA_DIR = Path(root) / "samples"
         server.BACKUP_DIR = Path(root) / "backups"
+        server.DB_PATH = Path(root) / "testchamber.sqlite"
+        server.DEPLOYMENT_FILE = Path(root) / "deployment.json"
         server.ensure_dirs()
         yield
     finally:
         server.DATA_DIR = old_data_dir
         server.SAMPLE_DATA_DIR = old_sample_dir
         server.BACKUP_DIR = old_backup_dir
+        server.DB_PATH = old_db_path
+        server.DEPLOYMENT_FILE = old_deployment_file
 
 
 def make_multipart(fields=None, files=None, boundary="tcv7_test_boundary"):
@@ -280,6 +286,7 @@ class ServerCoreTests(unittest.TestCase):
             with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr("manifest.json", server.json_dumps(manifest))
                 zf.writestr("state.json", server.json_dumps(incoming))
+            bundle_bytes = bundle.getvalue()
 
             def fake_get_state(*, compact=False):
                 calls.append(compact)
@@ -287,7 +294,7 @@ class ServerCoreTests(unittest.TestCase):
 
             server.get_state = fake_get_state
             headers, body = make_multipart(files=[
-                ("file", "bundle.zip", "application/zip", bundle.getvalue()),
+                ("file", "bundle.zip", "application/zip", bundle_bytes),
             ])
 
             result = server.analyze_import_bundle(headers, body)
@@ -298,6 +305,8 @@ class ServerCoreTests(unittest.TestCase):
             self.assertNotIn("_incoming", entry)
             self.assertNotIn("result", entry)
             self.assertTrue(Path(entry["_payload_path"]).is_file())
+            self.assertEqual(entry["_zip_bytes"], len(bundle_bytes))
+            self.assertEqual(entry["_cache_bytes"], len(bundle_bytes) + entry["_payload_bytes"])
             incoming_payload, result_payload = server._load_import_preview_payload(entry)
             self.assertEqual(incoming_payload.get("version"), "V7")
             self.assertEqual(result_payload.get("previewId"), result["previewId"])
@@ -510,6 +519,289 @@ class ServerCoreTests(unittest.TestCase):
                 self.assertEqual(manifest["projectCount"], 1)
         finally:
             tmp_path.unlink(missing_ok=True)
+
+    def test_cross_deployment_export_import_preserves_photo_assets(self):
+        old_previews = dict(server._IMPORT_PREVIEWS)
+        server._IMPORT_PREVIEWS.clear()
+        try:
+            with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as target_dir:
+                with patched_server_data_dirs(source_dir):
+                    server.init_db()
+                    server.DEPLOYMENT_FILE.write_text(
+                        server.json_dumps({"deploymentId": "deploy_source_cross", "name": "source"}),
+                        encoding="utf-8",
+                    )
+                    photo_dir = server.SAMPLE_DATA_DIR / "sample_cross_source" / "photos"
+                    photo_dir.mkdir(parents=True, exist_ok=True)
+                    (photo_dir / "photo_cross.jpg").write_bytes(b"cross-photo-bytes")
+                    (photo_dir / "photo_cross_thumb.jpg").write_bytes(b"cross-thumb-bytes")
+
+                    state, rev, _ = server.get_state()
+                    state["projects"] = [{
+                        "id": "proj_cross_source",
+                        "name": "跨部署项目",
+                        "code": "CROSS-001",
+                        "members": [],
+                        "locations": [],
+                        "stages": [{
+                            "id": "stage_cross_source",
+                            "name": "EVT",
+                            "skuNames": [],
+                            "bom": [],
+                            "strategy": [],
+                            "progress": [],
+                            "tasks": [{
+                                "id": "task_cross_source",
+                                "category": "可靠性",
+                                "testItem": "高温测试",
+                                "skuIndex": 0,
+                                "status": "进行中",
+                                "sampleIds": ["sample_cross_source"],
+                                "logs": [],
+                                "removedSampleRecords": [],
+                                "sampleFaultRecords": [],
+                                "resultUploads": [],
+                            }],
+                        }],
+                    }]
+                    state["sampleLibrary"]["categories"] = [{
+                        "id": "cat_cross_source",
+                        "name": "跨部署样机池",
+                        "samples": [{
+                            "id": "sample_cross_source",
+                            "sampleNo": "CROSS-S001",
+                            "sn": "SN-CROSS-001",
+                            "imei": "868000000000001",
+                            "boardSn": "BOARD-CROSS-001",
+                            "status": "测试中",
+                            "location": "源实验室",
+                            "owner": "张三/001",
+                            "borrower": "",
+                            "sourceStageName": "EVT",
+                            "sourceSkuName": "SKU-A",
+                            "problemRecords": [],
+                            "photos": [{
+                                "id": "photo_cross",
+                                "name": "photo_cross.jpg",
+                                "type": "image/jpeg",
+                                "size": len(b"cross-photo-bytes"),
+                                "uploadedAt": "2026-06-04T00:00:00+08:00",
+                                "relativePath": "samples/sample_cross_source/photos/photo_cross.jpg",
+                                "thumbRelativePath": "samples/sample_cross_source/photos/photo_cross_thumb.jpg",
+                                "url": "/api/samples/sample_cross_source/photos/photo_cross",
+                                "thumbUrl": "/api/samples/sample_cross_source/photos/photo_cross__thumb",
+                            }],
+                            "logs": [],
+                            "currentProjectId": "proj_cross_source",
+                            "currentStageId": "stage_cross_source",
+                            "currentTaskId": "task_cross_source",
+                            "currentTestItem": "高温测试",
+                        }],
+                    }]
+                    ok, resp = server.save_state(state, rev, "source", remark="source export", user="test")
+                    self.assertTrue(ok, resp)
+                    zip_data, filename = server.build_export_bundle()
+                    self.assertTrue(filename.endswith(".zip"))
+
+                with patched_server_data_dirs(target_dir):
+                    server.init_db()
+                    server.DEPLOYMENT_FILE.write_text(
+                        server.json_dumps({"deploymentId": "deploy_target_cross", "name": "target"}),
+                        encoding="utf-8",
+                    )
+                    headers, body = make_multipart(files=[
+                        ("bundle", "source.zip", "application/zip", zip_data),
+                    ])
+                    preview = server.analyze_import_bundle(headers, body)
+                    self.assertEqual(preview["source"]["deploymentId"], "deploy_source_cross")
+                    self.assertEqual(preview["blockers"], [])
+
+                    result = server.commit_import_bundle({"previewId": preview["previewId"], "decisions": {}})
+                    self.assertTrue(result["ok"], result)
+
+                    imported, _, _ = server.get_state()
+                    project = imported["projects"][0]
+                    stage = project["stages"][0]
+                    task = stage["tasks"][0]
+                    self.assertEqual(task["sampleIds"], ["sample_cross_source"])
+                    sample = server._sample_index_by_id(imported)["sample_cross_source"]
+                    self.assertEqual(sample["currentProjectId"], "proj_cross_source")
+                    self.assertEqual(sample["currentStageId"], "stage_cross_source")
+                    self.assertEqual(sample["currentTaskId"], "task_cross_source")
+                    photo = sample["photos"][0]
+                    self.assertEqual(photo["relativePath"], "samples/sample_cross_source/photos/photo_cross.jpg")
+                    self.assertEqual(photo["thumbRelativePath"], "samples/sample_cross_source/photos/photo_cross_thumb.jpg")
+                    self.assertTrue(server.path_inside_data(photo["relativePath"]).is_file())
+                    self.assertTrue(server.path_inside_data(photo["thumbRelativePath"]).is_file())
+                    self.assertEqual(server.path_inside_data(photo["relativePath"]).read_bytes(), b"cross-photo-bytes")
+                    self.assertEqual(server.path_inside_data(photo["thumbRelativePath"]).read_bytes(), b"cross-thumb-bytes")
+        finally:
+            for preview_id in list(server._IMPORT_PREVIEWS):
+                server._cleanup_preview_temp(preview_id)
+            server._IMPORT_PREVIEWS.clear()
+            server._IMPORT_PREVIEWS.update(old_previews)
+
+    def test_import_merge_into_non_empty_target_does_not_duplicate_stage_or_drop_samples(self):
+        old_previews = dict(server._IMPORT_PREVIEWS)
+        server._IMPORT_PREVIEWS.clear()
+        try:
+            with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as target_dir:
+                with patched_server_data_dirs(source_dir):
+                    server.init_db()
+                    server.DEPLOYMENT_FILE.write_text(
+                        server.json_dumps({"deploymentId": "deploy_source_merge"}),
+                        encoding="utf-8",
+                    )
+                    state, rev, _ = server.get_state()
+                    state["projects"] = [{
+                        "id": "proj_source_merge",
+                        "name": "共享项目",
+                        "code": "MERGE-001",
+                        "members": [],
+                        "locations": [],
+                        "stages": [{
+                            "id": "stage_shared",
+                            "name": "EVT",
+                            "skuNames": [],
+                            "bom": [],
+                            "strategy": [],
+                            "progress": [],
+                            "tasks": [{
+                                "id": "task_import",
+                                "category": "可靠性",
+                                "testItem": "跌落测试",
+                                "skuIndex": 0,
+                                "status": "进行中",
+                                "sampleIds": ["sample_import_merge"],
+                                "logs": [],
+                                "removedSampleRecords": [],
+                                "sampleFaultRecords": [],
+                                "resultUploads": [],
+                            }],
+                        }],
+                    }]
+                    state["sampleLibrary"]["categories"] = [{
+                        "id": "cat_source_merge",
+                        "name": "共享样机池",
+                        "samples": [{
+                            "id": "sample_import_merge",
+                            "sampleNo": "IMP-001",
+                            "sn": "SN-IMPORT-MERGE",
+                            "imei": "",
+                            "boardSn": "",
+                            "status": "测试中",
+                            "location": "源实验室",
+                            "owner": "李四/002",
+                            "borrower": "",
+                            "sourceStageName": "EVT",
+                            "sourceSkuName": "SKU-A",
+                            "problemRecords": [],
+                            "photos": [],
+                            "logs": [],
+                            "currentProjectId": "proj_source_merge",
+                            "currentStageId": "stage_shared",
+                            "currentTaskId": "task_import",
+                            "currentTestItem": "跌落测试",
+                        }],
+                    }]
+                    ok, resp = server.save_state(state, rev, "source", remark="source merge", user="test")
+                    self.assertTrue(ok, resp)
+                    zip_data, _ = server.build_export_bundle()
+
+                with patched_server_data_dirs(target_dir):
+                    server.init_db()
+                    target_state, target_rev, _ = server.get_state()
+                    target_state["projects"] = [{
+                        "id": "proj_target_merge",
+                        "name": "共享项目",
+                        "code": "MERGE-001",
+                        "members": [],
+                        "locations": [],
+                        "stages": [{
+                            "id": "stage_shared",
+                            "name": "EVT",
+                            "skuNames": [],
+                            "bom": [],
+                            "strategy": [],
+                            "progress": [],
+                            "tasks": [{
+                                "id": "task_existing",
+                                "category": "可靠性",
+                                "testItem": "高温测试",
+                                "skuIndex": 0,
+                                "status": "未开始",
+                                "sampleIds": [],
+                                "logs": [],
+                                "removedSampleRecords": [],
+                                "sampleFaultRecords": [],
+                                "resultUploads": [],
+                            }],
+                        }],
+                    }]
+                    target_state["sampleLibrary"]["categories"] = [{
+                        "id": "cat_target_merge",
+                        "name": "共享样机池",
+                        "samples": [{
+                            "id": "sample_existing_merge",
+                            "sampleNo": "EX-001",
+                            "sn": "SN-EXISTING-MERGE",
+                            "imei": "",
+                            "boardSn": "",
+                            "status": "闲置",
+                            "location": "目标实验室",
+                            "owner": "王五/003",
+                            "borrower": "",
+                            "sourceStageName": "",
+                            "sourceSkuName": "",
+                            "problemRecords": [],
+                            "photos": [],
+                            "logs": [],
+                            "currentProjectId": None,
+                            "currentStageId": None,
+                            "currentTaskId": None,
+                            "currentTestItem": None,
+                        }],
+                    }]
+                    ok, resp = server.save_state(target_state, target_rev, "target", remark="target setup", user="test")
+                    self.assertTrue(ok, resp)
+
+                    headers, body = make_multipart(files=[
+                        ("bundle", "source.zip", "application/zip", zip_data),
+                    ])
+                    preview = server.analyze_import_bundle(headers, body)
+                    conflicts = [c for c in preview["conflicts"] if c.get("type") == "project_name_conflict"]
+                    self.assertEqual(len(conflicts), 1, preview)
+                    decision = {
+                        conflicts[0]["conflictId"]: {
+                            "action": "merge_into_existing",
+                            "targetId": "proj_target_merge",
+                        }
+                    }
+                    result = server.commit_import_bundle({"previewId": preview["previewId"], "decisions": decision})
+                    self.assertTrue(result["ok"], result)
+
+                    merged, _, _ = server.get_state()
+                    self.assertEqual(len(merged["projects"]), 1)
+                    project = merged["projects"][0]
+                    self.assertEqual(project["id"], "proj_target_merge")
+                    self.assertEqual(len(project["stages"]), 1)
+                    task_ids = [task["id"] for task in project["stages"][0]["tasks"]]
+                    self.assertEqual(sorted(task_ids), ["task_existing", "task_import"])
+                    self.assertEqual(len(task_ids), len(set(task_ids)))
+                    samples = server._sample_index_by_id(merged)
+                    self.assertIn("sample_existing_merge", samples)
+                    self.assertIn("sample_import_merge", samples)
+                    imported_sample = samples["sample_import_merge"]
+                    self.assertEqual(imported_sample["currentProjectId"], "proj_target_merge")
+                    self.assertEqual(imported_sample["currentStageId"], "stage_shared")
+                    self.assertEqual(imported_sample["currentTaskId"], "task_import")
+                    task_import = [task for task in project["stages"][0]["tasks"] if task["id"] == "task_import"][0]
+                    self.assertEqual(task_import["sampleIds"], ["sample_import_merge"])
+        finally:
+            for preview_id in list(server._IMPORT_PREVIEWS):
+                server._cleanup_preview_temp(preview_id)
+            server._IMPORT_PREVIEWS.clear()
+            server._IMPORT_PREVIEWS.update(old_previews)
 
     def test_detects_sample_occupancy_conflict_across_open_tasks(self):
         data = empty_state()
