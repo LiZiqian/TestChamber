@@ -2,7 +2,7 @@
    数字治理平台 V7 - 只读一致性审计脚本
    ----------------------------------------
    用途：在浏览器控制台执行 app.auditConsistency()，
-        对当前内存中的 app.data 做只读一致性检查。
+        对当前内存数据快照做只读一致性检查。
    严格只读：本脚本不修改任何数据、不触发 save / render。
    覆盖检查：
      1. 同一样机被多个未完成任务占用（与服务端 C1 对齐）
@@ -13,7 +13,7 @@
      6. 重复的任务 id / 样机 id
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("debug.auditConsistency", {
 
   // 与 taskFlowStatus() 返回的标准完成状态对齐
   _auditFinishedStatuses: ["正常完成", "异常终止"],
@@ -31,7 +31,7 @@ Object.assign(app, {
    * 不修改任何状态。
    */
   auditConsistency({ log = true } = {}) {
-    const data = this.data || {};
+    const data = typeof this.dataSnapshot === "function" ? this.dataSnapshot() : {};
     const projects = data.projects || [];
     const report = {
       generatedAt: new Date().toISOString(),

@@ -574,12 +574,11 @@ preview["conflicts"] = [{
     "currentId": "x", "incomingId": "y",
     "label": "fake",
 }]
-# Update the stored preview
-from server import _IMPORT_PREVIEWS
-for k, v in _IMPORT_PREVIEWS.items():
-    if v.get("result") is preview:
-        v["result"] = preview
-        break
+# Update the stored file-backed preview payload
+entry = _server._IMPORT_PREVIEWS.get(preview["previewId"])
+_assert(bool(entry), "Stored preview entry found")
+incoming_payload, _ = _server._load_import_preview_payload(entry)
+_server._store_import_preview_payload(Path(entry["_tmp_dir"]), incoming_payload, preview)
 
 result = commit_import_bundle({"previewId": preview["previewId"], "decisions": {"conflict_9999": {"action": "skip"}}})
 _assert(not result["ok"], f"Rejects unsupported type: ok={result['ok']}")

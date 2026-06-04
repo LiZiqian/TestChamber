@@ -2,7 +2,7 @@
    数字治理平台 V7 - 日志模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("app.logs", {
 
   // ---- 日志展示 ----
   toggleSampleHistoryItem(button) {
@@ -92,28 +92,79 @@ Object.assign(app, {
     }
     return [String(text || "").trim()].filter(Boolean);
   },
-  taskLogContentHtml(log) {
+  appendTaskLogRichText(target, text, task = null) {
+    const raw = String(text || "");
+    const pattern = /(?:SN|IMEI|主板SN)#[A-Za-z0-9-]+|\b(Pass|PASS|pass|Fail|FAIL|fail)\b(\s*[（(][^)）]*[)）])?/g;
+    let last = 0;
+    for (const match of raw.matchAll(pattern)) {
+      if (match.index > last) target.append(document.createTextNode(raw.slice(last, match.index)));
+      const token = match[0];
+      if (/^(SN|IMEI|主板SN)#/i.test(token)) {
+        const sampleId = this.findLogSampleRefId(token, task);
+        if (sampleId) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "sample-log-link";
+          button.dataset.appAction = "sample-readonly";
+          button.dataset.stopPropagation = "1";
+          button.dataset.id = sampleId;
+          button.textContent = token;
+          target.append(button);
+        } else {
+          const missing = document.createElement("span");
+          missing.className = "sample-log-ref-missing";
+          missing.title = "样机档案不存在或已销毁";
+          missing.textContent = token;
+          target.append(missing);
+        }
+      } else {
+        const result = document.createElement("b");
+        result.className = /^pass/i.test(token) ? "log-result-pass" : "log-result-fail";
+        result.textContent = token;
+        target.append(result);
+      }
+      last = match.index + token.length;
+    }
+    if (last < raw.length) target.append(document.createTextNode(raw.slice(last)));
+  },
+  taskLogTextNode(raw, task = null) {
+    const node = document.createElement("div");
+    node.className = "task-log-text";
+    node.title = String(raw || "");
+    this.appendTaskLogRichText(node, this.compactTaskLogText(raw), task);
+    return node;
+  },
+  taskLogContentNode(log) {
     const lines = this.taskLogDetailLines(log);
-    if (!lines.length) return "";
+    if (!lines.length) return null;
     const action = String(log?.action || "").trim();
     const isTempChange = action.includes("临时变更");
+    const task = log.taskContext || null;
 
     if (lines.length === 1 && !isTempChange) {
-      const raw = lines[0];
-      return `<div class="task-log-text" title="${Utils.esc(raw)}">${this.linkSampleRefsInLogText(this.compactTaskLogText(raw), log.taskContext || null)}</div>`;
+      return this.taskLogTextNode(lines[0], task);
     }
 
-    return `<div class="task-log-text task-log-text-multiline">
-      ${lines.map(line => {
-        const idx = line.indexOf("：");
-        if (idx > 0) {
-          const label = line.slice(0, idx + 1);
-          const value = line.slice(idx + 1);
-          return `<div class="task-log-detail-line"><span class="task-log-detail-label">${Utils.esc(label)}</span><span class="task-log-detail-value">${this.linkSampleRefsInLogText(value, log.taskContext || null)}</span></div>`;
-        }
-        return `<div class="task-log-detail-line">${this.linkSampleRefsInLogText(line, log.taskContext || null)}</div>`;
-      }).join("")}
-    </div>`;
+    const node = document.createElement("div");
+    node.className = "task-log-text task-log-text-multiline";
+    lines.forEach(line => {
+      const row = document.createElement("div");
+      row.className = "task-log-detail-line";
+      const idx = line.indexOf("：");
+      if (idx > 0) {
+        const label = document.createElement("span");
+        label.className = "task-log-detail-label";
+        label.textContent = line.slice(0, idx + 1);
+        const value = document.createElement("span");
+        value.className = "task-log-detail-value";
+        this.appendTaskLogRichText(value, line.slice(idx + 1), task);
+        row.append(label, value);
+      } else {
+        this.appendTaskLogRichText(row, line, task);
+      }
+      node.append(row);
+    });
+    return node;
   },
   findLogSampleRefId(ref, task = null) {
     const code = String(ref || "").trim();
@@ -143,7 +194,7 @@ Object.assign(app, {
       html += Utils.esc(str.slice(last, match.index));
       const sampleId = this.findLogSampleRefId(ref, task);
       html += sampleId
-        ? `<button type="button" class="sample-log-link" onclick="event.stopPropagation();app.openSampleReadonly('${Utils.esc(sampleId)}')">${Utils.esc(ref)}</button>`
+        ? `<button type="button" class="sample-log-link" data-app-action="sample-readonly" data-stop-propagation="1" data-id="${Utils.esc(sampleId)}">${Utils.esc(ref)}</button>`
         : `<span class="sample-log-ref-missing" title="样机档案不存在或已销毁">${Utils.esc(ref)}</span>`;
       last = match.index + ref.length;
     }
@@ -160,22 +211,58 @@ Object.assign(app, {
       }
     );
   },
-  taskLogHtml(log, seq = "", task = null) {
+  taskLogNode(log, seq = "", task = null) {
     const logWithContext = { ...log, taskContext: task };
-    const seqHtml = seq ? `<span class="log-seq">#${Utils.esc(seq)}</span>` : "";
-    return `<div class="task-log-item">
-      ${seqHtml}<b>${Utils.esc(log.action || "-")}</b>
-      <div class="task-log-meta">${Utils.esc(new Date(log.time).toLocaleString("zh-CN"))} | 操作人：${Utils.esc(log.user || "-")} | 状态：${Utils.esc(log.fromStatus || "-")} → ${Utils.esc(log.toStatus || "-")}</div>
-      ${this.taskLogContentHtml(logWithContext)}
-    </div>`;
+    const item = document.createElement("div");
+    item.className = "task-log-item";
+    if (seq) {
+      const seqNode = document.createElement("span");
+      seqNode.className = "log-seq";
+      seqNode.textContent = `#${seq}`;
+      item.append(seqNode);
+    }
+    const action = document.createElement("b");
+    action.textContent = log.action || "-";
+    item.append(action);
+
+    const meta = document.createElement("div");
+    meta.className = "task-log-meta";
+    meta.textContent = `${new Date(log.time).toLocaleString("zh-CN")} | 操作人：${log.user || "-"} | 状态：${log.fromStatus || "-"} → ${log.toStatus || "-"}`;
+    item.append(meta);
+
+    const contentNode = this.taskLogContentNode(logWithContext);
+    if (contentNode) {
+      const content = document.createElement("div");
+      content.className = "task-log-content";
+      content.append(contentNode);
+      item.append(content);
+    }
+    return item;
+  },
+  taskLogListNode(logs, task = null) {
+    const list = document.createElement("div");
+    list.className = "task-log-list";
+    const ordered = (logs || []).slice().reverse();
+    if (!ordered.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "暂无操作日志。";
+      list.append(empty);
+      return list;
+    }
+    ordered.forEach((log, idx) => {
+      list.append(this.taskLogNode(log, String(ordered.length - idx), task));
+    });
+    return list;
   },
   showTaskLogs(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!t) return;
     const logs = this.ensureTaskLogs(t);
     const taskLabel = [p?.name, s?.name, t.testItem].filter(Boolean).join(" - ");
-    const items = logs.slice().reverse().map((log, idx) => this.taskLogHtml(log, String(logs.length - idx), t)).join("") || '<div class="empty">暂无操作日志。</div>';
-    this.showModal(`任务日志 · ${Utils.esc(taskLabel)}`, `<div class="task-log-list">${items}</div>`, () => false, "关闭");
+    this.showModal(`任务日志 · ${taskLabel}`, "", () => false, "关闭", {
+      bodyNodes: [this.taskLogListNode(logs, t)]
+    });
   }
 
 });

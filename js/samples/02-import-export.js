@@ -3,25 +3,25 @@
    Split from the previous monolithic module.
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("samples.importExport", {
 
   async importSampleBatch(catId) {
     const input = document.createElement("input");
     input.type = "file"; input.accept = ".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv";
-    input.onchange = e => {
+    input.addEventListener("change", e => {
       const file = e.target.files[0]; if (!file) return;
       const r = new FileReader();
-      r.onload = async () => {
+      r.addEventListener("load", async () => {
         const isXlsx = /\.xlsx$/i.test(file.name);
         const result = isXlsx ? await Utils.parseSampleImportXlsx(r.result) : Utils.parseSampleImportCsv(r.result);
         if (result.error) { alert("模板解析失败：" + result.error); return; }
         if (!result.rows.length) { alert("模板中没有有效数据行。"); return; }
 
-        const category = this.data.sampleLibrary.categories.find(x => x.id === catId);
+        const category = this.sampleCategoryRecords().find(x => x.id === catId);
         if (!category) return;
         if (!Array.isArray(category.samples)) category.samples = [];
 
-        const snapshot = this.cloneData(this.data);
+        const snapshot = this.dataSnapshot();
         let imported = 0, skippedDup = 0, skippedGlobal = 0;
         const importedSamples = [];
         const localDupIndexes = new Set();
@@ -104,7 +104,7 @@ Object.assign(app, {
             samples: importedSamples
           });
           if (!saved) {
-            this.data = snapshot;
+            this.restoreDataSnapshot(snapshot);
             return;
           }
         }
@@ -113,10 +113,10 @@ Object.assign(app, {
           : "";
         const globalWarn = skippedGlobal ? `，跳过 ${skippedGlobal} 条因跨池标识冲突` : "";
         Utils.toast(`已从模板导入 ${imported} 台样机${skippedDup ? `，跳过 ${skippedDup} 条重复样机` : ""}${globalWarn}${warn}。`);
-      };
+      }, { once: true });
       if (/\.xlsx$/i.test(file.name)) r.readAsArrayBuffer(file);
       else r.readAsText(file, "utf-8");
-    };
+    }, { once: true });
     input.click();
   },
 
@@ -152,7 +152,7 @@ Object.assign(app, {
     const incoming = this.sampleIdentifierSet(row);
     if (!incoming.size) return null;
     const incomingReassembled = this.sampleIsReassembled(row);
-    for (const cat of (this.data.sampleLibrary.categories || [])) {
+    for (const cat of this.sampleCategoryRecords()) {
       if (cat.id === excludeCategoryId) continue;
       for (const sample of (cat.samples || [])) {
         if (excludeSampleId && sample.id === excludeSampleId) continue;
@@ -274,7 +274,7 @@ Object.assign(app, {
 
   exportSampleCsv() {
     const rows = [["类别", "显示编号", "SN", "IMEI", "主板SN", "是否重组样机", "型号/方案", "配置/制式", "方案编号", "样机问题表", "阶段", "SKU/版本", "状态", "位置", "挂账人", "持有人", "标签", "备注"]];
-    this.data.sampleLibrary.categories.forEach(c => (c.samples || []).forEach(s =>
+    this.sampleCategoryRecords().forEach(c => (c.samples || []).forEach(s =>
       rows.push([c.name, this.sampleDisplayCode(s), s.sn, s.imei || "", s.boardSn || "", this.sampleIsReassembled(s) ? "是" : "否", s.model, s.config, s.schemeNo || "", this.sampleInitialResultsValue(s).join("\n"), s.sourceStageName, s.sourceSkuName, this.sampleEffectiveStatus(s), s.location, s.owner, "", s.tag || "", s.notes])
     ));
     Utils.downloadCsv(rows, `样机档案池_${Utils.exportTimestamp()}.csv`);

@@ -3,7 +3,7 @@
    Split from the previous monolithic module.
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("samples.photos", {
 
   photoThumbUrl(photo) {
     return photo?.thumbUrl || photo?.thumbnailUrl || photo?.url || photo?.dataUrl || "";
@@ -20,8 +20,8 @@ Object.assign(app, {
         objectUrl = URL.createObjectURL(file);
         bitmap = await new Promise((resolve, reject) => {
           const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = reject;
+          img.addEventListener("load", () => resolve(img), { once: true });
+          img.addEventListener("error", reject, { once: true });
           img.src = objectUrl;
         });
       }
@@ -61,7 +61,7 @@ Object.assign(app, {
     const photos = Array.isArray(sample?.photos) ? sample.photos : [];
     if (sample?.photosLoaded !== true && Number(sample?.photoCount || 0) > 0) {
       return `<div class="sample-photo-grid">
-        <div class="sample-photo-card sample-photo-add" onclick="app.uploadSamplePhotos('${sample.id}')">
+        <div class="sample-photo-card sample-photo-add" data-app-action="sample-photo-upload" data-id="${Utils.esc(sample.id)}">
           <div class="add-card-plus" style="font-size:28px;margin-bottom:6px">+</div>
           <div class="add-card-label">上传图片</div>
         </div>
@@ -69,22 +69,22 @@ Object.assign(app, {
       </div>`;
     }
     return `<div class="sample-photo-grid">
-      <div class="sample-photo-card sample-photo-add" onclick="app.uploadSamplePhotos('${sample.id}')">
+      <div class="sample-photo-card sample-photo-add" data-app-action="sample-photo-upload" data-id="${Utils.esc(sample.id)}">
         <div class="add-card-plus" style="font-size:28px;margin-bottom:6px">+</div>
         <div class="add-card-label">上传图片</div>
       </div>
       ${photos.length ? photos.map(photo => `
         <div class="sample-photo-card">
           <div class="sample-photo-thumb-wrap">
-            <button type="button" class="sample-photo-thumb" onclick="app.previewSamplePhoto('${sample.id}','${photo.id}')" title="查看大图">
+            <button type="button" class="sample-photo-thumb" data-app-action="sample-photo-preview" data-id="${Utils.esc(sample.id)}" data-photo-id="${Utils.esc(photo.id)}" title="查看大图">
               <img src="${Utils.esc(this.photoThumbUrl(photo))}" alt="${Utils.esc(photo.name || "图片数据")}">
             </button>
-            <button type="button" class="sample-photo-delete-btn" onclick="event.stopPropagation();app.deleteSamplePhoto('${sample.id}','${photo.id}')" title="删除照片">🗑</button>
+            <button type="button" class="sample-photo-delete-btn" data-app-action="sample-photo-delete" data-id="${Utils.esc(sample.id)}" data-photo-id="${Utils.esc(photo.id)}" data-stop-propagation="1" title="删除照片">🗑</button>
           </div>
           <div class="sample-photo-meta">
             <div class="sample-photo-name-row">
               <b title="${Utils.esc(photo.name || "")}">${Utils.esc(photo.name || "图片数据")}</b>
-              <button type="button" class="sample-photo-rename-icon" onclick="event.stopPropagation();app.startPhotoRename(this,'${sample.id}','${photo.id}')" title="重命名">✎</button>
+              <button type="button" class="sample-photo-rename-icon" data-app-action="sample-photo-rename" data-id="${Utils.esc(sample.id)}" data-photo-id="${Utils.esc(photo.id)}" data-stop-propagation="1" title="重命名">✎</button>
             </div>
           </div>
         </div>`).join("") : ""}
@@ -102,20 +102,7 @@ Object.assign(app, {
     if (!src) return;
     const existing = document.querySelector(".sample-photo-preview-mask");
     if (existing) existing.remove();
-    document.body.insertAdjacentHTML("beforeend", `
-      <div class="sample-photo-preview-mask" onclick="if(event.target===this)this.remove()">
-        <div class="sample-photo-preview">
-          <div class="sample-photo-preview-head">
-            <b>${Utils.esc(photo.name || "外观照片")}</b>
-            <span class="path" style="font-size:12px">滚轮缩放 · 点击背景关闭</span>
-            <button type="button" class="btn btn-sm btn-outline" onclick="this.closest('.sample-photo-preview-mask').remove()">关闭</button>
-          </div>
-          <div class="sample-photo-preview-body">
-            <img src="${Utils.esc(src)}" alt="${Utils.esc(photo.name || "外观照片")}" style="transform-origin:center center;transition:transform 0.15s">
-          </div>
-        </div>
-      </div>
-    `);
+    document.body.append(this.samplePhotoPreviewNode(photo, src));
     // 鼠标滚轮缩放 + 左键拖动平移
     const mask = document.querySelector(".sample-photo-preview-mask");
     const img = mask?.querySelector(".sample-photo-preview-body img");
@@ -174,6 +161,70 @@ Object.assign(app, {
     }
   },
 
+  samplePhotoPreviewNode(photo, src) {
+    const name = photo?.name || "外观照片";
+    const mask = document.createElement("div");
+    mask.className = "sample-photo-preview-mask";
+    mask.dataset.appAction = "sample-photo-preview-close";
+    mask.dataset.selfOnly = "1";
+
+    const preview = document.createElement("div");
+    preview.className = "sample-photo-preview";
+
+    const head = document.createElement("div");
+    head.className = "sample-photo-preview-head";
+    const title = document.createElement("b");
+    title.textContent = name;
+    const hint = document.createElement("span");
+    hint.className = "path";
+    hint.style.fontSize = "12px";
+    hint.textContent = "滚轮缩放 · 点击背景关闭";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "btn btn-sm btn-outline";
+    close.dataset.appAction = "sample-photo-preview-close";
+    close.textContent = "关闭";
+    head.append(title, hint, close);
+
+    const body = document.createElement("div");
+    body.className = "sample-photo-preview-body";
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = name;
+    img.style.transformOrigin = "center center";
+    img.style.transition = "transform 0.15s";
+    body.append(img);
+
+    preview.append(head, body);
+    mask.append(preview);
+    return mask;
+  },
+
+  samplePhotoRenameInputNode(originalName) {
+    const input = document.createElement("input");
+    input.className = "sample-photo-name-input";
+    input.value = originalName || "";
+    return input;
+  },
+
+  samplePhotoNameRowNodes(sampleId, photoId, name) {
+    const label = document.createElement("b");
+    label.title = name || "";
+    label.textContent = name || "";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sample-photo-rename-icon";
+    button.dataset.appAction = "sample-photo-rename";
+    button.dataset.id = sampleId || "";
+    button.dataset.photoId = photoId || "";
+    button.dataset.stopPropagation = "1";
+    button.title = "重命名";
+    button.textContent = "✎";
+
+    return [label, button];
+  },
+
   uploadSamplePhotos(sampleId) {
     const found = this.findSample(sampleId);
     if (!found) return;
@@ -181,7 +232,7 @@ Object.assign(app, {
     input.type = "file";
     input.accept = "image/*";
     input.multiple = true;
-    input.onchange = async () => {
+    input.addEventListener("change", async () => {
       const files = [...(input.files || [])];
       if (!files.length) return;
       try {
@@ -201,7 +252,7 @@ Object.assign(app, {
       } catch (e) {
         alert("照片上传失败：" + (e.message || e));
       }
-    };
+    }, { once: true });
     input.click();
   },
 
@@ -213,9 +264,9 @@ Object.assign(app, {
     const originalName = nameB.textContent.trim();
 
     // Replace display with inline input
-    nameRow.innerHTML = `<input class="sample-photo-name-input" value="${Utils.esc(originalName)}">`;
-    const input = nameRow.querySelector(".sample-photo-name-input");
-    if (!input) return;
+    nameRow.textContent = "";
+    const input = this.samplePhotoRenameInputNode(originalName);
+    nameRow.append(input);
     input.focus();
     input.select();
 
@@ -270,10 +321,8 @@ Object.assign(app, {
   },
 
   finishPhotoRename(nameRow, sampleId, photoId, name) {
-    nameRow.innerHTML = `
-      <b title="${Utils.esc(name)}">${Utils.esc(name)}</b>
-      <button type="button" class="sample-photo-rename-icon" onclick="event.stopPropagation();app.startPhotoRename(this,'${Utils.esc(sampleId)}','${Utils.esc(photoId)}')" title="重命名">✎</button>
-    `;
+    nameRow.textContent = "";
+    nameRow.append(...this.samplePhotoNameRowNodes(sampleId, photoId, name));
   },
 
   deleteSamplePhoto(sampleId, photoId) {

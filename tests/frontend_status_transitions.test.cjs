@@ -13,6 +13,16 @@ const context = {
   document: {},
   app: {
     version: "V7",
+    _modules: {},
+    registerModule(name, members) {
+      this._modules[name] = Object.keys(members || {});
+      Object.keys(members || {}).forEach(key => { this[key] = members[key]; });
+      return this;
+    },
+    replaceHtml(target, html) {
+      if (target) target.innerHTML = String(html || "");
+      return target;
+    },
     constants: {
       sampleStatuses: ["测试中", "闲置", "在位等待", "已退库", "取走分析"],
       taskStatuses: ["待下发", "进行中", "阻塞中", "正常完成", "异常终止"],
@@ -326,7 +336,12 @@ async function runFinishTaskGuardTests() {
     const modalOk = { disabled: false, insertAdjacentElement: (_pos, el) => { insertedButton = el; } };
     context.document = {
       getElementById: id => id === "modalOk" ? modalOk : null,
-      createElement: () => ({ disabled: false }),
+      createElement: () => ({
+        disabled: false,
+        addEventListener(event, handler) {
+          if (event === "click") this.onclick = handler;
+        },
+      }),
       querySelectorAll: () => [],
     };
     app.showModal = () => {};

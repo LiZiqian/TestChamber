@@ -2,7 +2,7 @@
    数字治理平台 V7 - 任务表格展示模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.taskTable", {
 
   taskRowsForStage(stage) {
     const progress = stage.progress || [];
@@ -54,7 +54,7 @@ Object.assign(app, {
     const start = total ? (page - 1) * pageSize + 1 : 0;
     const end = total ? Math.min(total, page * pageSize) : 0;
     const pageBtn = (label, target, disabled = false) => `
-      <button type="button" class="btn btn-sm btn-outline" ${disabled || loading ? "disabled" : `onclick="app.setTaskFlowPage(${target})"`}>${label}</button>`;
+      <button type="button" class="btn btn-sm btn-outline" ${disabled || loading ? "disabled" : `data-app-action="task-flow-page" data-value="${target}"`}>${label}</button>`;
     return `
       <div class="list-pager task-flow-pager ${loading ? "is-loading" : ""}">
         <span class="path">显示 ${start}-${end} / ${total} 条</span>
@@ -62,7 +62,7 @@ Object.assign(app, {
           ${pageBtn("上一页", page - 1, page <= 1)}
           <span class="path">第 ${page} / ${totalPages} 页</span>
           ${pageBtn("下一页", page + 1, page >= totalPages)}
-          <select onchange="app.setTaskFlowPageSize(this.value)">
+          <select data-app-action="task-flow-page-size" data-app-events="change">
             ${[50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
           </select>
           ${loading ? `<span class="path list-pager-loading">加载中...</span>` : ""}
@@ -71,21 +71,21 @@ Object.assign(app, {
   },
 
   setTaskFlowPage(page) {
-    this.view.taskFlowPage = Math.max(1, Number.parseInt(page, 10) || 1);
+    this.setTaskFlowPageState(page);
     this.renderPreserveScroll();
   },
 
   setTaskFlowPageSize(size) {
-    this.view.taskFlowPageSize = this.boundedListPageSize(size, 100);
-    this.view.taskFlowPage = 1;
+    this.setTaskFlowPageSizeState(size, 100);
     this.renderPreserveScroll();
   },
 
   taskFlowQueryParams(stage) {
-    const f = this.view.taskFlowFilters || {};
+    const state = this.taskFlowPageState(100);
+    const f = state.filters || {};
     const params = {
-      page: Math.max(1, Number.parseInt(this.view.taskFlowPage, 10) || 1),
-      pageSize: this.boundedListPageSize(this.view.taskFlowPageSize, 100)
+      page: state.page,
+      pageSize: state.pageSize
     };
     ["sku", "flowStatus", "ownerName", "categoryKeyword", "caseKeyword", "dtsKeyword", "resultKeyword"].forEach(key => {
       const value = String(f[key] || "").trim();
@@ -128,7 +128,7 @@ Object.assign(app, {
     const shell = document.getElementById("taskFlowShell");
     if (!shell || shell.dataset.stageId !== String(stage?.id || "")) return false;
     shell.dataset.pageKey = this.taskFlowCacheKey(stage, this.taskFlowQueryParams(stage));
-    shell.innerHTML = this.workspaceTaskFlowContentHtml(project, stage);
+    this.replaceHtml(shell, this.workspaceTaskFlowContentHtml(project, stage));
     this.updateSelectPlaceholderState?.(shell);
     return true;
   },
@@ -142,7 +142,7 @@ Object.assign(app, {
       const result = await this.fetchStageTasksPage(stage.id, params);
       if (this._taskFlowLoadingKey === key) this._taskFlowLoadingKey = "";
       this.storeTaskFlowPageResult(project, stage, key, result);
-      if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
+      if (this.isCurrentProjectWorkspaceStage(stage.id)) {
         if (!this.refreshTaskFlowRegion(project, stage)) {
           if (typeof this.renderContent === "function") this.renderContent();
           else this.renderPreserveScroll();
@@ -153,7 +153,7 @@ Object.assign(app, {
       if (this._taskFlowLoadingKey === key) this._taskFlowLoadingKey = "";
       this._taskFlowPageCache = { key, stageId: stage.id, error: e.message, rows: [], page: params.page, pageSize: params.pageSize, total: 0, totalPages: 1 };
       console.error("任务分页刷新失败：", e);
-      if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
+      if (this.isCurrentProjectWorkspaceStage(stage.id)) {
         if (!this.refreshTaskFlowRegion(project, stage)) {
           if (typeof this.renderContent === "function") this.renderContent();
           else this.renderPreserveScroll();
@@ -170,7 +170,7 @@ Object.assign(app, {
       .then(result => {
         this._taskFlowLoadingKey = "";
         this.storeTaskFlowPageResult(project, stage, key, result);
-        if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
+        if (this.isCurrentProjectWorkspaceStage(stage.id)) {
           this.refreshTaskFlowRegion(project, stage) || this.renderPreserveScroll();
         }
       })
@@ -178,7 +178,7 @@ Object.assign(app, {
         this._taskFlowLoadingKey = "";
         this._taskFlowPageCache = { key, stageId: stage.id, error: e.message, rows: [] };
         console.error("任务分页加载失败：", e);
-        if (this.view.module === "projectWorkspace" && this.view.selectedStageId === stage.id) {
+        if (this.isCurrentProjectWorkspaceStage(stage.id)) {
           this.refreshTaskFlowRegion(project, stage) || this.renderPreserveScroll();
         }
       });
@@ -192,7 +192,7 @@ Object.assign(app, {
   },
 
   workspaceTaskFlowContentHtml(project, stage) {
-    const f = this.view.taskFlowFilters || {};
+    const f = this.taskFlowPageState(100).filters || {};
     const params = this.taskFlowQueryParams(stage);
     const cacheKey = this.taskFlowCacheKey(stage, params);
     const cached = this._taskFlowPageCache?.key === cacheKey ? this._taskFlowPageCache : null;
@@ -203,7 +203,7 @@ Object.assign(app, {
     const total = cached?.total ?? stageTaskTotal;
     const totalPages = cached?.totalPages ?? Math.max(1, Math.ceil(total / pageSize));
     const page = Math.min(Math.max(1, cached?.page || params.page), totalPages);
-    this.view.taskFlowPage = page;
+    this.setTaskFlowPageState(page);
     const rows = cached?.rows || [];
     const pagerHtml = this.taskFlowPagerHtml(page, totalPages, total, pageSize, { loading: !cached });
 
@@ -254,34 +254,34 @@ Object.assign(app, {
         <div class="task-filter-bar">
           <div class="task-filter-item filter-sku">
             <label>方案(SKU)</label>
-            <select onchange="app.setTaskFlowFilter('sku',this.value)">${skuOptions}</select>
+            <select data-app-action="task-flow-filter" data-app-events="change" data-field="sku">${skuOptions}</select>
           </div>
           <div class="task-filter-item filter-keyword">
             <label>类别搜索</label>
-            <input type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('categoryKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'categoryKeyword',this.value)">
+            <input type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="categoryKeyword">
           </div>
           <div class="task-filter-item filter-keyword">
             <label>用例搜索</label>
-            <input type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('caseKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'caseKeyword',this.value)">
+            <input type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="caseKeyword">
           </div>
           <div class="task-filter-item filter-person">
             <label>执行人</label>
-            <select onchange="app.setTaskFlowFilter('ownerName',this.value)">${optHtml(ownerNames.length ? ownerNames : infos.map(i => i.ownerName), f.ownerName)}</select>
+            <select data-app-action="task-flow-filter" data-app-events="change" data-field="ownerName">${optHtml(ownerNames.length ? ownerNames : infos.map(i => i.ownerName), f.ownerName)}</select>
           </div>
           <div class="task-filter-item filter-status">
             <label>状态</label>
-            <select onchange="app.setTaskFlowFilter('flowStatus',this.value)">${optHtml(["待下发", "进行中", "阻塞中", "异常终止", "正常完成"], f.flowStatus)}</select>
+            <select data-app-action="task-flow-filter" data-app-events="change" data-field="flowStatus">${optHtml(["待下发", "进行中", "阻塞中", "异常终止", "正常完成"], f.flowStatus)}</select>
           </div>
           <div class="task-filter-item filter-short">
             <label>DTS单号</label>
-            <input type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('dtsKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'dtsKeyword',this.value)">
+            <input type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="dtsKeyword">
           </div>
           <div class="task-filter-item filter-result">
             <label>测试结果关键词</label>
-            <input type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" oninput="app.setTaskFlowTextFilter('resultKeyword',this.value)" onkeydown="app.handleTaskFlowTextFilterKeydown(event,'resultKeyword',this.value)">
+            <input type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="resultKeyword">
           </div>
           <div class="task-filter-actions">
-            <button class="btn btn-sm btn-outline" onclick="app.clearTaskFlowFilters()">清空筛选</button>
+            <button class="btn btn-sm btn-outline" data-app-action="task-flow-clear">清空筛选</button>
           </div>
         </div>
         ${pagerHtml}
@@ -313,7 +313,7 @@ Object.assign(app, {
       const execHtml = i.ownerName
         ? `<div class="task-executor-cell"><span class="task-executor-name">${Utils.esc(i.ownerName)}</span>${i.ownerId ? `<span class="task-executor-id">${Utils.esc(i.ownerId)}</span>` : ""}</div>`
         : `<span class="muted">-</span>`;
-      const sampleHtml = `<div class="task-sample-cell"><span class="task-sample-count"><span class="task-sample-count-num">${sampleCount}</span> 台</span>${sampleCount && taskId ? `<button class="btn btn-sm btn-outline" onclick="app.showTaskSamples('${project.id}','${stage.id}','${taskId}')">查看</button>` : ""}</div>`;
+      const sampleHtml = `<div class="task-sample-cell"><span class="task-sample-count"><span class="task-sample-count-num">${sampleCount}</span> 台</span>${sampleCount && taskId ? `<button class="btn btn-sm btn-outline" data-app-action="task-show-samples" data-project-id="${Utils.esc(project.id)}" data-stage-id="${Utils.esc(stage.id)}" data-task-id="${Utils.esc(taskId)}">查看</button>` : ""}</div>`;
       return `
               <tr>
                 <td class="task-seq-cell">${sequence}</td>
@@ -323,7 +323,7 @@ Object.assign(app, {
                 <td class="task-time-cell">${timeHtml}</td>
                 <td>${sampleHtml}</td>
                 <td class="task-issue-cell">${t ? this.taskIssueSummaryHtml(project, stage, t) : "-"}</td>
-                <td class="task-issue-record-cell" onclick="${taskId ? `app.openTaskIssueRecordModal('${project.id}','${stage.id}','${taskId}')` : ''}" style="${taskId ? 'cursor:pointer' : ''}">${t ? this.taskIssueRecordHtml(t, project, stage) : '<span class="path">-</span>'}</td>
+                <td class="task-issue-record-cell" ${taskId ? `data-app-action="task-issue-record" data-project-id="${Utils.esc(project.id)}" data-stage-id="${Utils.esc(stage.id)}" data-task-id="${Utils.esc(taskId)}" style="cursor:pointer"` : ""}>${t ? this.taskIssueRecordHtml(t, project, stage) : '<span class="path">-</span>'}</td>
                 <td><span class="badge ${this.taskStatusBadgeClass(flowStatus)}">${Utils.esc(flowStatus)}</span></td>
                 <td class="op-cell task-op-cell-new">${actionsHtml}</td>
               </tr>`;
@@ -332,7 +332,7 @@ Object.assign(app, {
         </table></div>
         ${total > pageSize ? pagerHtml : ""}
         <div class="task-add-footer">
-          <button class="task-add-main" onclick="app.openAddTasksFromPoolModal()">
+          <button class="task-add-main" data-app-action="task-add">
             <span class="row-action-btn row-add-btn"></span>
             <span>新增任务</span>
           </button>
@@ -345,10 +345,10 @@ Object.assign(app, {
     const logText = `日志${(logs || []).length ? `(${logs.length})` : ""}`;
     return `
       <div class="task-more-menu">
-        <button type="button" class="btn btn-sm btn-outline task-more-trigger" onclick="event.stopPropagation();app.handleTaskOpMenuClick(this.parentElement)" title="更多">...</button>
+        <button type="button" class="btn btn-sm btn-outline task-more-trigger" data-app-action="task-more-toggle" data-stop-propagation="1" title="更多">...</button>
         <div class="task-more-panel">
-          <button type="button" class="task-more-item" onclick="event.stopPropagation();app.closeTaskOpMenus();app.showTaskLogs('${projectId}','${stageId}','${taskId}')">${logText}</button>
-          <button type="button" class="task-more-item danger" onclick="event.stopPropagation();app.closeTaskOpMenus();app.deleteTask('${taskId}')">🗑 删除</button>
+          <button type="button" class="task-more-item" data-app-action="task-show-logs" data-project-id="${Utils.esc(projectId)}" data-stage-id="${Utils.esc(stageId)}" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">${logText}</button>
+          <button type="button" class="task-more-item danger" data-app-action="task-delete" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">🗑 删除</button>
         </div>
       </div>`;
   },
@@ -430,11 +430,11 @@ Object.assign(app, {
     const sid = stage.id;
 
     const btn = (label, cls, action, disabled = false, title = "") =>
-      `<button class="btn btn-sm ${cls}" ${disabled ? "disabled" : ""} ${title ? `title="${Utils.esc(title)}"` : ""} onclick="${action}">${label}</button>`;
+      `<button class="btn btn-sm ${cls}" ${disabled ? "disabled" : `data-app-action="${action}" data-project-id="${Utils.esc(pid)}" data-stage-id="${Utils.esc(sid)}" data-task-id="${Utils.esc(taskId)}"`} ${title ? `title="${Utils.esc(title)}"` : ""}>${label}</button>`;
 
     const configBtn = taskId
       ? `<button class="btn btn-sm btn-outline task-op-config" type="button"
-           onclick="event.stopPropagation();app.openTaskConfigPanel('${pid}','${sid}','${progressId}','${taskId}','plan')">配置</button>`
+           data-app-action="task-config" data-project-id="${Utils.esc(pid)}" data-stage-id="${Utils.esc(sid)}" data-progress-id="${Utils.esc(progressId)}" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">配置</button>`
       : "";
 
     const moreMenuHtml = this.taskMoreMenuHtml(pid, sid, taskId, logs);
@@ -443,25 +443,25 @@ Object.assign(app, {
 
     if (flowStatus === "待下发") {
       visibleHtml = (canStart
-        ? btn("启动", "btn-start", `app.startTask('${pid}','${sid}','${taskId}')`)
+        ? btn("启动", "btn-start", "task-start")
         : `<span class="task-start-disabled-tip" data-tooltip="先配置后启动">${btn("启动", "btn-start", "", true)}</span>`)
         + configBtn;
     }
 
     if (flowStatus === "进行中") {
-      visibleHtml = btn("结果", "", `app.uploadResult('${pid}','${sid}','${taskId}')`)
-        + btn("阻塞", "btn-warn", `app.blockTask('${pid}','${sid}','${taskId}')`)
-        + btn("变更", "btn-outline", `app.tempChangeTask('${pid}','${sid}','${taskId}')`);
+      visibleHtml = btn("结果", "", "task-result")
+        + btn("阻塞", "btn-warn", "task-block")
+        + btn("变更", "btn-outline", "task-change");
     }
 
     if (flowStatus === "阻塞中") {
-      visibleHtml = btn("结果", "", `app.uploadResult('${pid}','${sid}','${taskId}')`)
-        + btn("重启", "btn-start", `app.startTask('${pid}','${sid}','${taskId}')`)
-        + btn("变更", "btn-outline", `app.tempChangeTask('${pid}','${sid}','${taskId}')`);
+      visibleHtml = btn("结果", "", "task-result")
+        + btn("重启", "btn-start", "task-start")
+        + btn("变更", "btn-outline", "task-change");
     }
 
     if (flowStatus === "正常完成" || flowStatus === "异常终止") {
-      visibleHtml = btn("结果", "", `app.uploadResult('${pid}','${sid}','${taskId}')`);
+      visibleHtml = btn("结果", "", "task-result");
     }
 
     return `<div class="task-op-group"><div class="task-op-actions">${visibleHtml}${moreMenuHtml}</div></div>`;
@@ -542,7 +542,7 @@ Object.assign(app, {
         : "";
       // 身份标识（可点击 / 已销毁不可点）
       const identityEl = found
-        ? `<span class="task-sample-row-id" onclick="event.stopPropagation();app.openSampleReadonly('${Utils.esc(id)}')" title="查看样机详情">${identity}</span>`
+        ? `<span class="task-sample-row-id" data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情">${identity}</span>`
         : `<span class="task-sample-row-id disabled" title="样机档案已销毁">${identity}</span>`;
       return `<div class="task-sample-row ${entry.state === "removed" ? "is-removed" : ""}">
         <div class="task-sample-row-info">
@@ -574,7 +574,7 @@ Object.assign(app, {
 
   sampleTestedItemNames(sampleId) {
     const names = new Set();
-    (this.data.projects || []).forEach(project => {
+    this.projectRecords().forEach(project => {
       (project.stages || []).forEach(stage => {
         (stage.tasks || []).forEach(task => {
           if (!task.sampleIds || !task.sampleIds.includes(sampleId)) return;

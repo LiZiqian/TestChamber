@@ -2,7 +2,7 @@
    数字治理平台 V7 - workspace 共享工具模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.shared", {
 
   // ==================== 任务下发与执行进度管理（合并原进展追踪）====================
   taskOwnerName(owner) {

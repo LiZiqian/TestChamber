@@ -29,6 +29,7 @@ import traceback
 import uuid
 import zipfile
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy
@@ -37,8 +38,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, unquote_to_bytes, urlparse
 
 
-APP_VERSION = "7.1.1"
-SERVER_VERSION = "TestChamberServer/7.1.1"
+APP_VERSION = "7.1.2"
+SERVER_VERSION = "TestChamberServer/7.1.2"
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
 SAMPLE_DATA_DIR = DATA_DIR / "samples"
@@ -46,11 +47,16 @@ BACKUP_DIR = ROOT_DIR / "backups"
 DB_PATH = DATA_DIR / "testchamber.sqlite"
 INDEX_PATH = ROOT_DIR / "index.html"
 MAX_UPLOAD_BYTES = 80 * 1024 * 1024
+IMPORT_PREVIEW_TTL_SECONDS = 1800
+IMPORT_PREVIEW_MAX_ENTRIES = 8
+IMPORT_PREVIEW_MAX_STATE_BYTES = 120 * 1024 * 1024
+IMPORT_PREVIEW_MAX_CACHED_BYTES = 240 * 1024 * 1024
+MUTATION_RETURN_ROW_LIMIT = 100
 
 DEPLOYMENT_FILE = DATA_DIR / "deployment.json"
 DB_LOCK = threading.Lock()
 
-# 导入预览缓存：{previewId: {data, expires_at}}
+# 导入预览缓存只保存轻量元数据；大预览 payload 写入对应临时目录。
 _IMPORT_PREVIEWS: dict[str, dict] = {}
 
 
@@ -104,6 +110,24 @@ def connect_db() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+@contextmanager
+def write_db_connection():
+    """Open a SQLite write transaction without taking the process-wide DB_LOCK."""
+    with connect_db() as conn:
+        began = False
+        if not getattr(conn, "in_transaction", False):
+            conn.execute("BEGIN IMMEDIATE")
+            began = True
+        try:
+            yield conn
+            if began and getattr(conn, "in_transaction", False):
+                conn.commit()
+        except Exception:
+            if getattr(conn, "in_transaction", False):
+                conn.rollback()
+            raise
 
 
 def json_dumps(obj: object, *, pretty: bool = False) -> str:
@@ -243,6 +267,12 @@ def write_backup(data: dict, revision: int) -> None:
         prune_backups()
     except Exception as e:
         print(f"[WARN] 清理旧备份失败：{e}")
+
+
+def write_compact_backup_snapshot(fallback_revision: int) -> None:
+    """Write a compact backup snapshot without taking the global write lock."""
+    data, snapshot_revision, _ = get_state(compact=True)
+    write_backup(data, snapshot_revision or fallback_revision)
 
 
 def _resolve_sort_ts(path: Path) -> float:
@@ -646,8 +676,31 @@ def store_asset_bytes(
     uploaded_by: str = "",
 ) -> dict:
     asset_id = photo_id or f"photo_{uuid.uuid4().hex}"
+    meta = write_sample_asset_file(
+        sample_id,
+        asset_id,
+        content,
+        original_name,
+        mime_type,
+        uploaded_at=uploaded_at,
+        file_prefix="photo",
+    )
+    upsert_sample_asset_meta(conn, sample_id, meta, "photo", uploaded_by=uploaded_by)
+    return meta
+
+
+def write_sample_asset_file(
+    sample_id: str,
+    asset_id: str,
+    content: bytes,
+    original_name: str,
+    mime_type: str,
+    *,
+    uploaded_at: str | None = None,
+    file_prefix: str = "photo",
+) -> dict:
     ext = file_ext(original_name, mime_type)
-    file_name = f"{safe_segment(asset_id, 'photo')}{ext}"
+    file_name = f"{safe_segment(asset_id, file_prefix)}{ext}"
     target_dir = SAMPLE_DATA_DIR / safe_segment(sample_id, "sample") / "photos"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / file_name
@@ -663,11 +716,25 @@ def store_asset_bytes(
         "relativePath": relative_path,
         "uploadedAt": created_at,
     }
+    return meta
+
+
+def upsert_sample_asset_meta(
+    conn: sqlite3.Connection,
+    sample_id: str,
+    meta: dict,
+    kind: str,
+    *,
+    uploaded_by: str = "",
+) -> None:
+    asset_id = str(meta.get("id") or "")
+    relative_path = str(meta.get("relativePath") or "")
+    file_name = Path(relative_path).name if relative_path else safe_segment(asset_id, "asset")
     conn.execute(
         """
         INSERT INTO sample_assets
         (id, sample_id, kind, original_name, file_name, relative_path, mime_type, size, created_at, created_by, deleted_at)
-        VALUES (?, ?, 'photo', ?, ?, ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
             sample_id = excluded.sample_id,
             kind = excluded.kind,
@@ -683,16 +750,16 @@ def store_asset_bytes(
         (
             asset_id,
             sample_id,
-            meta["name"],
+            kind,
+            str(meta.get("name") or file_name),
             file_name,
             relative_path,
-            meta["type"],
-            meta["size"],
-            created_at,
+            str(meta.get("type") or mimetypes.guess_type(file_name)[0] or "application/octet-stream"),
+            int(meta.get("size") or 0),
+            str(meta.get("uploadedAt") or now_iso()),
             uploaded_by,
         ),
     )
-    return meta
 
 
 def store_thumbnail_bytes(
@@ -707,52 +774,16 @@ def store_thumbnail_bytes(
     uploaded_by: str = "",
 ) -> dict:
     asset_id = thumbnail_asset_id(photo_id)
-    ext = file_ext(original_name, mime_type)
-    file_name = f"{safe_segment(asset_id, 'thumb')}{ext}"
-    target_dir = SAMPLE_DATA_DIR / safe_segment(sample_id, "sample") / "photos"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / file_name
-    target.write_bytes(content)
-    relative_path = target.relative_to(DATA_DIR).as_posix()
-    created_at = uploaded_at or now_iso()
-    meta = {
-        "id": asset_id,
-        "name": original_name or file_name,
-        "type": mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream",
-        "size": len(content),
-        "url": url_for_asset(sample_id, asset_id),
-        "relativePath": relative_path,
-        "uploadedAt": created_at,
-    }
-    conn.execute(
-        """
-        INSERT INTO sample_assets
-        (id, sample_id, kind, original_name, file_name, relative_path, mime_type, size, created_at, created_by, deleted_at)
-        VALUES (?, ?, 'photo_thumb', ?, ?, ?, ?, ?, ?, ?, NULL)
-        ON CONFLICT(id) DO UPDATE SET
-            sample_id = excluded.sample_id,
-            kind = excluded.kind,
-            original_name = excluded.original_name,
-            file_name = excluded.file_name,
-            relative_path = excluded.relative_path,
-            mime_type = excluded.mime_type,
-            size = excluded.size,
-            created_at = excluded.created_at,
-            created_by = excluded.created_by,
-            deleted_at = NULL
-        """,
-        (
-            asset_id,
-            sample_id,
-            meta["name"],
-            file_name,
-            relative_path,
-            meta["type"],
-            meta["size"],
-            created_at,
-            uploaded_by,
-        ),
+    meta = write_sample_asset_file(
+        sample_id,
+        asset_id,
+        content,
+        original_name,
+        mime_type,
+        uploaded_at=uploaded_at,
+        file_prefix="thumb",
     )
+    upsert_sample_asset_meta(conn, sample_id, meta, "photo_thumb", uploaded_by=uploaded_by)
     return meta
 
 
@@ -872,22 +903,30 @@ def remove_empty_dirs_up_to(path: Path, stop_dir: Path) -> None:
         cur = cur.parent
 
 
-def cleanup_sample_asset_files(conn: sqlite3.Connection, sample_ids: list[str]) -> None:
+def unlink_asset_relative_paths(relative_paths: list[str], *, warn_label: str = "删除资产文件") -> None:
+    for relative_path in relative_paths:
+        try:
+            target = path_inside_data(relative_path)
+            if target.is_file():
+                target.unlink()
+                remove_empty_dirs_up_to(target.parent, SAMPLE_DATA_DIR)
+        except Exception as e:
+            print(f"[WARN] {warn_label}失败：{e}")
+
+
+def sample_asset_relative_paths(conn: sqlite3.Connection, sample_ids: list[str]) -> list[str]:
     if not sample_ids:
-        return
+        return []
     placeholders = ",".join("?" for _ in sample_ids)
     rows = conn.execute(
         f"SELECT relative_path FROM sample_assets WHERE sample_id IN ({placeholders})",
         sample_ids,
     ).fetchall()
-    for row in rows:
-        try:
-            target = path_inside_data(row["relative_path"])
-            if target.is_file():
-                target.unlink()
-                remove_empty_dirs_up_to(target.parent, SAMPLE_DATA_DIR)
-        except Exception as e:
-            print(f"[WARN] Failed to remove sample asset file: {e}")
+    return [str(row["relative_path"] or "") for row in rows if row["relative_path"]]
+
+
+def cleanup_sample_asset_files(conn: sqlite3.Connection, sample_ids: list[str]) -> None:
+    unlink_asset_relative_paths(sample_asset_relative_paths(conn, sample_ids), warn_label="删除样机资产文件")
 
 
 def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bool = False) -> bool:
@@ -1020,7 +1059,9 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
     else:
         conn.execute("DELETE FROM sample_categories")
 
-    conn.execute("DELETE FROM sample_events")
+    preserve_existing_events = bool(library.get("eventsExternalized"))
+    if not preserve_existing_events:
+        conn.execute("DELETE FROM sample_events")
     seen_events = set()
     for log in logs:
         if not isinstance(log, dict):
@@ -1031,7 +1072,7 @@ def sync_sample_library(conn: sqlite3.Connection, data: dict, *, allow_empty: bo
         seen_events.add(event_id)
         conn.execute(
             """
-            INSERT INTO sample_events
+            INSERT OR REPLACE INTO sample_events
             (id, sample_id, time, event_type, project_id, stage_id, task_id, test_item, user, data_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -2697,6 +2738,110 @@ def sample_display_code(sample: dict) -> str:
     return sample_identity_value(sample.get("sampleNo")) or "未录入SN/IMEI/主板SN"
 
 
+def list_sample_destroy_impact_scope(conn: sqlite3.Connection, query: dict[str, list[str]]) -> dict:
+    sample_id = first_query_value(query, "sampleId", "").strip()
+    category_id = first_query_value(query, "categoryId", "").strip()
+    if not sample_id and not category_id:
+        raise ValueError("缺少 sampleId 或 categoryId")
+
+    sample_ids: set[str] = set()
+    if sample_id:
+        row = conn.execute(
+            "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+            (sample_id,),
+        ).fetchone()
+        if not row:
+            raise KeyError("样机不存在")
+        sample_ids.add(sample_id)
+
+    if category_id:
+        cat = conn.execute(
+            "SELECT id FROM sample_categories WHERE id = ? AND deleted_at IS NULL",
+            (category_id,),
+        ).fetchone()
+        if not cat:
+            raise KeyError("样机池不存在")
+        rows = conn.execute(
+            "SELECT id FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
+            (category_id,),
+        ).fetchall()
+        sample_ids.update(str(row["id"] or "") for row in rows if row["id"])
+
+    project_ids: set[str] = set()
+    stage_ids: set[str] = set()
+    task_ids: set[str] = set()
+    related_sample_ids: set[str] = set(sample_ids)
+
+    if sample_ids:
+        ids = sorted(sample_ids)
+        placeholders = ",".join("?" for _ in ids)
+        link_rows = conn.execute(
+            f"""
+            SELECT DISTINCT t.id, t.project_id, t.stage_id, t.sample_ids_json
+            FROM project_task_samples pts
+            JOIN project_tasks t ON t.id = pts.task_id
+            WHERE pts.sample_id IN ({placeholders}) AND t.deleted_at IS NULL
+            """,
+            ids,
+        ).fetchall()
+        for row in link_rows:
+            task_ids.add(str(row["id"] or ""))
+            project_ids.add(str(row["project_id"] or ""))
+            stage_ids.add(str(row["stage_id"] or ""))
+            for sid in json_obj(row["sample_ids_json"], []) or []:
+                if str(sid or "").strip():
+                    related_sample_ids.add(str(sid))
+
+    if sample_id:
+        # Completed tasks may only retain destroyed samples inside removedSampleRecords.
+        like_rows = conn.execute(
+            """
+            SELECT id, project_id, stage_id, sample_ids_json, data_json
+            FROM project_tasks
+            WHERE deleted_at IS NULL AND data_json LIKE ?
+            """,
+            (f"%{sample_id}%",),
+        ).fetchall()
+        for row in like_rows:
+            task = json_obj(row["data_json"], {}) or {}
+            removed = task.get("removedSampleRecords") if isinstance(task.get("removedSampleRecords"), list) else []
+            if not any(str(item.get("sampleId") or item.get("sid") or "") == sample_id for item in removed if isinstance(item, dict)):
+                continue
+            task_ids.add(str(row["id"] or ""))
+            project_ids.add(str(row["project_id"] or ""))
+            stage_ids.add(str(row["stage_id"] or ""))
+            for sid in json_obj(row["sample_ids_json"], []) or []:
+                if str(sid or "").strip():
+                    related_sample_ids.add(str(sid))
+
+    sample_category_ids: set[str] = set()
+    if category_id:
+        sample_category_ids.add(category_id)
+    if related_sample_ids:
+        ids = sorted(related_sample_ids)
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT category_id
+            FROM sample_records
+            WHERE id IN ({placeholders}) AND deleted_at IS NULL
+            """,
+            ids,
+        ).fetchall()
+        sample_category_ids.update(str(row["category_id"] or "") for row in rows if row["category_id"])
+
+    return {
+        "sampleId": sample_id,
+        "categoryId": category_id,
+        "sampleIds": sorted(sample_ids),
+        "relatedSampleIds": sorted(related_sample_ids),
+        "projectIds": sorted(x for x in project_ids if x),
+        "stageIds": sorted(x for x in stage_ids if x),
+        "taskIds": sorted(x for x in task_ids if x),
+        "sampleCategoryIds": sorted(x for x in sample_category_ids if x),
+    }
+
+
 def compact_sample_identity_row(row: sqlite3.Row) -> dict:
     sample = sample_from_db_row(row)
     return {
@@ -3268,6 +3413,14 @@ def compose_state(conn: sqlite3.Connection, *, include_sample_photos: bool = Tru
     return data, int(row["revision"]), str(row["updated_at"])
 
 
+def begin_read_snapshot(conn: sqlite3.Connection) -> bool:
+    """Start a SQLite read transaction when the connection is not already in one."""
+    if getattr(conn, "in_transaction", False):
+        return False
+    conn.execute("BEGIN")
+    return True
+
+
 def init_db() -> None:
     ensure_dirs()
     ensure_deployment_id()
@@ -3302,9 +3455,26 @@ def init_db() -> None:
 
 
 def get_state(*, compact: bool = False) -> tuple[dict, int, str]:
-    with DB_LOCK:
-        with connect_db() as conn:
+    with connect_db() as conn:
+        began = begin_read_snapshot(conn)
+        try:
             return compose_state(conn, include_sample_photos=not compact, include_sample_logs=not compact)
+        finally:
+            if began and getattr(conn, "in_transaction", False):
+                conn.execute("COMMIT")
+
+
+def get_state_metadata() -> tuple[int, str]:
+    with connect_db() as conn:
+        began = begin_read_snapshot(conn)
+        try:
+            row = conn.execute("SELECT revision, updated_at FROM app_state WHERE id = 1").fetchone()
+            if row is None:
+                return 1, now_iso()
+            return int(row["revision"]), str(row["updated_at"] or "")
+        finally:
+            if began and getattr(conn, "in_transaction", False):
+                conn.execute("COMMIT")
 
 
 def hydrate_externalized_sample_fields(new_data: dict, current_data: dict) -> None:
@@ -3324,10 +3494,15 @@ def hydrate_externalized_sample_fields(new_data: dict, current_data: dict) -> No
             if sample.get("photosLoaded") is True:
                 sample["photoCount"] = len(sample.get("photos") or [])
                 continue
-            preserved = copy.deepcopy(current_sample.get("photos") or [])
-            sample["photos"] = preserved
-            sample["photoCount"] = len(preserved)
-            sample["photosLoaded"] = True
+            if current_sample.get("photosLoaded") is True:
+                preserved = copy.deepcopy(current_sample.get("photos") or [])
+                sample["photos"] = preserved
+                sample["photoCount"] = len(preserved)
+                sample["photosLoaded"] = True
+            else:
+                sample["photos"] = list(sample.get("photos") or [])
+                sample["photoCount"] = int(sample.get("photoCount") or current_sample.get("photoCount") or 0)
+                sample["photosLoaded"] = False
 
     if library.get("eventsExternalized"):
         incoming_logs = [log for log in (library.get("logs") or []) if isinstance(log, dict)]
@@ -3354,12 +3529,25 @@ def _preview_id() -> str:
 
 
 def _cleanup_expired_previews() -> None:
-    """清理过期的预览缓存（超过30分钟）"""
-    cutoff = time.time() - 1800
+    """清理过期或超限的导入预览缓存。"""
+    cutoff = time.time() - IMPORT_PREVIEW_TTL_SECONDS
     expired = [k for k, v in _IMPORT_PREVIEWS.items() if v.get("_ts", 0) < cutoff]
     for k in expired:
         _cleanup_preview_temp(k)
         del _IMPORT_PREVIEWS[k]
+    if len(_IMPORT_PREVIEWS) <= IMPORT_PREVIEW_MAX_ENTRIES:
+        total_bytes = sum(int(v.get("_cache_bytes") or 0) for v in _IMPORT_PREVIEWS.values())
+        if total_bytes <= IMPORT_PREVIEW_MAX_CACHED_BYTES:
+            return
+    ordered = sorted(_IMPORT_PREVIEWS.items(), key=lambda item: float(item[1].get("_ts") or 0))
+    while ordered and (
+        len(_IMPORT_PREVIEWS) > IMPORT_PREVIEW_MAX_ENTRIES
+        or sum(int(v.get("_cache_bytes") or 0) for v in _IMPORT_PREVIEWS.values()) > IMPORT_PREVIEW_MAX_CACHED_BYTES
+    ):
+        preview_id, _ = ordered.pop(0)
+        if preview_id in _IMPORT_PREVIEWS:
+            _cleanup_preview_temp(preview_id)
+            del _IMPORT_PREVIEWS[preview_id]
 
 
 def _cleanup_preview_temp(preview_id: str) -> None:
@@ -3369,6 +3557,25 @@ def _cleanup_preview_temp(preview_id: str) -> None:
     tmp_dir = entry.get("_tmp_dir")
     if tmp_dir and Path(tmp_dir).is_dir():
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _store_import_preview_payload(tmp_path: Path, incoming: dict, result: dict) -> Path:
+    payload_path = tmp_path / "preview_payload.json"
+    payload_path.write_text(
+        json_dumps({"incoming": incoming, "result": result}),
+        encoding="utf-8",
+    )
+    return payload_path
+
+
+def _load_import_preview_payload(entry: dict) -> tuple[dict, dict]:
+    if not entry:
+        return {}, {}
+    payload_path = entry.get("_payload_path")
+    if payload_path and Path(payload_path).is_file():
+        payload = json.loads(Path(payload_path).read_text(encoding="utf-8"))
+        return payload.get("incoming") or {}, payload.get("result") or {}
+    return entry.get("_incoming") or {}, entry.get("result") or {}
 
 
 def _content_hash(data: object) -> str:
@@ -3493,8 +3700,8 @@ def _normalize_project(data: dict) -> dict:
     return data
 
 
-def build_export_bundle() -> tuple[bytes, str]:
-    """生成完整导出包 zip，返回 (bytes, filename)"""
+def prepare_export_bundle_parts() -> tuple[dict, str, str, dict, str]:
+    """Build export metadata and JSON payloads shared by byte/file exports."""
     data, revision, _ = get_state()
     export_data = _strip_view_state(data)
     deployment_id = load_deployment_id()
@@ -3525,44 +3732,68 @@ def build_export_bundle() -> tuple[bytes, str]:
         "state.json": _content_hash(state_json),
     }
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", manifest_json)
-        zf.writestr("state.json", state_json)
-        zf.writestr("checksums.json", json_dumps(checksums, pretty=True))
-
-        # 收集照片资产（单个文件异常不中断整个导出）
-        for cat in (export_data.get("sampleLibrary") or {}).get("categories") or []:
-            for sample in cat.get("samples") or []:
-                sid = sample.get("id")
-                if not sid:
-                    continue
-                for photo in sample.get("photos") or []:
-                    pid = photo.get("id")
-                    if not pid:
-                        continue
-                    # 原图 — use relativePath to locate files on disk
-                    rel = (photo.get("relativePath") or "").strip()
-                    if rel:
-                        try:
-                            rp = path_inside_data(rel)
-                            if rp.is_file():
-                                zf.write(rp, f"assets/samples/{sid}/photos/{rp.name}")
-                        except (ValueError, OSError, RuntimeError) as e:
-                            print(f"[EXPORT] 跳过照片 {pid}: {e}")
-                    # 缩略图 — use thumbRelativePath
-                    thumb_rel = (photo.get("thumbRelativePath") or "").strip()
-                    if thumb_rel:
-                        try:
-                            tp = path_inside_data(thumb_rel)
-                            if tp.is_file():
-                                zf.write(tp, f"assets/samples/{sid}/photos/{tp.name}")
-                        except (ValueError, OSError, RuntimeError) as e:
-                            print(f"[EXPORT] 跳过缩略图 {pid}: {e}")
-
     ts = exported_at.replace("-", "").replace(":", "")[:15]
     filename = f"testchamber_export_{ts}.zip"
-    return buf.getvalue(), filename
+    return export_data, manifest_json, state_json, checksums, filename
+
+
+def write_export_bundle_zip(zf: zipfile.ZipFile, export_data: dict, manifest_json: str, state_json: str, checksums: dict) -> None:
+    zf.writestr("manifest.json", manifest_json)
+    zf.writestr("state.json", state_json)
+    zf.writestr("checksums.json", json_dumps(checksums, pretty=True))
+
+    # 收集照片资产（单个文件异常不中断整个导出）
+    for cat in (export_data.get("sampleLibrary") or {}).get("categories") or []:
+        for sample in cat.get("samples") or []:
+            sid = sample.get("id")
+            if not sid:
+                continue
+            for photo in sample.get("photos") or []:
+                pid = photo.get("id")
+                if not pid:
+                    continue
+                # 原图 — use relativePath to locate files on disk
+                rel = (photo.get("relativePath") or "").strip()
+                if rel:
+                    try:
+                        rp = path_inside_data(rel)
+                        if rp.is_file():
+                            zf.write(rp, f"assets/samples/{sid}/photos/{rp.name}")
+                    except (ValueError, OSError, RuntimeError) as e:
+                        print(f"[EXPORT] 跳过照片 {pid}: {e}")
+                # 缩略图 — use thumbRelativePath
+                thumb_rel = (photo.get("thumbRelativePath") or "").strip()
+                if thumb_rel:
+                    try:
+                        tp = path_inside_data(thumb_rel)
+                        if tp.is_file():
+                            zf.write(tp, f"assets/samples/{sid}/photos/{tp.name}")
+                    except (ValueError, OSError, RuntimeError) as e:
+                        print(f"[EXPORT] 跳过缩略图 {pid}: {e}")
+
+
+def build_export_bundle() -> tuple[bytes, str]:
+    """生成完整导出包 zip，返回 (bytes, filename)。测试和低频工具保留该兼容接口。"""
+    tmp_path, filename = build_export_bundle_file()
+    try:
+        return tmp_path.read_bytes(), filename
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def build_export_bundle_file() -> tuple[Path, str]:
+    """生成完整导出包到临时文件，HTTP 下载路径用它避免整包 bytes 常驻内存。"""
+    export_data, manifest_json, state_json, checksums, filename = prepare_export_bundle_parts()
+    tmp = tempfile.NamedTemporaryFile(prefix="tcv7_export_", suffix=".zip", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            write_export_bundle_zip(zf, export_data, manifest_json, state_json, checksums)
+        return tmp_path, filename
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def analyze_import_bundle(headers, raw_body: bytes) -> dict:
@@ -3585,10 +3816,16 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
     if not zip_raw or len(zip_raw) < 4:
         raise ValueError("未找到有效的 zip 文件内容")
 
-    # 解压到临时目录
+    # 解压到临时目录；上传 zip 立即落盘并清掉 multipart 内存引用。
     tmp_dir = tempfile.mkdtemp(prefix="tcv7_import_")
     try:
-        with zipfile.ZipFile(io.BytesIO(zip_raw), "r") as zf:
+        zip_path = Path(tmp_dir) / "bundle.zip"
+        zip_path.write_bytes(zip_raw)
+        zip_raw = None
+        for item in files:
+            item["content"] = b""
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
             _safe_extract_zip(zf, tmp_dir)
 
         tmp_path = Path(tmp_dir)
@@ -3603,23 +3840,36 @@ def analyze_import_bundle(headers, raw_body: bytes) -> dict:
         state_path = tmp_path / "state.json"
         if not state_path.is_file():
             raise ValueError("导入包缺少 state.json")
+        state_bytes = state_path.stat().st_size
+        if state_bytes > IMPORT_PREVIEW_MAX_STATE_BYTES:
+            raise ValueError(f"导入包 state.json 过大 ({state_bytes} bytes)，超过 {IMPORT_PREVIEW_MAX_STATE_BYTES} bytes 上限")
         incoming_state = json.loads(state_path.read_text(encoding="utf-8"))
 
-        # 获取主库当前数据
-        current_data, current_revision, _ = get_state()
+        # Preview diff only needs project/task trees and sample identity fields.
+        # Photos and sample events are large and are checked against the incoming
+        # bundle assets separately, so keep them externalized for the snapshot.
+        current_data, current_revision, _ = get_state(compact=True)
 
         # 分析
         result = _diff_import_bundle(current_data, incoming_state, manifest, tmp_path)
         preview_id = _preview_id()
+        result["previewId"] = preview_id
+        payload_path = _store_import_preview_payload(tmp_path, incoming_state, result)
+        payload_bytes = payload_path.stat().st_size
         _IMPORT_PREVIEWS[preview_id] = {
             "_ts": time.time(),
             "_tmp_dir": str(tmp_path),
-            "_incoming": incoming_state,
+            "_payload_path": str(payload_path),
             "_revision": current_revision,
-            "result": result,
+            "_zip_bytes": len(zip_raw),
+            "_state_bytes": state_bytes,
+            "_payload_bytes": payload_bytes,
+            "_cache_bytes": len(zip_raw) + payload_bytes,
         }
+        _cleanup_expired_previews()
+        if preview_id not in _IMPORT_PREVIEWS:
+            raise ValueError("导入预览缓存已超过服务器上限，请稍后重试")
         # 不清理 tmp_dir（commit 时需要）
-        result["previewId"] = preview_id
         return result
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -4014,6 +4264,117 @@ def _sorted_nonempty_ids(values) -> list[str]:
     return sorted({str(value) for value in values if str(value or "").strip()})
 
 
+def _limited_nonempty_ids(values, *, limit: int = MUTATION_RETURN_ROW_LIMIT) -> tuple[list[str], bool]:
+    result: list[str] = []
+    seen: set[str] = set()
+    truncated = False
+    for value in values or []:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        if len(result) >= limit:
+            truncated = True
+            continue
+        result.append(item)
+    return result, truncated
+
+
+def load_task_rows_for_mutation(conn: sqlite3.Connection, task_ids) -> tuple[list[dict], bool]:
+    ids, truncated = _limited_nonempty_ids(task_ids)
+    if not ids:
+        return [], truncated
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, project_id, stage_id, progress_id, category, test_item, sku_index, status, owner,
+               sample_ids_json, data_json, completed_at
+        FROM project_tasks
+        WHERE deleted_at IS NULL AND id IN ({placeholders})
+        """,
+        ids,
+    ).fetchall()
+    logs_by_task = load_task_logs_for(conn, ids)
+    by_id: dict[str, dict] = {}
+    for row in rows:
+        task = task_from_db_row(row)
+        task["logs"] = logs_by_task.get(str(row["id"] or ""), [])
+        by_id[str(row["id"] or "")] = task
+    return [by_id[item] for item in ids if item in by_id], truncated
+
+
+def load_sample_rows_for_mutation(conn: sqlite3.Connection, sample_ids) -> tuple[list[dict], bool]:
+    ids, truncated = _limited_nonempty_ids(sample_ids)
+    if not ids:
+        return [], truncated
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, has_problem,
+               effective_status, location, owner, borrower, data_json
+        FROM sample_records
+        WHERE deleted_at IS NULL AND id IN ({placeholders})
+        """,
+        ids,
+    ).fetchall()
+    by_id = {str(row["id"] or ""): sample_from_db_row(row) for row in rows}
+    photo_counts = load_sample_photo_counts_for(conn, list(by_id.keys()))
+    for sid, sample in by_id.items():
+        sample["photoCount"] = photo_counts.get(sid, 0)
+    return [by_id[item] for item in ids if item in by_id], truncated
+
+
+def build_mutation_affected_summary(conn: sqlite3.Connection,
+                                    *,
+                                    project_ids=None,
+                                    stage_ids=None,
+                                    task_ids=None,
+                                    sample_category_ids=None,
+                                    sample_ids=None) -> dict:
+    project_id_list = _sorted_nonempty_ids(project_ids or [])
+    stage_id_list = _sorted_nonempty_ids(stage_ids or [])
+    task_id_list = _sorted_nonempty_ids(task_ids or [])
+    sample_category_id_list = _sorted_nonempty_ids(sample_category_ids or [])
+    sample_id_list = _sorted_nonempty_ids(sample_ids or [])
+
+    project_id_set = set(project_id_list)
+    category_id_set = set(sample_category_id_list)
+    tasks, tasks_truncated = load_task_rows_for_mutation(conn, task_id_list)
+    samples, samples_truncated = load_sample_rows_for_mutation(conn, sample_id_list)
+
+    if samples:
+        for sample in samples:
+            cid = str(sample.get("categoryId") or "")
+            if cid:
+                category_id_set.add(cid)
+        sample_category_id_list = _sorted_nonempty_ids(category_id_set)
+
+    project_summaries = [
+        item for item in list_project_summary(conn)
+        if str(item.get("id") or "") in project_id_set
+    ] if project_id_set else []
+    category_summaries = [
+        item for item in list_sample_categories_summary(conn)
+        if str(item.get("id") or "") in category_id_set
+    ] if category_id_set else []
+
+    return {
+        "summaryVersion": 1,
+        "rowLimit": MUTATION_RETURN_ROW_LIMIT,
+        "projectIds": project_id_list,
+        "stageIds": stage_id_list,
+        "taskIds": task_id_list,
+        "sampleCategoryIds": sample_category_id_list,
+        "sampleIds": sample_id_list,
+        "projectSummaries": project_summaries,
+        "sampleCategorySummaries": category_summaries,
+        "tasks": tasks,
+        "samples": samples,
+        "tasksTruncated": tasks_truncated,
+        "samplesTruncated": samples_truncated,
+    }
+
+
 def _build_import_mutation_summary(current_data: dict,
                                    project_id_map: dict,
                                    stage_id_map: dict,
@@ -4073,6 +4434,57 @@ def _build_import_mutation_summary(current_data: dict,
     }
 
 
+def commit_merged_import_state(
+    merged_data: dict,
+    expected_revision: int | None,
+    client_ip: str,
+    remark: str,
+    user: str,
+) -> tuple[bool, dict]:
+    """Persist an already-merged import state without composing full current state again."""
+    conflict = detect_sample_occupancy_conflicts(merged_data)
+    if conflict:
+        return False, {
+            "status": 409,
+            "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
+            "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
+            "conflicts": conflict,
+        }
+
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
+        if expected_revision is not None and int(expected_revision) != current_revision:
+            return False, {
+                "status": 409,
+                "error": "revision 冲突，服务器数据已被其他客户端更新",
+                "error_code": "IMPORT_REVISION_CONFLICT",
+                "server_revision": current_revision,
+            }
+
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        merged_data["version"] = APP_VERSION
+        sync_project_library(conn, merged_data, allow_empty=True)
+        sync_sample_library(conn, merged_data, allow_empty=True)
+        stored_data = split_state_for_storage(merged_data)
+        conn.execute(
+            "UPDATE app_state SET data_json = ?, revision = ?, updated_at = ? WHERE id = 1",
+            (json_dumps(stored_data), new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, "import_bundle_commit", remark, current_revision, new_revision, client_ip),
+        )
+        conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at}
+
+
 def commit_import_bundle(payload: dict) -> dict:
     """执行导入写入"""
     preview_id = payload.get("previewId", "")
@@ -4083,7 +4495,11 @@ def commit_import_bundle(payload: dict) -> dict:
     if not entry:
         return {"ok": False, "error": "previewId 无效或已过期", "status": 400}
 
-    result = entry.get("result") or {}
+    incoming_payload, result = _load_import_preview_payload(entry)
+    if not result:
+        _cleanup_preview_temp(preview_id)
+        del _IMPORT_PREVIEWS[preview_id]
+        return {"ok": False, "error": "导入预览缓存损坏，请重新选择文件导入", "status": 400}
     blockers = result.get("blockers") or []
     if blockers:
         return {"ok": False, "error": "存在阻断项（如缺失照片），无法提交导入", "blockers": blockers, "status": 400}
@@ -4091,7 +4507,7 @@ def commit_import_bundle(payload: dict) -> dict:
     # ── Revision 校验：commit 时主库 revision 必须与 preview 时一致 ──
     preview_revision = entry.get("_revision")
     if preview_revision is not None:
-        _, current_revision_check, _ = get_state()
+        current_revision_check, _ = get_state_metadata()
         if current_revision_check != preview_revision:
             return {"ok": False,
                     "error": "服务器数据在预览后被其他用户修改，请重新选择文件导入。",
@@ -4122,11 +4538,13 @@ def commit_import_bundle(payload: dict) -> dict:
             if not isinstance(d.get("fieldChoices") or {}, dict):
                 return {"ok": False, "error": f"冲突 {cid} 的字段选择格式不正确", "status": 400}
 
-    # 先备份
-    current_data, current_revision, _ = get_state()
+    # Commit merge does not need full photo/event arrays for the whole library.
+    # Existing photos for touched samples are loaded selectively before photo merge.
+    current_data, current_revision, _ = get_state(compact=True)
+    existing_sample_ids_before_import = set(_sample_index_by_id(current_data).keys())
     write_backup(current_data, current_revision)
 
-    incoming = copy.deepcopy(entry["_incoming"])
+    incoming = copy.deepcopy(incoming_payload)
     tmp_dir = Path(entry["_tmp_dir"])
     source_manifest = (result.get("source") or {})
 
@@ -4508,11 +4926,9 @@ def commit_import_bundle(payload: dict) -> dict:
                                 sub_data_keys = c.get("autoMergeSubData", [])
                                 for subk in sub_data_keys:
                                     if subk == "photos":
-                                        existing = {p.get("id"): p for p in (cs.get("photos") or [])}
-                                        for p in inc_sample.get("photos") or []:
-                                            if p.get("id") not in existing:
-                                                cs.setdefault("photos", []).append(copy.deepcopy(p))
-                                                stats["photosAdded"] += 1
+                                        # Central photo merge below loads only the touched
+                                        # target sample photos before appending incoming photos.
+                                        continue
                                     elif subk == "problemRecords":
                                         existing_hashes = {_content_hash(pr) for pr in (cs.get("problemRecords") or [])}
                                         for pr in inc_sample.get("problemRecords") or []:
@@ -4583,6 +4999,7 @@ def commit_import_bundle(payload: dict) -> dict:
     current_data["sampleLibrary"]["categories"] = list(curr_categories.values())
     current_data["projects"] = list(curr_projects.values())
 
+    hydrate_import_target_photos(current_data, incoming, sample_id_map, existing_sample_ids_before_import)
     merged_photos, _ = _merge_import_sample_subrecords(current_data, incoming, sample_id_map)
     stats["photosAdded"] += merged_photos
     incoming_samples_by_id = _sample_index_by_id(incoming)
@@ -4678,7 +5095,13 @@ def commit_import_bundle(payload: dict) -> dict:
         }
 
     import_remark = f"导入数据包 (deployment={source_manifest.get('sourceDeploymentId','?')})"
-    ok, resp = save_state(current_data, preview_revision, "import-bundle", remark=import_remark, user="数据导入")
+    ok, resp = commit_merged_import_state(
+        current_data,
+        preview_revision,
+        "import-bundle",
+        import_remark,
+        "数据导入",
+    )
 
     if not ok:
         _cleanup_preview_temp(preview_id)
@@ -4918,6 +5341,39 @@ def _merge_import_sample_subrecords(current_data: dict, incoming: dict,
     return photos_added, problems_added
 
 
+def hydrate_import_target_photos(current_data: dict,
+                                 incoming: dict,
+                                 sample_id_map: dict[str, str],
+                                 existing_sample_ids: set[str]) -> None:
+    """Load current photos only for existing samples that will receive imported photos."""
+    incoming_samples = _sample_index_by_id(incoming)
+    target_ids: set[str] = set()
+    for inc_sid, target_sid in sample_id_map.items():
+        if str(target_sid) not in existing_sample_ids:
+            continue
+        inc_sample = incoming_samples.get(str(inc_sid))
+        if inc_sample and any(isinstance(photo, dict) for photo in (inc_sample.get("photos") or [])):
+            target_ids.add(str(target_sid))
+    if not target_ids:
+        return
+
+    current_samples = _sample_index_by_id(current_data)
+    with connect_db() as conn:
+        began = begin_read_snapshot(conn)
+        try:
+            for target_sid in sorted(target_ids):
+                sample = current_samples.get(target_sid)
+                if not sample or sample.get("photosLoaded") is True:
+                    continue
+                photos = load_sample_photos(conn, target_sid)
+                sample["photos"] = photos
+                sample["photoCount"] = len(photos)
+                sample["photosLoaded"] = True
+        finally:
+            if began and getattr(conn, "in_transaction", False):
+                conn.execute("COMMIT")
+
+
 def _merge_import_sample_events(current_data: dict, incoming: dict,
                                 project_id_map: dict[str, str], stage_id_map: dict[str, str],
                                 task_id_map: dict[str, str], sample_id_map: dict[str, str]) -> int:
@@ -5046,55 +5502,58 @@ def save_state(
     if not isinstance(new_data, dict):
         return False, {"status": 400, "error": "data 必须是 JSON 对象"}
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            current_data, current_revision, _ = compose_state(conn)
-            action = "save_state"
+    with write_db_connection() as conn:
+        current_data, current_revision, _ = compose_state(
+            conn,
+            include_sample_photos=False,
+            include_sample_logs=True,
+        )
+        action = "save_state"
 
-            if expected_revision is not None and int(expected_revision) != current_revision and isinstance(base_data, dict):
-                new_data = merge_state(base_data, new_data, current_data)
-                action = "save_state_merge"
+        if expected_revision is not None and int(expected_revision) != current_revision and isinstance(base_data, dict):
+            new_data = merge_state(base_data, new_data, current_data)
+            action = "save_state_merge"
 
-            if expected_revision is not None and int(expected_revision) != current_revision and not isinstance(base_data, dict):
-                return False, {
-                    "status": 409,
-                    "error": "revision 冲突，服务器数据已被其他客户端更新",
-                    "server_revision": current_revision,
-                }
+        if expected_revision is not None and int(expected_revision) != current_revision and not isinstance(base_data, dict):
+            return False, {
+                "status": 409,
+                "error": "revision 冲突，服务器数据已被其他客户端更新",
+                "server_revision": current_revision,
+            }
 
-            # C1：并发样机占用校验——同一样机不能被多个未完成任务同时占用
-            conflict = detect_sample_occupancy_conflicts(new_data)
-            if conflict:
-                return False, {
-                    "status": 409,
-                    "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
-                    "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
-                    "conflicts": conflict,
-                    "server_revision": current_revision,
-                }
+        # C1：并发样机占用校验——同一样机不能被多个未完成任务同时占用
+        conflict = detect_sample_occupancy_conflicts(new_data)
+        if conflict:
+            return False, {
+                "status": 409,
+                "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
+                "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
+                "conflicts": conflict,
+                "server_revision": current_revision,
+            }
 
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            new_data["version"] = APP_VERSION
-            hydrate_externalized_sample_fields(new_data, current_data)
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        new_data["version"] = APP_VERSION
+        hydrate_externalized_sample_fields(new_data, current_data)
 
-            sync_project_library(conn, new_data, allow_empty=True)
-            sync_sample_library(conn, new_data, allow_empty=True)
-            stored_data = split_state_for_storage(new_data)
+        sync_project_library(conn, new_data, allow_empty=True)
+        sync_sample_library(conn, new_data, allow_empty=True)
+        stored_data = split_state_for_storage(new_data)
 
-            conn.execute(
-                "UPDATE app_state SET data_json = ?, revision = ?, updated_at = ? WHERE id = 1",
-                (json_dumps(stored_data), new_revision, updated_at),
-            )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
+        conn.execute(
+            "UPDATE app_state SET data_json = ?, revision = ?, updated_at = ? WHERE id = 1",
+            (json_dumps(stored_data), new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        conn.commit()
 
     # 普通保存：按节流策略决定是否生成 backup
     if _should_backup(action, new_revision):
@@ -5803,88 +6262,99 @@ def commit_task_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
     task["id"] = task_id
     task["projectId"] = project_id
     task["stageId"] = stage_id
+    affected = {}
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-            current_revision = int(row["revision"]) if row else 1
-            is_delete = str(payload.get("deleteMode") or "") == "delete"
-            action = str(payload.get("action") or "task_mutation")
-            if action == "finish_task_result":
-                finished = existing_finished_task(conn, task_id)
-                if finished:
-                    return False, {
-                        "status": 409,
-                        "error_code": "TASK_ALREADY_FINISHED",
-                        "error": "任务已经结束，已拒绝重复结束请求。",
-                        "taskId": task_id,
-                        "taskStatus": str(finished.get("status") or ""),
-                        "server_revision": current_revision,
-                    }
-            if not is_delete:
-                status_blockers = detect_task_mutation_sample_status_blockers(conn, [(task_id, task)])
-                if status_blockers:
-                    return False, {
-                        "status": 409,
-                        "error_code": "SAMPLE_STATUS_NOT_SELECTABLE",
-                        "error": "样机状态不可选：只有闲置样机可以加入测试任务，已拒绝保存。",
-                        "samples": status_blockers,
-                        "server_revision": current_revision,
-                    }
-                conflicts = detect_task_mutation_occupancy_conflicts(conn, task_id, task, project_id, stage_id)
-                if conflicts:
-                    return False, {
-                        "status": 409,
-                        "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
-                        "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
-                        "conflicts": conflicts,
-                        "server_revision": current_revision,
-                    }
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
+        is_delete = str(payload.get("deleteMode") or "") == "delete"
+        action = str(payload.get("action") or "task_mutation")
+        if action == "finish_task_result":
+            finished = existing_finished_task(conn, task_id)
+            if finished:
+                return False, {
+                    "status": 409,
+                    "error_code": "TASK_ALREADY_FINISHED",
+                    "error": "任务已经结束，已拒绝重复结束请求。",
+                    "taskId": task_id,
+                    "taskStatus": str(finished.get("status") or ""),
+                    "server_revision": current_revision,
+                }
+        if not is_delete:
+            status_blockers = detect_task_mutation_sample_status_blockers(conn, [(task_id, task)])
+            if status_blockers:
+                return False, {
+                    "status": 409,
+                    "error_code": "SAMPLE_STATUS_NOT_SELECTABLE",
+                    "error": "样机状态不可选：只有闲置样机可以加入测试任务，已拒绝保存。",
+                    "samples": status_blockers,
+                    "server_revision": current_revision,
+                }
+            conflicts = detect_task_mutation_occupancy_conflicts(conn, task_id, task, project_id, stage_id)
+            if conflicts:
+                return False, {
+                    "status": 409,
+                    "error_code": "SAMPLE_OCCUPANCY_CONFLICT",
+                    "error": "样机占用冲突：同一样机被多个未完成任务占用，已拒绝保存。",
+                    "conflicts": conflicts,
+                    "server_revision": current_revision,
+                }
 
-            update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
-            for sample in payload.get("samples") or []:
-                if isinstance(sample, dict):
-                    update_sample_record(conn, sample)
-            upsert_sample_events(conn, payload.get("sampleEvents") or [])
-            if is_delete:
-                delete_task_record(conn, task_id)
-            else:
-                upsert_task_record(
-                    conn,
-                    task,
-                    project_id,
-                    stage_id,
-                    create_if_missing=bool(payload.get("createIfMissing")),
-                )
-
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            remark = str(payload.get("remark") or "任务增量变更")
-            user = str(payload.get("user") or "")
-            conn.execute(
-                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
-                (new_revision, updated_at),
+        update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
+        for sample in payload.get("samples") or []:
+            if isinstance(sample, dict):
+                update_sample_record(conn, sample)
+        upsert_sample_events(conn, payload.get("sampleEvents") or [])
+        if is_delete:
+            delete_task_record(conn, task_id)
+        else:
+            upsert_task_record(
+                conn,
+                task,
+                project_id,
+                stage_id,
+                create_if_missing=bool(payload.get("createIfMissing")),
             )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
+
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        remark = str(payload.get("remark") or "任务增量变更")
+        user = str(payload.get("user") or "")
+        conn.execute(
+            "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+            (new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        affected_sample_ids = set(task_sample_ids(task))
+        for sample in payload.get("samples") or []:
+            if isinstance(sample, dict) and sample.get("id"):
+                affected_sample_ids.add(str(sample.get("id") or ""))
+        for event in payload.get("sampleEvents") or []:
+            if isinstance(event, dict) and event.get("sampleId"):
+                affected_sample_ids.add(str(event.get("sampleId") or ""))
+        affected = build_mutation_affected_summary(
+            conn,
+            project_ids=[project_id],
+            stage_ids=[stage_id],
+            task_ids=[task_id],
+            sample_ids=affected_sample_ids,
+        )
+        conn.commit()
 
     if _should_backup(action, new_revision):
         try:
-            with DB_LOCK:
-                with connect_db() as conn:
-                    data, _, _ = compose_state(conn, include_sample_photos=False, include_sample_logs=False)
-            write_backup(data, new_revision)
+            write_compact_backup_snapshot(new_revision)
         except Exception as e:
             print(f"[WARN] 写入任务增量备份失败：{e}")
 
-    return True, {"revision": new_revision, "updated_at": updated_at}
+    return True, {"revision": new_revision, "updated_at": updated_at, "affected": affected}
 
 
 def commit_task_batch_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
@@ -5895,6 +6365,7 @@ def commit_task_batch_mutation(payload: dict, client_ip: str) -> tuple[bool, dic
     stage_id = str(payload.get("stageId") or "")
     if not project_id or not stage_id:
         return False, {"status": 400, "error": "缺少 projectId/stageId"}
+    affected = {}
 
     normalized_tasks: list[dict] = []
     seen_task_ids: set[str] = set()
@@ -5912,74 +6383,81 @@ def commit_task_batch_mutation(payload: dict, client_ip: str) -> tuple[bool, dic
         task["stageId"] = stage_id
         normalized_tasks.append(task)
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-            current_revision = int(row["revision"]) if row else 1
-            stage_row = conn.execute(
-                """
-                SELECT id
-                FROM project_stages
-                WHERE id = ? AND project_id = ? AND deleted_at IS NULL
-                """,
-                (stage_id, project_id),
-            ).fetchone()
-            if not stage_row:
-                return False, {"status": 404, "error": f"阶段不存在: {stage_id}"}
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
+        stage_row = conn.execute(
+            """
+            SELECT id
+            FROM project_stages
+            WHERE id = ? AND project_id = ? AND deleted_at IS NULL
+            """,
+            (stage_id, project_id),
+        ).fetchone()
+        if not stage_row:
+            return False, {"status": 404, "error": f"阶段不存在: {stage_id}"}
 
-            status_blockers = detect_task_mutation_sample_status_blockers(
+        status_blockers = detect_task_mutation_sample_status_blockers(
+            conn,
+            [(str(task.get("id") or ""), task) for task in normalized_tasks],
+        )
+        if status_blockers:
+            return False, {
+                "status": 409,
+                "error_code": "SAMPLE_STATUS_NOT_SELECTABLE",
+                "error": "样机状态不可选：只有闲置样机可以加入测试任务，已拒绝保存。",
+                "samples": status_blockers,
+                "server_revision": current_revision,
+            }
+
+        update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
+        create_if_missing = bool(payload.get("createIfMissing"))
+        for task in normalized_tasks:
+            upsert_task_record(
                 conn,
-                [(str(task.get("id") or ""), task) for task in normalized_tasks],
+                task,
+                project_id,
+                stage_id,
+                create_if_missing=create_if_missing,
             )
-            if status_blockers:
-                return False, {
-                    "status": 409,
-                    "error_code": "SAMPLE_STATUS_NOT_SELECTABLE",
-                    "error": "样机状态不可选：只有闲置样机可以加入测试任务，已拒绝保存。",
-                    "samples": status_blockers,
-                    "server_revision": current_revision,
-                }
 
-            update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
-            create_if_missing = bool(payload.get("createIfMissing"))
-            for task in normalized_tasks:
-                upsert_task_record(
-                    conn,
-                    task,
-                    project_id,
-                    stage_id,
-                    create_if_missing=create_if_missing,
-                )
-
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            action = str(payload.get("action") or "task_batch_mutation")
-            remark = str(payload.get("remark") or f"批量任务增量变更：{len(normalized_tasks)} 个")
-            user = str(payload.get("user") or "")
-            conn.execute(
-                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
-                (new_revision, updated_at),
-            )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        action = str(payload.get("action") or "task_batch_mutation")
+        remark = str(payload.get("remark") or f"批量任务增量变更：{len(normalized_tasks)} 个")
+        user = str(payload.get("user") or "")
+        conn.execute(
+            "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+            (new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        affected = build_mutation_affected_summary(
+            conn,
+            project_ids=[project_id],
+            stage_ids=[stage_id],
+            task_ids=[task.get("id") for task in normalized_tasks],
+            sample_ids=[
+                sample_id
+                for task in normalized_tasks
+                for sample_id in (task.get("sampleIds") or [])
+            ],
+        )
+        conn.commit()
 
     if _should_backup(action, new_revision):
         try:
-            with DB_LOCK:
-                with connect_db() as conn:
-                    data, _, _ = compose_state(conn, include_sample_photos=False, include_sample_logs=False)
-            write_backup(data, new_revision)
+            write_compact_backup_snapshot(new_revision)
         except Exception as e:
             print(f"[WARN] 写入批量任务增量备份失败：{e}")
 
-    return True, {"revision": new_revision, "updated_at": updated_at, "count": len(normalized_tasks)}
+    return True, {"revision": new_revision, "updated_at": updated_at, "count": len(normalized_tasks), "affected": affected}
 
 
 def commit_sample_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
@@ -5987,68 +6465,97 @@ def commit_sample_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
     if not sample_id:
         return False, {"status": 400, "error": "缺少 sampleId"}
     delete_sample = bool(payload.get("deleteSample"))
+    affected = {}
+    asset_paths_to_delete: list[str] = []
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-            current_revision = int(row["revision"]) if row else 1
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
 
-            for item in payload.get("taskMutations") or []:
-                if not isinstance(item, dict):
-                    continue
-                task = item.get("task")
-                if not isinstance(task, dict):
-                    continue
-                project_id = str(item.get("projectId") or task.get("projectId") or "")
-                stage_id = str(item.get("stageId") or task.get("stageId") or "")
-                task_id = str(item.get("taskId") or task.get("id") or "")
-                if not project_id or not stage_id or not task_id:
-                    continue
-                update_stage_record(conn, item.get("stage") or {}, project_id, stage_id)
-                upsert_task_record(
-                    conn,
-                    task,
-                    project_id,
-                    stage_id,
-                    create_if_missing=bool(item.get("createIfMissing")),
-                )
+        for item in payload.get("taskMutations") or []:
+            if not isinstance(item, dict):
+                continue
+            task = item.get("task")
+            if not isinstance(task, dict):
+                continue
+            project_id = str(item.get("projectId") or task.get("projectId") or "")
+            stage_id = str(item.get("stageId") or task.get("stageId") or "")
+            task_id = str(item.get("taskId") or task.get("id") or "")
+            if not project_id or not stage_id or not task_id:
+                continue
+            update_stage_record(conn, item.get("stage") or {}, project_id, stage_id)
+            upsert_task_record(
+                conn,
+                task,
+                project_id,
+                stage_id,
+                create_if_missing=bool(item.get("createIfMissing")),
+            )
 
-            for sample in payload.get("samples") or []:
-                if isinstance(sample, dict) and str(sample.get("id") or "") != sample_id:
-                    update_sample_record(conn, sample)
-
-            sample = payload.get("sample")
-            if isinstance(sample, dict) and not delete_sample:
+        for sample in payload.get("samples") or []:
+            if isinstance(sample, dict) and str(sample.get("id") or "") != sample_id:
                 update_sample_record(conn, sample)
 
-            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+        sample = payload.get("sample")
+        if isinstance(sample, dict) and not delete_sample:
+            update_sample_record(conn, sample)
 
-            if delete_sample:
-                cleanup_sample_asset_files(conn, [sample_id])
-                conn.execute("DELETE FROM sample_assets WHERE sample_id = ?", (sample_id,))
-                conn.execute("DELETE FROM sample_events WHERE sample_id = ?", (sample_id,))
-                conn.execute("DELETE FROM sample_records WHERE id = ?", (sample_id,))
+        upsert_sample_events(conn, payload.get("sampleEvents") or [])
 
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            action = str(payload.get("action") or ("destroy_sample" if delete_sample else "sample_mutation"))
-            remark = str(payload.get("remark") or ("样机档案销毁" if delete_sample else "样机增量变更"))
-            user = str(payload.get("user") or "")
-            conn.execute(
-                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
-                (new_revision, updated_at),
-            )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
+        if delete_sample:
+            asset_paths_to_delete = sample_asset_relative_paths(conn, [sample_id])
+            conn.execute("DELETE FROM sample_assets WHERE sample_id = ?", (sample_id,))
+            conn.execute("DELETE FROM sample_events WHERE sample_id = ?", (sample_id,))
+            conn.execute("DELETE FROM sample_records WHERE id = ?", (sample_id,))
 
-    return True, {"revision": new_revision, "updated_at": updated_at}
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        action = str(payload.get("action") or ("destroy_sample" if delete_sample else "sample_mutation"))
+        remark = str(payload.get("remark") or ("样机档案销毁" if delete_sample else "样机增量变更"))
+        user = str(payload.get("user") or "")
+        conn.execute(
+            "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+            (new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        affected_task_ids = []
+        affected_project_ids = []
+        affected_stage_ids = []
+        for item in payload.get("taskMutations") or []:
+            if not isinstance(item, dict):
+                continue
+            affected_task_ids.append(item.get("taskId") or (item.get("task") or {}).get("id"))
+            affected_project_ids.append(item.get("projectId") or (item.get("task") or {}).get("projectId"))
+            affected_stage_ids.append(item.get("stageId") or (item.get("task") or {}).get("stageId"))
+        affected_sample_ids = [sample_id, *[
+            sample.get("id")
+            for sample in payload.get("samples") or []
+            if isinstance(sample, dict)
+        ], *[
+            event.get("sampleId")
+            for event in payload.get("sampleEvents") or []
+            if isinstance(event, dict)
+        ]]
+        affected = build_mutation_affected_summary(
+            conn,
+            project_ids=affected_project_ids,
+            stage_ids=affected_stage_ids,
+            task_ids=affected_task_ids,
+            sample_ids=affected_sample_ids,
+        )
+        conn.commit()
+
+    if asset_paths_to_delete:
+        unlink_asset_relative_paths(asset_paths_to_delete, warn_label="删除样机资产文件")
+
+    return True, {"revision": new_revision, "updated_at": updated_at, "affected": affected}
 
 
 def commit_project_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
@@ -6057,50 +6564,59 @@ def commit_project_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
     if not project_id:
         return False, {"status": 400, "error": "缺少 projectId"}
     delete_project = bool(payload.get("deleteProject"))
+    affected = {}
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-            current_revision = int(row["revision"]) if row else 1
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
 
-            for sample in payload.get("samples") or []:
-                if isinstance(sample, dict):
-                    update_sample_record(conn, sample)
-            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+        for sample in payload.get("samples") or []:
+            if isinstance(sample, dict):
+                update_sample_record(conn, sample)
+        upsert_sample_events(conn, payload.get("sampleEvents") or [])
 
-            if delete_project:
-                delete_project_record(conn, project_id)
-            else:
-                if not isinstance(project, dict):
-                    return False, {"status": 400, "error": "project 必须是 JSON 对象"}
-                project["id"] = project_id
-                update_project_record(
-                    conn,
-                    project,
-                    create_if_missing=bool(payload.get("createIfMissing")),
-                    sort_order=to_int(payload.get("sortOrder")) if payload.get("sortOrder") is not None else None,
-                )
-
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            action = str(payload.get("action") or ("delete_project" if delete_project else "project_mutation"))
-            remark = str(payload.get("remark") or ("删除项目" if delete_project else "项目增量变更"))
-            user = str(payload.get("user") or "")
-            conn.execute(
-                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
-                (new_revision, updated_at),
+        if delete_project:
+            delete_project_record(conn, project_id)
+        else:
+            if not isinstance(project, dict):
+                return False, {"status": 400, "error": "project 必须是 JSON 对象"}
+            project["id"] = project_id
+            update_project_record(
+                conn,
+                project,
+                create_if_missing=bool(payload.get("createIfMissing")),
+                sort_order=to_int(payload.get("sortOrder")) if payload.get("sortOrder") is not None else None,
             )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
 
-    return True, {"revision": new_revision, "updated_at": updated_at}
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        action = str(payload.get("action") or ("delete_project" if delete_project else "project_mutation"))
+        remark = str(payload.get("remark") or ("删除项目" if delete_project else "项目增量变更"))
+        user = str(payload.get("user") or "")
+        conn.execute(
+            "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+            (new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        affected = build_mutation_affected_summary(
+            conn,
+            project_ids=[project_id],
+            sample_ids=[
+                sample.get("id")
+                for sample in payload.get("samples") or []
+                if isinstance(sample, dict)
+            ],
+        )
+        conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at, "affected": affected}
 
 
 def commit_stage_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
@@ -6110,71 +6626,85 @@ def commit_stage_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
     if not stage_id or not project_id:
         return False, {"status": 400, "error": "缺少 projectId/stageId"}
     delete_stage = bool(payload.get("deleteStage"))
+    affected = {}
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-            current_revision = int(row["revision"]) if row else 1
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
 
-            project = payload.get("project")
-            if isinstance(project, dict):
-                project["id"] = project_id
-                update_project_record(conn, project)
+        project = payload.get("project")
+        if isinstance(project, dict):
+            project["id"] = project_id
+            update_project_record(conn, project)
 
-            for sample in payload.get("samples") or []:
-                if isinstance(sample, dict):
-                    update_sample_record(conn, sample)
-            upsert_sample_events(conn, payload.get("sampleEvents") or [])
+        for sample in payload.get("samples") or []:
+            if isinstance(sample, dict):
+                update_sample_record(conn, sample)
+        upsert_sample_events(conn, payload.get("sampleEvents") or [])
 
-            if delete_stage:
-                delete_stage_record(conn, stage_id)
-                for idx, sibling in enumerate(payload.get("stages") or []):
-                    if isinstance(sibling, dict) and str(sibling.get("id") or "") != stage_id:
-                        update_stage_record(conn, sibling, project_id, str(sibling.get("id") or ""), sort_order=idx)
-            else:
-                if not isinstance(stage, dict):
-                    return False, {"status": 400, "error": "stage 必须是 JSON 对象"}
-                stage["id"] = stage_id
-                stage["projectId"] = project_id
-                sibling_ids = [str(s.get("id") or "") for s in (payload.get("stages") or []) if isinstance(s, dict)]
-                sort_order = sibling_ids.index(stage_id) if stage_id in sibling_ids else None
-                update_stage_record(
-                    conn,
-                    stage,
-                    project_id,
-                    stage_id,
-                    create_if_missing=bool(payload.get("createIfMissing")),
-                    sort_order=sort_order,
-                )
-                for idx, sibling in enumerate(payload.get("stages") or []):
-                    if isinstance(sibling, dict) and str(sibling.get("id") or "") != stage_id:
-                        sid = str(sibling.get("id") or "")
-                        if sid:
-                            update_stage_record(conn, sibling, project_id, sid, sort_order=idx)
-
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            action = str(payload.get("action") or ("delete_stage" if delete_stage else "stage_mutation"))
-            remark = str(payload.get("remark") or ("删除阶段" if delete_stage else "阶段增量变更"))
-            user = str(payload.get("user") or "")
-            conn.execute(
-                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
-                (new_revision, updated_at),
+        if delete_stage:
+            delete_stage_record(conn, stage_id)
+            for idx, sibling in enumerate(payload.get("stages") or []):
+                if isinstance(sibling, dict) and str(sibling.get("id") or "") != stage_id:
+                    update_stage_record(conn, sibling, project_id, str(sibling.get("id") or ""), sort_order=idx)
+        else:
+            if not isinstance(stage, dict):
+                return False, {"status": 400, "error": "stage 必须是 JSON 对象"}
+            stage["id"] = stage_id
+            stage["projectId"] = project_id
+            sibling_ids = [str(s.get("id") or "") for s in (payload.get("stages") or []) if isinstance(s, dict)]
+            sort_order = sibling_ids.index(stage_id) if stage_id in sibling_ids else None
+            update_stage_record(
+                conn,
+                stage,
+                project_id,
+                stage_id,
+                create_if_missing=bool(payload.get("createIfMissing")),
+                sort_order=sort_order,
             )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
+            for idx, sibling in enumerate(payload.get("stages") or []):
+                if isinstance(sibling, dict) and str(sibling.get("id") or "") != stage_id:
+                    sid = str(sibling.get("id") or "")
+                    if sid:
+                        update_stage_record(conn, sibling, project_id, sid, sort_order=idx)
 
-    return True, {"revision": new_revision, "updated_at": updated_at}
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        action = str(payload.get("action") or ("delete_stage" if delete_stage else "stage_mutation"))
+        remark = str(payload.get("remark") or ("删除阶段" if delete_stage else "阶段增量变更"))
+        user = str(payload.get("user") or "")
+        conn.execute(
+            "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+            (new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        affected = build_mutation_affected_summary(
+            conn,
+            project_ids=[project_id],
+            stage_ids=[stage_id, *[
+                sibling.get("id")
+                for sibling in payload.get("stages") or []
+                if isinstance(sibling, dict)
+            ]],
+            sample_ids=[
+                sample.get("id")
+                for sample in payload.get("samples") or []
+                if isinstance(sample, dict)
+            ],
+        )
+        conn.commit()
+
+    return True, {"revision": new_revision, "updated_at": updated_at, "affected": affected}
 
 
-def delete_sample_category_record(conn: sqlite3.Connection, category_id: str) -> None:
+def delete_sample_category_record(conn: sqlite3.Connection, category_id: str) -> list[str]:
     row = conn.execute(
         "SELECT id FROM sample_categories WHERE id = ? AND deleted_at IS NULL",
         (category_id,),
@@ -6186,13 +6716,14 @@ def delete_sample_category_record(conn: sqlite3.Connection, category_id: str) ->
         (category_id,),
     ).fetchall()
     sample_ids = [str(row["id"] or "") for row in sample_rows if row["id"]]
-    cleanup_sample_asset_files(conn, sample_ids)
+    asset_paths_to_delete = sample_asset_relative_paths(conn, sample_ids)
     if sample_ids:
         placeholders = ",".join("?" for _ in sample_ids)
         conn.execute(f"DELETE FROM sample_assets WHERE sample_id IN ({placeholders})", sample_ids)
         conn.execute(f"DELETE FROM sample_events WHERE sample_id IN ({placeholders})", sample_ids)
         conn.execute(f"DELETE FROM sample_records WHERE id IN ({placeholders})", sample_ids)
     conn.execute("DELETE FROM sample_categories WHERE id = ?", (category_id,))
+    return asset_paths_to_delete
 
 
 def commit_sample_category_mutation(payload: dict, client_ip: str) -> tuple[bool, dict]:
@@ -6200,76 +6731,101 @@ def commit_sample_category_mutation(payload: dict, client_ip: str) -> tuple[bool
     if not category_id:
         return False, {"status": 400, "error": "缺少 categoryId"}
     delete_category = bool(payload.get("deleteCategory"))
+    affected = {}
+    asset_paths_to_delete: list[str] = []
 
-    with DB_LOCK:
-        with connect_db() as conn:
-            row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-            current_revision = int(row["revision"]) if row else 1
+    with write_db_connection() as conn:
+        row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+        current_revision = int(row["revision"]) if row else 1
 
-            if not delete_category:
-                category = payload.get("category")
-                if not isinstance(category, dict):
-                    return False, {"status": 400, "error": "category 必须是 JSON 对象"}
-                category["id"] = category_id
-                update_sample_category_record(
-                    conn,
-                    category,
-                    create_if_missing=bool(payload.get("createIfMissing")),
-                    sort_order=to_int(payload.get("sortOrder")) if payload.get("sortOrder") is not None else None,
-                )
-
-            for item in payload.get("taskMutations") or []:
-                if not isinstance(item, dict):
-                    continue
-                task = item.get("task")
-                if not isinstance(task, dict):
-                    continue
-                project_id = str(item.get("projectId") or task.get("projectId") or "")
-                stage_id = str(item.get("stageId") or task.get("stageId") or "")
-                task_id = str(item.get("taskId") or task.get("id") or "")
-                if not project_id or not stage_id or not task_id:
-                    continue
-                update_stage_record(conn, item.get("stage") or {}, project_id, stage_id)
-                upsert_task_record(
-                    conn,
-                    task,
-                    project_id,
-                    stage_id,
-                    create_if_missing=bool(item.get("createIfMissing")),
-                )
-
-            for sample in payload.get("samples") or []:
-                if isinstance(sample, dict):
-                    update_sample_record(
-                        conn,
-                        sample,
-                        create_if_missing=bool(payload.get("createSamples") or payload.get("createIfMissing")),
-                    )
-            upsert_sample_events(conn, payload.get("sampleEvents") or [])
-
-            if delete_category:
-                delete_sample_category_record(conn, category_id)
-
-            new_revision = current_revision + 1
-            updated_at = now_iso()
-            action = str(payload.get("action") or ("destroy_sample_category" if delete_category else "sample_category_mutation"))
-            remark = str(payload.get("remark") or ("样机池档案销毁" if delete_category else "样机池增量变更"))
-            user = str(payload.get("user") or "")
-            conn.execute(
-                "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
-                (new_revision, updated_at),
+        if not delete_category:
+            category = payload.get("category")
+            if not isinstance(category, dict):
+                return False, {"status": 400, "error": "category 必须是 JSON 对象"}
+            category["id"] = category_id
+            update_sample_category_record(
+                conn,
+                category,
+                create_if_missing=bool(payload.get("createIfMissing")),
+                sort_order=to_int(payload.get("sortOrder")) if payload.get("sortOrder") is not None else None,
             )
-            conn.execute(
-                """
-                INSERT INTO audit_log
-                (time, user, action, remark, revision_before, revision_after, client_ip)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (updated_at, user, action, remark, current_revision, new_revision, client_ip),
-            )
-            conn.commit()
 
-    return True, {"revision": new_revision, "updated_at": updated_at}
+        for item in payload.get("taskMutations") or []:
+            if not isinstance(item, dict):
+                continue
+            task = item.get("task")
+            if not isinstance(task, dict):
+                continue
+            project_id = str(item.get("projectId") or task.get("projectId") or "")
+            stage_id = str(item.get("stageId") or task.get("stageId") or "")
+            task_id = str(item.get("taskId") or task.get("id") or "")
+            if not project_id or not stage_id or not task_id:
+                continue
+            update_stage_record(conn, item.get("stage") or {}, project_id, stage_id)
+            upsert_task_record(
+                conn,
+                task,
+                project_id,
+                stage_id,
+                create_if_missing=bool(item.get("createIfMissing")),
+            )
+
+        for sample in payload.get("samples") or []:
+            if isinstance(sample, dict):
+                update_sample_record(
+                    conn,
+                    sample,
+                    create_if_missing=bool(payload.get("createSamples") or payload.get("createIfMissing")),
+                )
+        upsert_sample_events(conn, payload.get("sampleEvents") or [])
+
+        if delete_category:
+            asset_paths_to_delete = delete_sample_category_record(conn, category_id)
+
+        new_revision = current_revision + 1
+        updated_at = now_iso()
+        action = str(payload.get("action") or ("destroy_sample_category" if delete_category else "sample_category_mutation"))
+        remark = str(payload.get("remark") or ("样机池档案销毁" if delete_category else "样机池增量变更"))
+        user = str(payload.get("user") or "")
+        conn.execute(
+            "UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1",
+            (new_revision, updated_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (time, user, action, remark, revision_before, revision_after, client_ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (updated_at, user, action, remark, current_revision, new_revision, client_ip),
+        )
+        affected_task_ids = []
+        affected_project_ids = []
+        affected_stage_ids = []
+        for item in payload.get("taskMutations") or []:
+            if not isinstance(item, dict):
+                continue
+            affected_task_ids.append(item.get("taskId") or (item.get("task") or {}).get("id"))
+            affected_project_ids.append(item.get("projectId") or (item.get("task") or {}).get("projectId"))
+            affected_stage_ids.append(item.get("stageId") or (item.get("task") or {}).get("stageId"))
+        affected = build_mutation_affected_summary(
+            conn,
+            project_ids=affected_project_ids,
+            stage_ids=affected_stage_ids,
+            task_ids=affected_task_ids,
+            sample_category_ids=[category_id],
+            sample_ids=[
+                sample.get("id")
+                for sample in payload.get("samples") or []
+                if isinstance(sample, dict)
+            ],
+        )
+        conn.commit()
+
+    if asset_paths_to_delete:
+        unlink_asset_relative_paths(asset_paths_to_delete, warn_label="删除样机池资产文件")
+
+    return True, {"revision": new_revision, "updated_at": updated_at, "affected": affected}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -6432,33 +6988,51 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/export-bundle":
+            tmp_path = None
             try:
-                zip_bytes, filename = build_export_bundle()
+                tmp_path, filename = build_export_bundle_file()
+                size = tmp_path.stat().st_size
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
                 self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-                self.send_header("Content-Length", str(len(zip_bytes)))
+                self.send_header("Content-Length", str(size))
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
-                self.wfile.write(zip_bytes)
+                with tmp_path.open("rb") as src:
+                    shutil.copyfileobj(src, self.wfile, length=1024 * 1024)
             except Exception as e:
                 traceback.print_exc()
                 self._send_json({"ok": False, "error": str(e), "errorCode": "EXPORT_FAILED"}, 500)
+            finally:
+                if tmp_path:
+                    tmp_path.unlink(missing_ok=True)
             return
 
         if path == "/api/state":
             try:
+                reason = first_query_value(query, "reason", "").strip()
+                if not reason:
+                    print(f"[WARN] /api/state called without reason from {self.client_address[0]}")
                 data, revision, updated_at = get_state(compact=True)
-                self._send_json({"ok": True, "revision": revision, "updated_at": updated_at, "data": data})
+                self._send_json({
+                    "ok": True,
+                    "revision": revision,
+                    "updated_at": updated_at,
+                    "data": data,
+                    "compat": {
+                        "stateEndpoint": "compact-full-state",
+                        "reason": reason or "legacy-unspecified",
+                        "lowFrequencyOnly": True,
+                    },
+                })
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
         if path == "/api/bootstrap":
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        data, revision, updated_at = compose_bootstrap_state(conn)
+                with connect_db() as conn:
+                    data, revision, updated_at = compose_bootstrap_state(conn)
                 self._send_json({"ok": True, "revision": revision, "updated_at": updated_at, "data": data, "partial": True})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
@@ -6466,9 +7040,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/projects/summary":
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        projects = list_project_summary(conn)
+                with connect_db() as conn:
+                    projects = list_project_summary(conn)
                 self._send_json({"ok": True, "projects": projects, "count": len(projects)})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
@@ -6478,9 +7051,8 @@ class Handler(BaseHTTPRequestHandler):
         if project_detail_id:
             try:
                 include_tasks = first_query_value(query, "includeTasks", "") in ("1", "true", "yes")
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        project = load_project_detail(conn, project_detail_id, include_tasks=include_tasks)
+                with connect_db() as conn:
+                    project = load_project_detail(conn, project_detail_id, include_tasks=include_tasks)
                 if not project:
                     self._send_json({"ok": False, "error": "项目不存在"}, 404)
                     return
@@ -6491,9 +7063,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/sample-categories":
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        categories = list_sample_categories_summary(conn)
+                with connect_db() as conn:
+                    categories = list_sample_categories_summary(conn)
                 self._send_json({"ok": True, "categories": categories, "count": len(categories)})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
@@ -6501,10 +7072,22 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/task-sample-candidates":
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        result = list_task_sample_candidates_page(conn, query)
+                with connect_db() as conn:
+                    result = list_task_sample_candidates_page(conn, query)
                 self._send_json({"ok": True, **result})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/sample-destroy-impact":
+            try:
+                with connect_db() as conn:
+                    result = list_sample_destroy_impact_scope(conn, query)
+                self._send_json({"ok": True, **result})
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, 404)
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
@@ -6513,9 +7096,8 @@ class Handler(BaseHTTPRequestHandler):
         if sample_category_detail_id:
             try:
                 include_photos = first_query_value(query, "includePhotos", "") in ("1", "true", "yes")
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        category = load_sample_category_detail(conn, sample_category_detail_id, include_photos=include_photos)
+                with connect_db() as conn:
+                    category = load_sample_category_detail(conn, sample_category_detail_id, include_photos=include_photos)
                 if not category:
                     self._send_json({"ok": False, "error": "样机池不存在"}, 404)
                     return
@@ -6527,9 +7109,8 @@ class Handler(BaseHTTPRequestHandler):
         stage_tasks_id = self._stage_tasks_route(path)
         if stage_tasks_id:
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        result = list_stage_tasks_page(conn, stage_tasks_id, query)
+                with connect_db() as conn:
+                    result = list_stage_tasks_page(conn, stage_tasks_id, query)
                 self._send_json({"ok": True, **result})
             except KeyError as e:
                 self._send_json({"ok": False, "error": str(e)}, 404)
@@ -6540,9 +7121,8 @@ class Handler(BaseHTTPRequestHandler):
         sample_category_id = self._sample_category_samples_route(path)
         if sample_category_id:
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        result = list_samples_page(conn, sample_category_id, query)
+                with connect_db() as conn:
+                    result = list_samples_page(conn, sample_category_id, query)
                 self._send_json({"ok": True, **result})
             except KeyError as e:
                 self._send_json({"ok": False, "error": str(e)}, 404)
@@ -6554,9 +7134,8 @@ class Handler(BaseHTTPRequestHandler):
         if photo_route and photo_route[1] is None:
             sample_id, _ = photo_route
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        photos = load_sample_photos(conn, sample_id)
+                with connect_db() as conn:
+                    photos = load_sample_photos(conn, sample_id)
                 self._send_json({"ok": True, "sampleId": sample_id, "photos": photos, "photoCount": len(photos)})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
@@ -6565,16 +7144,15 @@ class Handler(BaseHTTPRequestHandler):
         if photo_route and photo_route[1]:
             sample_id, photo_id = photo_route
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        row = conn.execute(
-                            """
-                            SELECT relative_path, mime_type
-                            FROM sample_assets
-                            WHERE sample_id = ? AND id = ? AND kind IN ('photo', 'photo_thumb') AND deleted_at IS NULL
-                            """,
-                            (sample_id, photo_id),
-                        ).fetchone()
+                with connect_db() as conn:
+                    row = conn.execute(
+                        """
+                        SELECT relative_path, mime_type
+                        FROM sample_assets
+                        WHERE sample_id = ? AND id = ? AND kind IN ('photo', 'photo_thumb') AND deleted_at IS NULL
+                        """,
+                        (sample_id, photo_id),
+                    ).fetchone()
                 if not row:
                     self._send_json({"ok": False, "error": "照片不存在"}, 404)
                     return
@@ -6590,9 +7168,8 @@ class Handler(BaseHTTPRequestHandler):
         event_sample_id = self._sample_events_route(path)
         if event_sample_id:
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        logs = load_sample_events(conn, event_sample_id)
+                with connect_db() as conn:
+                    logs = load_sample_events(conn, event_sample_id)
                 self._send_json({"ok": True, "sampleId": event_sample_id, "logs": logs, "count": len(logs)})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
@@ -6601,9 +7178,8 @@ class Handler(BaseHTTPRequestHandler):
         history_sample_id = self._sample_history_route(path)
         if history_sample_id:
             try:
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        result = list_sample_history_page(conn, history_sample_id, query)
+                with connect_db() as conn:
+                    result = list_sample_history_page(conn, history_sample_id, query)
                 self._send_json({"ok": True, **result})
             except KeyError as e:
                 self._send_json({"ok": False, "error": str(e)}, 404)
@@ -6667,9 +7243,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sample-identity-check":
             try:
                 payload = json.loads(self._read_body(max_bytes=MAX_UPLOAD_BYTES).decode("utf-8") or "{}")
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        result = check_sample_identity_conflicts(conn, payload)
+                with connect_db() as conn:
+                    result = check_sample_identity_conflicts(conn, payload)
                 self._send_json({"ok": True, **result})
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e)}, 400)
@@ -6695,39 +7270,58 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "没有收到照片文件"}, 400)
                 return
 
-            with DB_LOCK:
-                with connect_db() as conn:
-                    sample_row = conn.execute(
-                        "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
-                        (sample_id,),
-                    ).fetchone()
-                    if not sample_row:
-                        self._send_json({"ok": False, "error": "样机不存在"}, 404)
-                        return
-                    uploaded = []
-                    for idx, file_item in enumerate(image_files):
-                        meta = store_asset_bytes(
-                            conn,
-                            sample_id,
-                            file_item["content"],
-                            file_item["filename"],
-                            file_item["mime_type"],
-                            uploaded_by=self.client_address[0],
-                        )
-                        thumb_item = thumb_files.get(idx)
-                        if thumb_item:
-                            thumb_meta = store_thumbnail_bytes(
-                                conn,
-                                sample_id,
-                                meta["id"],
-                                thumb_item["content"],
-                                thumb_item["filename"],
-                                thumb_item["mime_type"],
-                                uploaded_at=meta.get("uploadedAt"),
-                                uploaded_by=self.client_address[0],
-                            )
-                            attach_thumbnail_meta(meta, thumb_meta)
-                        uploaded.append(meta)
+            with connect_db() as conn:
+                sample_row = conn.execute(
+                    "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                    (sample_id,),
+                ).fetchone()
+                if not sample_row:
+                    self._send_json({"ok": False, "error": "样机不存在"}, 404)
+                    return
+
+            uploaded = []
+            asset_records: list[tuple[str, dict]] = []
+            written_paths: list[str] = []
+            for idx, file_item in enumerate(image_files):
+                uploaded_at = now_iso()
+                meta = write_sample_asset_file(
+                    sample_id,
+                    f"photo_{uuid.uuid4().hex}",
+                    file_item["content"],
+                    file_item["filename"],
+                    file_item["mime_type"],
+                    uploaded_at=uploaded_at,
+                    file_prefix="photo",
+                )
+                asset_records.append(("photo", meta))
+                written_paths.append(str(meta.get("relativePath") or ""))
+                thumb_item = thumb_files.get(idx)
+                if thumb_item:
+                    thumb_meta = write_sample_asset_file(
+                        sample_id,
+                        thumbnail_asset_id(str(meta.get("id") or "")),
+                        thumb_item["content"],
+                        thumb_item["filename"],
+                        thumb_item["mime_type"],
+                        uploaded_at=uploaded_at,
+                        file_prefix="thumb",
+                    )
+                    asset_records.append(("photo_thumb", thumb_meta))
+                    written_paths.append(str(thumb_meta.get("relativePath") or ""))
+                    attach_thumbnail_meta(meta, thumb_meta)
+                uploaded.append(meta)
+
+            with write_db_connection() as conn:
+                missing_after_write = False
+                sample_row = conn.execute(
+                    "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                    (sample_id,),
+                ).fetchone()
+                if not sample_row:
+                    missing_after_write = True
+                else:
+                    for kind, meta in asset_records:
+                        upsert_sample_asset_meta(conn, sample_id, meta, kind, uploaded_by=self.client_address[0])
                     result = commit_sample_asset_mutation(
                         conn,
                         sample_id,
@@ -6735,10 +7329,16 @@ class Handler(BaseHTTPRequestHandler):
                         fields.get("remark", "上传样机外观照片"),
                         self.client_address[0],
                     )
-                    self._send_json({"ok": True, **result, "uploaded": uploaded})
+            if missing_after_write:
+                unlink_asset_relative_paths(written_paths, warn_label="清理未入库照片文件")
+                self._send_json({"ok": False, "error": "样机不存在"}, 404)
+                return
+            self._send_json({"ok": True, **result, "uploaded": uploaded})
         except ValueError as e:
             self._send_json({"ok": False, "error": str(e)}, 400)
         except Exception as e:
+            if "written_paths" in locals():
+                unlink_asset_relative_paths(written_paths, warn_label="清理上传失败照片文件")
             self._send_json({"ok": False, "error": str(e)}, 500)
 
     def do_DELETE(self) -> None:
@@ -6750,41 +7350,37 @@ class Handler(BaseHTTPRequestHandler):
 
         sample_id, photo_id = route
         try:
-            with DB_LOCK:
-                with connect_db() as conn:
-                    sample_row = conn.execute(
-                        "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
-                        (sample_id,),
-                    ).fetchone()
-                    if not sample_row:
-                        self._send_json({"ok": False, "error": "样机不存在"}, 404)
-                        return
-                    asset_rows = conn.execute(
-                        """
-                        SELECT relative_path FROM sample_assets
-                        WHERE sample_id = ? AND id IN (?, ?) AND kind IN ('photo', 'photo_thumb') AND deleted_at IS NULL
-                        """,
-                        (sample_id, photo_id, thumbnail_asset_id(photo_id)),
-                    ).fetchall()
-                    if not asset_rows:
-                        self._send_json({"ok": False, "error": "照片不存在"}, 404)
-                        return
-                    for asset in asset_rows:
-                        try:
-                            target = path_inside_data(asset["relative_path"])
-                            if target.is_file():
-                                target.unlink()
-                        except Exception as e:
-                            print(f"[WARN] 删除照片文件失败：{e}")
-                    conn.execute(
-                        """
-                        UPDATE sample_assets SET deleted_at = ?
-                        WHERE sample_id = ? AND id IN (?, ?) AND kind IN ('photo', 'photo_thumb')
-                        """,
-                        (now_iso(), sample_id, photo_id, thumbnail_asset_id(photo_id)),
-                    )
-                    result = commit_sample_asset_mutation(conn, sample_id, "delete_sample_photo", "删除样机外观照片", self.client_address[0])
-                    self._send_json({"ok": True, **result})
+            asset_paths: list[str] = []
+            result: dict | None = None
+            with write_db_connection() as conn:
+                sample_row = conn.execute(
+                    "SELECT id FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                    (sample_id,),
+                ).fetchone()
+                if not sample_row:
+                    self._send_json({"ok": False, "error": "样机不存在"}, 404)
+                    return
+                asset_rows = conn.execute(
+                    """
+                    SELECT relative_path FROM sample_assets
+                    WHERE sample_id = ? AND id IN (?, ?) AND kind IN ('photo', 'photo_thumb') AND deleted_at IS NULL
+                    """,
+                    (sample_id, photo_id, thumbnail_asset_id(photo_id)),
+                ).fetchall()
+                if not asset_rows:
+                    self._send_json({"ok": False, "error": "照片不存在"}, 404)
+                    return
+                asset_paths = [str(asset["relative_path"] or "") for asset in asset_rows if asset["relative_path"]]
+                conn.execute(
+                    """
+                    UPDATE sample_assets SET deleted_at = ?
+                    WHERE sample_id = ? AND id IN (?, ?) AND kind IN ('photo', 'photo_thumb')
+                    """,
+                    (now_iso(), sample_id, photo_id, thumbnail_asset_id(photo_id)),
+                )
+                result = commit_sample_asset_mutation(conn, sample_id, "delete_sample_photo", "删除样机外观照片", self.client_address[0])
+            unlink_asset_relative_paths(asset_paths, warn_label="删除照片文件")
+            self._send_json({"ok": True, **(result or {})})
         except Exception as e:
             self._send_json({"ok": False, "error": str(e)}, 500)
 
@@ -6800,46 +7396,45 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     self._send_json({"ok": False, "error": "照片名称不能为空"}, 400)
                     return
-                with DB_LOCK:
-                    with connect_db() as conn:
-                        row = conn.execute(
-                            """
-                            SELECT id
-                            FROM sample_assets
-                            WHERE sample_id = ? AND id = ? AND kind = 'photo' AND deleted_at IS NULL
-                            """,
-                            (sample_id, photo_id),
-                        ).fetchone()
-                        if not row:
-                            self._send_json({"ok": False, "error": "照片不存在"}, 404)
-                            return
-                        ts = now_iso()
+                with write_db_connection() as conn:
+                    row = conn.execute(
+                        """
+                        SELECT id
+                        FROM sample_assets
+                        WHERE sample_id = ? AND id = ? AND kind = 'photo' AND deleted_at IS NULL
+                        """,
+                        (sample_id, photo_id),
+                    ).fetchone()
+                    if not row:
+                        self._send_json({"ok": False, "error": "照片不存在"}, 404)
+                        return
+                    ts = now_iso()
+                    conn.execute(
+                        "UPDATE sample_assets SET original_name = ? WHERE sample_id = ? AND id = ? AND kind = 'photo'",
+                        (name, sample_id, photo_id),
+                    )
+                    sample_row = conn.execute("SELECT data_json FROM sample_records WHERE id = ?", (sample_id,)).fetchone()
+                    if sample_row:
+                        sample = json_obj(sample_row["data_json"], {}) or {}
+                        sample["updatedAt"] = ts
                         conn.execute(
-                            "UPDATE sample_assets SET original_name = ? WHERE sample_id = ? AND id = ? AND kind = 'photo'",
-                            (name, sample_id, photo_id),
+                            "UPDATE sample_records SET data_json = ?, updated_at = ? WHERE id = ?",
+                            (json_dumps(sample), ts, sample_id),
                         )
-                        sample_row = conn.execute("SELECT data_json FROM sample_records WHERE id = ?", (sample_id,)).fetchone()
-                        if sample_row:
-                            sample = json_obj(sample_row["data_json"], {}) or {}
-                            sample["updatedAt"] = ts
-                            conn.execute(
-                                "UPDATE sample_records SET data_json = ?, updated_at = ? WHERE id = ?",
-                                (json_dumps(sample), ts, sample_id),
-                            )
-                        state_row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
-                        current_revision = int(state_row["revision"] or 1) if state_row else 1
-                        new_revision = current_revision + 1
-                        conn.execute("UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1", (new_revision, ts))
-                        conn.execute(
-                            """
-                            INSERT INTO audit_log
-                            (time, user, action, remark, revision_before, revision_after, client_ip)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (ts, str(payload.get("user") or "管理员"), "rename_sample_photo", f"重命名样机照片：{name}", current_revision, new_revision, self.client_address[0]),
-                        )
-                        photos = load_sample_photos(conn, sample_id)
-                        conn.commit()
+                    state_row = conn.execute("SELECT revision FROM app_state WHERE id = 1").fetchone()
+                    current_revision = int(state_row["revision"] or 1) if state_row else 1
+                    new_revision = current_revision + 1
+                    conn.execute("UPDATE app_state SET revision = ?, updated_at = ? WHERE id = 1", (new_revision, ts))
+                    conn.execute(
+                        """
+                        INSERT INTO audit_log
+                        (time, user, action, remark, revision_before, revision_after, client_ip)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (ts, str(payload.get("user") or "管理员"), "rename_sample_photo", f"重命名样机照片：{name}", current_revision, new_revision, self.client_address[0]),
+                    )
+                    photos = load_sample_photos(conn, sample_id)
+                    conn.commit()
                 self._send_json({"ok": True, "revision": new_revision, "updated_at": ts, "sampleId": sample_id, "photos": photos})
             except json.JSONDecodeError:
                 self._send_json({"ok": False, "error": "请求体不是有效 JSON"}, 400)

@@ -5,10 +5,54 @@ const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 
+function fakeNodeText(item) {
+  if (item === null || item === undefined) return "";
+  if (typeof item === "string") return item;
+  return [
+    item.textContent || "",
+    item.innerText || "",
+    item.innerHTML || "",
+    ...(item.children || []).map(fakeNodeText),
+  ].join("");
+}
+
+function createFakeElement(tag = "div") {
+  return {
+    tagName: String(tag).toUpperCase(),
+    className: "",
+    dataset: {},
+    style: {},
+    attributes: {},
+    children: [],
+    innerHTML: "",
+    innerText: "",
+    textContent: "",
+    append(...items) {
+      this.children.push(...items);
+    },
+    replaceChildren(...items) {
+      this.children = [...items];
+      this.innerHTML = items.map(fakeNodeText).join("");
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+  };
+}
+
+function attachSamplePageNodes(nodes, categoryId) {
+  nodes.samplePageShell = createFakeElement("div");
+  nodes.samplePageShell.dataset.categoryId = categoryId;
+  nodes.samplePagerTop = createFakeElement("div");
+  nodes.samplePagerBottom = createFakeElement("div");
+  nodes.samplePoolCount = createFakeElement("div");
+  nodes.samplePoolGrid = createFakeElement("div");
+}
+
 function createContext() {
   const nodes = {
-    content: { innerHTML: "", innerText: "", style: {}, dataset: {} },
-    pageFooter: { innerHTML: "", innerText: "", style: {}, dataset: {} },
+    content: createFakeElement("div"),
+    pageFooter: createFakeElement("div"),
   };
   const context = {
     console,
@@ -19,9 +63,28 @@ function createContext() {
       getElementById(id) {
         return nodes[id] || null;
       },
+      createElement: createFakeElement,
+      createDocumentFragment() {
+        return createFakeElement("#fragment");
+      },
     },
     app: {
       version: "V7",
+      _modules: {},
+      registerModule(name, members) {
+        this._modules[name] = Object.keys(members || {});
+        Object.keys(members || {}).forEach(key => { this[key] = members[key]; });
+        return this;
+      },
+      replaceHtml(target, html) {
+        if (target) target.innerHTML = String(html || "");
+        return target;
+      },
+      htmlFragment(html) {
+        const fragment = createFakeElement("#fragment");
+        fragment.innerHTML = String(html || "");
+        return fragment;
+      },
       constants: {
         sampleStatuses: ["测试中", "闲置", "在位等待", "已退库", "取走分析"],
         taskStatuses: ["待下发", "进行中", "阻塞中", "正常完成", "异常终止"],
@@ -161,6 +224,41 @@ function flushPromises() {
   {
     const context = loadFrontend();
     const { app } = context;
+    app.updateServerStatus = () => {};
+    app.ensureFullStateLoaded = async () => { throw new Error("/api/state should not be loaded for sample destroy impact"); };
+    const loadedCategories = [];
+    const loadedProjects = [];
+    app.ensureSampleCategoryLoaded = async (id) => {
+      loadedCategories.push(id);
+      return { id };
+    };
+    app.ensureProjectLoaded = async (id, options) => {
+      loadedProjects.push([id, options.includeTasks]);
+      return { id };
+    };
+    let impactRequests = 0;
+    context.fetch = async (url) => {
+      impactRequests++;
+      assert.equal(String(url), "/api/sample-destroy-impact?sampleId=sample_destroy");
+      return { ok: true, status: 200, json: async () => ({
+        ok: true,
+        sampleId: "sample_destroy",
+        sampleCategoryIds: ["cat_destroy", "cat_keep"],
+        projectIds: ["project_destroy"],
+      }) };
+    };
+
+    const scope = await app.ensureSampleDestroyImpactScope({ sampleId: "sample_destroy" });
+
+    assert.equal(scope.sampleId, "sample_destroy");
+    assert.equal(impactRequests, 1);
+    assert.deepEqual(loadedCategories, ["cat_destroy", "cat_keep"]);
+    assert.deepEqual(loadedProjects, [["project_destroy", true]]);
+  }
+
+  {
+    const context = loadFrontend();
+    const { app } = context;
     let fetches = 0;
     context.fetch = async (url, options = {}) => {
       fetches++;
@@ -232,17 +330,23 @@ function flushPromises() {
       "SN-GLOBAL,,MB-GLOBAL,否,EVT",
     ].join("\n");
     context.FileReader = class {
+      addEventListener(event, handler) {
+        if (event === "load") this._loadHandler = handler;
+      }
       readAsText() {
         this.result = csv;
-        return Promise.resolve().then(() => this.onload && this.onload());
+        return Promise.resolve().then(() => this._loadHandler && this._loadHandler());
       }
     };
     context.document.createElement = tag => {
       assert.equal(tag, "input");
       return {
         files: [{ name: "samples.csv" }],
+        addEventListener(event, handler) {
+          if (event === "change") this._changeHandler = handler;
+        },
         click() {
-          this.onchange({ target: this });
+          this._changeHandler({ target: this });
         },
       };
     };
@@ -529,11 +633,7 @@ function flushPromises() {
   {
     const context = loadFrontend();
     const { app, nodes } = context;
-    nodes.samplePageShell = { dataset: { categoryId: "cat_local" }, innerHTML: "" };
-    nodes.samplePagerTop = { innerHTML: "" };
-    nodes.samplePagerBottom = { innerHTML: "" };
-    nodes.samplePoolCount = { innerText: "" };
-    nodes.samplePoolGrid = { innerHTML: "" };
+    attachSamplePageNodes(nodes, "cat_local");
     app._samplePagePrefetchDisabled = true;
     app.view.module = "samples";
     app.view.selectedCategoryId = "cat_local";
@@ -597,30 +697,45 @@ function flushPromises() {
     const project = { id: "project_commit", name: "项目", stages: [stage] };
     app.data.projects = [project];
     app.serverRevision = 1;
+    const taskParams = app.taskFlowQueryParams(stage);
+    const taskKey = app.taskFlowCacheKey(stage, taskParams);
+    app._taskFlowPageCache = {
+      key: taskKey,
+      stageId: stage.id,
+      page: 1,
+      pageSize: 100,
+      total: 1,
+      totalPages: 1,
+      stats: { totalInStage: 1, statusCounts: { "进行中": 1 }, ownerNames: ["张三"] },
+      rows: [{ progress: null, task }],
+    };
     let mutationFetches = 0;
     let pageFetches = 0;
     context.fetch = async (url) => {
       mutationFetches++;
       assert.ok(String(url).startsWith("/api/tasks/task_commit/mutation"));
-      return { ok: true, status: 200, json: async () => ({ ok: true, revision: 2, updated_at: "2026-06-03T10:00:00" }) };
+      return { ok: true, status: 200, json: async () => ({
+        ok: true,
+        revision: 2,
+        updated_at: "2026-06-03T10:00:00",
+        affected: {
+          summaryVersion: 1,
+          taskIds: ["task_commit"],
+          tasks: [{ ...task, projectId: project.id, stageId: stage.id }],
+          tasksTruncated: false,
+        },
+      }) };
     };
     app.fetchStageTasksPage = async () => {
       pageFetches++;
-      return {
-        page: 1,
-        pageSize: 100,
-        total: 1,
-        totalPages: 1,
-        stats: { totalInStage: 1, statusCounts: { "进行中": 1 }, ownerNames: ["张三"] },
-        rows: [{ progress: null, task }],
-      };
+      throw new Error("current task page should be patched from affected payload");
     };
 
     const saved = await app.commitTaskMutation(project, stage, task, { action: "start_task", remark: "开始测试", user: "张三/001" });
 
     assert.equal(saved, true);
     assert.equal(mutationFetches, 1);
-    assert.equal(pageFetches, 1);
+    assert.equal(pageFetches, 0);
     assert.equal(fullRenders, 0);
     assert.equal(app.serverRevision, 2);
     assert.ok(nodes.taskFlowShell.innerHTML.includes("跌落"));
@@ -678,11 +793,7 @@ function flushPromises() {
   {
     const context = loadFrontend();
     const { app, nodes } = context;
-    nodes.samplePageShell = { dataset: { categoryId: "cat_commit" }, innerHTML: "" };
-    nodes.samplePagerTop = { innerHTML: "" };
-    nodes.samplePagerBottom = { innerHTML: "" };
-    nodes.samplePoolCount = { innerText: "" };
-    nodes.samplePoolGrid = { innerHTML: "" };
+    attachSamplePageNodes(nodes, "cat_commit");
     app._samplePagePrefetchDisabled = true;
     app.view.module = "samples";
     app.view.selectedCategoryId = "cat_commit";
@@ -694,31 +805,56 @@ function flushPromises() {
     const sample = { id: "sample_commit", categoryId: "cat_commit", sn: "SN123456", status: "测试中" };
     app.data.sampleLibrary.categories = [{ id: "cat_commit", name: "池A", sampleCount: 1, samples: [sample] }];
     app.serverRevision = 1;
+    const sampleCategory = app.data.sampleLibrary.categories[0];
+    const sampleParams = app.samplePageQueryParams(sampleCategory);
+    const sampleKey = app.samplePageCacheKey(sampleCategory, sampleParams);
+    app.setSamplePageCache({
+      key: sampleKey,
+      filterKey: app.samplePageFilterKey(sampleCategory, sampleParams),
+      categoryId: sampleCategory.id,
+      page: 1,
+      pageSize: 100,
+      total: 1,
+      totalPages: 1,
+      stats: { totalInCategory: 1, statusCounts: { "测试中": 1 }, problemCounts: { ok: 1, fault: 0 } },
+      category: { id: "cat_commit", name: "池A" },
+      items: [sample],
+    });
     let mutationFetches = 0;
     let pageFetches = 0;
     context.fetch = async (url) => {
       mutationFetches++;
       assert.ok(String(url).startsWith("/api/samples/sample_commit/mutation"));
-      return { ok: true, status: 200, json: async () => ({ ok: true, revision: 2, updated_at: "2026-06-03T10:00:00" }) };
+      return { ok: true, status: 200, json: async () => ({
+        ok: true,
+        revision: 2,
+        updated_at: "2026-06-03T10:00:00",
+        affected: {
+          summaryVersion: 1,
+          sampleCategoryIds: ["cat_commit"],
+          sampleIds: ["sample_commit"],
+          sampleCategorySummaries: [{
+            id: "cat_commit",
+            name: "池A",
+            sampleCount: 1,
+            statusCounts: { "测试中": 1 },
+            problemCounts: { ok: 1, fault: 0 },
+          }],
+          samples: [sample],
+          samplesTruncated: false,
+        },
+      }) };
     };
     app.fetchSamplePage = async () => {
       pageFetches++;
-      return {
-        page: 1,
-        pageSize: 100,
-        total: 1,
-        totalPages: 1,
-        stats: { totalInCategory: 1, statusCounts: { "测试中": 1 }, problemCounts: { ok: 1, fault: 0 } },
-        category: { id: "cat_commit", name: "池A" },
-        items: [sample],
-      };
+      throw new Error("current sample page should be patched from affected payload");
     };
 
     const saved = await app.commitSampleMutation(sample, { action: "sample_detail_update", remark: "样机详情编辑", user: "管理员" });
 
     assert.equal(saved, true);
     assert.equal(mutationFetches, 1);
-    assert.equal(pageFetches, 1);
+    assert.equal(pageFetches, 0);
     assert.equal(fullRenders, 0);
     assert.equal(app.serverRevision, 2);
     assert.ok(nodes.samplePoolGrid.innerHTML.includes("SN#123456"));
@@ -727,11 +863,7 @@ function flushPromises() {
   {
     const context = loadFrontend();
     const { app, nodes } = context;
-    nodes.samplePageShell = { dataset: { categoryId: "cat_batch" }, innerHTML: "" };
-    nodes.samplePagerTop = { innerHTML: "" };
-    nodes.samplePagerBottom = { innerHTML: "" };
-    nodes.samplePoolCount = { innerText: "" };
-    nodes.samplePoolGrid = { innerHTML: "" };
+    attachSamplePageNodes(nodes, "cat_batch");
     app._samplePagePrefetchDisabled = true;
     app.view.module = "samples";
     app.view.selectedCategoryId = "cat_batch";
@@ -883,11 +1015,7 @@ function flushPromises() {
   {
     const context = loadFrontend();
     const { app, nodes } = context;
-    nodes.samplePageShell = { dataset: { categoryId: "cat_import" }, innerHTML: "" };
-    nodes.samplePagerTop = { innerHTML: "" };
-    nodes.samplePagerBottom = { innerHTML: "" };
-    nodes.samplePoolCount = { innerText: "" };
-    nodes.samplePoolGrid = { innerHTML: "" };
+    attachSamplePageNodes(nodes, "cat_import");
     app._samplePagePrefetchDisabled = true;
     app.view.module = "samples";
     app.view.selectedCategoryId = "cat_import";

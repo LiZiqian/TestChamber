@@ -2,7 +2,7 @@
    数字治理平台 V7 - 弹窗模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("app.modal", {
 
   // ---- 模态框 ----
   _syncModalInputsToAttributes() {
@@ -28,9 +28,10 @@ Object.assign(app, {
     if (!this._restoringModal && document.getElementById("modalMask").style.display === "flex") {
       this._syncModalInputsToAttributes();
       const modalEl = document.querySelector(".modal");
+      const modalBody = document.getElementById("modalBody");
       this._modalStack.push({
         title: document.getElementById("modalTitle").innerText,
-        bodyHtml: document.getElementById("modalBody").innerHTML,
+        bodyNodes: this.cloneChildNodes(modalBody),
         onOk: this._currentModalOnOk,
         okText: document.getElementById("modalOk").innerText,
         okClass: document.getElementById("modalOk").className,
@@ -51,20 +52,22 @@ Object.assign(app, {
       hint.innerText = options.headerHint || "";
       hint.style.display = options.headerHint ? "" : "none";
     }
-    document.getElementById("modalBody").innerHTML = bodyHtml;
+    const modalBody = document.getElementById("modalBody");
+    if (options.bodyNodes) this.replaceWithClonedNodes(modalBody, options.bodyNodes);
+    else this.replaceHtml(modalBody, bodyHtml);
     document.querySelectorAll(".modal-extra-action").forEach(btn => btn.remove());
-    const cancel = document.getElementById("modalCancel");
+    const cancel = this.resetEventTarget(document.getElementById("modalCancel"));
     if (cancel) {
       cancel.style.display = options.hideCancel ? "none" : "";
       cancel.innerText = options.cancelText || "取消";
       cancel.className = "btn btn-outline";
-      cancel.onclick = () => this.closeModal();
+      cancel.addEventListener("click", () => this.closeModal());
     }
-    const ok = document.getElementById("modalOk");
+    const ok = this.resetEventTarget(document.getElementById("modalOk"));
     if (!ok) { console.error("modalOk not found in DOM"); return; }
     ok.className = options.okClass || "btn";
     ok.innerText = okText;
-    ok.onclick = async () => {
+    ok.addEventListener("click", async () => {
       try {
         const keepOpen = onOk && onOk();
         if (keepOpen && typeof keepOpen.then === "function") {
@@ -80,7 +83,7 @@ Object.assign(app, {
         console.error("[showModal] onOk 异常：", e);
         alert("操作失败：" + (e.message || e));
       }
-    };
+    });
     document.getElementById("modalMask").style.display = "flex";
     this.updateSelectPlaceholderState(document.getElementById("modalBody"));
   },
@@ -106,11 +109,18 @@ Object.assign(app, {
     }
     cancel.style.display = options.hideCancel ? "none" : "";
     cancel.innerText = options.cancelText || "取消";
-    cancel.onclick = () => this.closeConfirm();
     ok.innerText = options.okText || "确认";
     ok.className = options.okClass || "btn";
-    ok.onclick = async () => {
-      ok.disabled = true;
+    const boundCancel = this.resetEventTarget(cancel);
+    const boundOk = this.resetEventTarget(ok);
+    if (!boundCancel || !boundOk) return;
+    boundCancel.style.display = cancel.style.display;
+    boundCancel.innerText = options.cancelText || "取消";
+    boundCancel.addEventListener("click", () => this.closeConfirm());
+    boundOk.innerText = options.okText || "确认";
+    boundOk.className = options.okClass || "btn";
+    boundOk.addEventListener("click", async () => {
+      boundOk.disabled = true;
       try {
         const result = typeof onOk === "function" ? onOk() : null;
         if (result && typeof result.then === "function") await result;
@@ -119,9 +129,9 @@ Object.assign(app, {
         console.error("[showConfirm] onOk 异常：", e);
         alert("操作失败：" + (e.message || e));
       } finally {
-        ok.disabled = false;
+        boundOk.disabled = false;
       }
-    };
+    });
     mask.style.display = "flex";
   },
 
@@ -147,12 +157,13 @@ Object.assign(app, {
     if (this._modalStack.length > 0) {
       const prev = this._modalStack.pop();
       this._restoringModal = true;
-      this.showModal(prev.title, prev.bodyHtml, prev.onOk, prev.okText, {
+      this.showModal(prev.title, "", prev.onOk, prev.okText, {
         okClass: prev.okClass || "btn",
         hideCancel: prev.hideCancel,
         cancelText: prev.cancelText,
         headerHint: prev.headerHint || "",
-        className: prev.className || ""
+        className: prev.className || "",
+        bodyNodes: prev.bodyNodes || []
       });
       return;
     }
@@ -175,14 +186,35 @@ Object.assign(app, {
     modal.querySelectorAll(".field-error").forEach(el => el.remove());
   },
 
+  fieldErrorNode(message) {
+    const node = document.createElement("div");
+    node.className = "field-error";
+    node.textContent = String(message || "");
+    return node;
+  },
+
+  appendFieldError(container, message) {
+    if (!container || !message || container.querySelector(".field-error")) return null;
+    const node = this.fieldErrorNode(message);
+    container.append(node);
+    return node;
+  },
+
+  insertFieldErrorAfter(anchor, message) {
+    const parent = anchor?.parentElement || null;
+    if (!parent || !message || parent.querySelector(".field-error")) return null;
+    const node = this.fieldErrorNode(message);
+    if (typeof anchor.after === "function") anchor.after(node);
+    else parent.insertBefore(node, anchor.nextSibling || null);
+    return node;
+  },
+
   // 将指定元素标记为校验失败，在其所属 .form-group 中显示错误信息
   markFieldInvalid(el, message) {
     if (!el) return;
     el.classList.add("is-invalid");
     const group = el.closest(".form-group") || el.closest(".form-row") || el.parentElement;
-    if (group && message && !group.querySelector(".field-error")) {
-      group.insertAdjacentHTML("beforeend", `<div class="field-error">${Utils.esc(message)}</div>`);
-    }
+    this.appendFieldError(group, message);
     const first = document.querySelector(".modal .is-invalid");
     first?.scrollIntoView({ block: "center", behavior: "smooth" });
   },

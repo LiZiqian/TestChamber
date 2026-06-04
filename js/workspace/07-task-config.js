@@ -3,7 +3,7 @@
    含任务池创建·计划配置·样机配置·配置弹窗
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.taskConfig", {
 
   /**
    * 解析任务对应的 progress：
@@ -84,19 +84,19 @@ Object.assign(app, {
       const existing = taskCountByProgress.get(p.id) || 0;
       return `
         <tr>
-          <td style="text-align:center"><input class="task-pool-check" type="checkbox" data-index="${idx}" onchange="app.updateTaskPoolSelectionCount()" style="width:auto"></td>
+          <td style="text-align:center"><input class="task-pool-check" type="checkbox" data-index="${idx}" data-app-action="task-pool-selection" data-app-events="change" style="width:auto"></td>
           <td>${Utils.esc(stage.skuNames?.[p.skuIndex - 1] || `SKU${p.skuIndex}`)}</td>
           <td class="compact-cell"><b>${Utils.esc(this.taskCategoryItemText(p.category, p.testItem))}</b></td>
           <td>${required === null ? "-" : `${required} 台`}</td>
           <td>${existing ? `${existing} 个` : "-"}</td>
-          <td><input class="task-pool-count" data-index="${idx}" type="number" min="1" step="1" value="1" oninput="app.updateTaskPoolSelectionCount()"></td>
+          <td><input class="task-pool-count" data-index="${idx}" type="number" min="1" step="1" value="1" data-app-action="task-pool-selection" data-app-events="input"></td>
         </tr>`;
     }).join("");
     this.showModal("新增任务", `
       <div class="path">从当前阶段测试池选择测试项生成真实任务。可重复新增，新增后默认均为"待下发"。</div>
       <div class="task-pool-toolbar">
-        <button type="button" class="btn btn-sm btn-outline" onclick="app.setTaskPoolChecked(true)">全选</button>
-        <button type="button" class="btn btn-sm btn-outline" onclick="app.setTaskPoolChecked(false)">清空</button>
+        <button type="button" class="btn btn-sm btn-outline" data-app-action="task-pool-check-all" data-value="1">全选</button>
+        <button type="button" class="btn btn-sm btn-outline" data-app-action="task-pool-check-all" data-value="0">清空</button>
         <span id="taskPoolSelectionHint" class="task-pool-hint">已选 0 项，将新增 0 个任务</span>
       </div>
       <div class="table-wrap task-pool-table"><table>
@@ -189,7 +189,7 @@ Object.assign(app, {
   },
 
   async assignPlanTaskSamples(projectId, stageId, progressId, taskId = "") {
-    const p = this.data.projects.find(x => x.id === projectId);
+    const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
@@ -242,7 +242,7 @@ Object.assign(app, {
   },
 
   setPlanTaskSchedule(projectId, stageId, progressId, taskId = "") {
-    const p = this.data.projects.find(x => x.id === projectId);
+    const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
@@ -257,7 +257,7 @@ Object.assign(app, {
       : `<div class="field-error" style="display:block;margin-top:6px">
           ⚠ 项目人员名单为空，无法选择执行人。
           <button type="button" class="btn btn-sm" style="margin-left:8px"
-            onclick="app.closeModal();app.addProjectMember();">立即新增人员</button>
+            data-app-action="task-config-member-add">立即新增人员</button>
         </div>`;
     this.showModal("设置计划时间", `
       <div class="path">计划任务：${Utils.esc(this.getProgressDisplayName(s, progress))}</div>
@@ -317,8 +317,23 @@ Object.assign(app, {
     return "未知测试项";
   },
 
+  taskConfigTitlebarNode(stage, progress, task) {
+    const titlebar = document.createElement("div");
+    titlebar.className = "task-config-titlebar";
+
+    const title = document.createElement("span");
+    title.textContent = "任务配置";
+
+    const context = document.createElement("span");
+    context.className = "task-config-title-context";
+    context.textContent = `计划任务：${this.taskConfigDisplayName(stage, progress, task)}`;
+
+    titlebar.append(title, context);
+    return titlebar;
+  },
+
   async openTaskConfigPanel(projectId, stageId, progressId, taskId = "", initialTab = "plan") {
-    const p = this.data.projects.find(x => x.id === projectId);
+    const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     const t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
@@ -330,21 +345,19 @@ Object.assign(app, {
       "保存并关闭",
       { className: "task-config-modal", hideCancel: false, cancelText: "取消" }
     );
-    // 标题栏替换为左右布局（showModal 使用 innerText，这里用 innerHTML 覆盖）
+    // 标题栏替换为左右布局
     setTimeout(() => {
       const titleEl = document.getElementById("modalTitle");
       if (titleEl) {
-        titleEl.innerHTML = `<div class="task-config-titlebar">
-          <span>任务配置</span>
-          <span class="task-config-title-context">计划任务：${Utils.esc(this.taskConfigDisplayName(s, progress, t))}</span>
-        </div>`;
+        titleEl.textContent = "";
+        titleEl.append(this.taskConfigTitlebarNode(s, progress, t));
       }
     }, 0);
     // 覆盖取消按钮：检查未保存修改
     setTimeout(() => {
-      const cancelBtn = document.getElementById("modalCancel");
+      const cancelBtn = this.resetEventTarget(document.getElementById("modalCancel"));
       if (cancelBtn) {
-        cancelBtn.onclick = () => {
+        cancelBtn.addEventListener("click", () => {
           if (this.hasUnsavedTaskConfigChanges(projectId, stageId, progressId, taskId)) {
             this.showConfirm("有未保存的修改，确定放弃吗？", () => this.closeModal(), {
               title: "放弃修改", okText: "放弃", okClass: "btn btn-danger", cancelText: "继续编辑"
@@ -352,7 +365,7 @@ Object.assign(app, {
           } else {
             this.closeModal();
           }
-        };
+        });
       }
     }, 0);
     // 若默认进入样机配置页，初始化数量提示
@@ -367,10 +380,10 @@ Object.assign(app, {
     const sampleActive = activeTab === "sample" ? "active" : "";
     return `<div class="task-config-shell">
       <div class="task-config-nav">
-        <div class="task-config-nav-card ${planActive}" onclick="app.switchTaskConfigTab('plan')">
+        <div class="task-config-nav-card ${planActive}" data-app-action="task-config-tab" data-value="plan">
           <b>计划配置</b>
         </div>
-        <div class="task-config-nav-card ${sampleActive}" onclick="app.switchTaskConfigTab('sample')">
+        <div class="task-config-nav-card ${sampleActive}" data-app-action="task-config-tab" data-value="sample">
           <b>样机配置</b>
         </div>
       </div>
@@ -395,7 +408,7 @@ Object.assign(app, {
       : `<div class="field-error" style="display:block;margin-top:6px">
           ⚠ 项目人员名单为空，无法选择执行人。
           <button type="button" class="btn btn-sm" style="margin-left:8px"
-            onclick="app.closeModal();app.addProjectMember();">立即新增人员</button>
+            data-app-action="task-config-member-add">立即新增人员</button>
         </div>`;
     return `
       <div class="form-group">
@@ -428,7 +441,7 @@ Object.assign(app, {
 
 
   async saveTaskConfigAll(projectId, stageId, progressId, taskId) {
-    const p = this.data.projects.find(x => x.id === projectId);
+    const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     let t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     const progress = (s?.progress || []).find(x => x.id === progressId) || this.resolveTaskProgress(s, t, progressId).progress;
@@ -454,7 +467,16 @@ Object.assign(app, {
       const labelRow = document.querySelector(".task-sample-label-row-compact");
       const exist = labelRow?.parentElement?.querySelector(".field-error");
       if (exist) exist.remove();
-      if (labelRow) labelRow.insertAdjacentHTML("afterend", `<div class="field-error">${Utils.esc(check.msg)}</div>`);
+      if (labelRow) {
+        if (typeof this.insertFieldErrorAfter === "function") {
+          this.insertFieldErrorAfter(labelRow, check.msg);
+        } else {
+          const node = document.createElement("div");
+          node.className = "field-error";
+          node.textContent = check.msg;
+          labelRow.parentElement?.insertBefore(node, labelRow.nextSibling || null);
+        }
+      }
       this.switchTaskConfigTab("sample");
       return true;
     }
@@ -520,7 +542,7 @@ Object.assign(app, {
   },
 
   hasUnsavedTaskConfigChanges(projectId, stageId, progressId, taskId) {
-    const p = this.data.projects.find(x => x.id === projectId);
+    const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     const t = taskId ? s?.tasks.find(x => x.id === taskId) : null;
     if (!p || !s) return false;

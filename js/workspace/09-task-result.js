@@ -3,7 +3,7 @@
    含结果上传·样机去向·问题记录·图片·完成
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.taskResult", {
 
   defaultSampleReceiver(sample, task) {
     return sample?.borrower || "";
@@ -47,7 +47,12 @@ Object.assign(app, {
     if (takerLabel) {
       const star = takerLabel.querySelector(".req-star");
       if (dest === "取走分析") {
-        if (!star) takerLabel.insertAdjacentHTML("beforeend", '<span class="req-star">*</span>');
+        if (!star) {
+          const node = document.createElement("span");
+          node.className = "req-star";
+          node.textContent = "*";
+          takerLabel.append(node);
+        }
       } else {
         if (star) star.remove();
       }
@@ -126,7 +131,7 @@ Object.assign(app, {
         <label>本次新增失效/问题</label>
         <div class="task-result-problem-line">
           <input class="task-result-sample-problem" value="${Utils.esc(draftItem?.problem || "")}" placeholder="不填则不追加问题记录">
-          <button type="button" class="btn btn-outline task-result-photo-btn" ${sample ? "" : "disabled"} onclick="app.uploadTaskResultPhotos(this)">上传图片</button>
+          <button type="button" class="btn btn-outline task-result-photo-btn" ${sample ? "" : "disabled"} data-app-action="task-result-photo-upload">上传图片</button>
         </div>
         <input type="hidden" class="task-result-sample-photos" value="${Utils.esc(JSON.stringify(photos))}">
         <div class="task-result-photo-list"></div>
@@ -149,8 +154,15 @@ Object.assign(app, {
       <input class="task-result-existing-problem-desc" value="${Utils.esc(item.description || "")}" placeholder="问题描述">
       <input class="task-result-existing-problem-source" value="${Utils.esc(item.source || "手动补录")}" placeholder="来源">
       <input class="task-result-existing-problem-task" value="${Utils.esc(item.taskLabel || "")}" placeholder="关联任务">
-      <button type="button" class="sample-result-btn remove" title="从样机问题表删除" onclick="app.removeTaskResultProblemRow(this)">-</button>
+      <button type="button" class="sample-result-btn remove" title="从样机问题表删除" data-app-action="task-result-problem-remove">-</button>
     </div>`;
+  },
+
+  taskResultProblemEmptyNode() {
+    const node = document.createElement("div");
+    node.className = "task-result-problem-empty";
+    node.textContent = "当前档案暂无问题记录。";
+    return node;
   },
 
   removeTaskResultProblemRow(btn) {
@@ -159,7 +171,8 @@ Object.assign(app, {
     if (!row || !wrap) return;
     row.remove();
     if (!wrap.querySelector(".task-result-existing-problem-row")) {
-      wrap.innerHTML = `<div class="task-result-problem-empty">当前档案暂无问题记录。</div>`;
+      wrap.textContent = "";
+      wrap.append(this.taskResultProblemEmptyNode());
     }
   },
 
@@ -194,7 +207,7 @@ Object.assign(app, {
         <div class="task-result-route-grid">
           <div class="form-group">
             <label class="req">样机去向</label>
-            <select class="task-result-sample-destination" onchange="app.onTaskResultDestinationChange(this)">${this.taskSampleDestinationOptionsHtml(destination)}</select>
+            <select class="task-result-sample-destination" data-app-action="task-result-destination" data-app-events="change">${this.taskSampleDestinationOptionsHtml(destination)}</select>
           </div>
           <div class="form-group">
             <label class="req">去向位置</label>
@@ -236,17 +249,37 @@ Object.assign(app, {
     this.renderTaskResultPhotoList(row);
   },
 
+  taskResultPhotoChipNode(sampleId, photo = {}) {
+    const name = photo.name || "结果图片";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "task-result-photo-chip";
+    button.dataset.appAction = "task-result-photo-preview";
+    button.dataset.id = sampleId || "";
+    button.dataset.photoId = photo.id || "";
+    button.title = name;
+
+    const thumbUrl = this.photoThumbUrl(photo);
+    if (thumbUrl) {
+      const img = document.createElement("img");
+      img.src = thumbUrl;
+      img.alt = name;
+      button.append(img);
+    }
+
+    const label = document.createElement("span");
+    label.textContent = name;
+    button.append(label);
+    return button;
+  },
+
   renderTaskResultPhotoList(row) {
     const list = row?.querySelector(".task-result-photo-list");
     if (!list) return;
     const sampleId = row.dataset.sid || "";
     const photos = this.taskResultRowPhotos(row);
-    list.innerHTML = photos.length ? photos.map(photo => `
-      <button type="button" class="task-result-photo-chip" onclick="app.previewSamplePhoto('${Utils.esc(sampleId)}','${Utils.esc(photo.id)}')" title="${Utils.esc(photo.name || "结果图片")}">
-        ${this.photoThumbUrl(photo) ? `<img src="${Utils.esc(this.photoThumbUrl(photo))}" alt="${Utils.esc(photo.name || "结果图片")}">` : ""}
-        <span>${Utils.esc(photo.name || "结果图片")}</span>
-      </button>
-    `).join("") : "";
+    list.textContent = "";
+    photos.forEach(photo => list.append(this.taskResultPhotoChipNode(sampleId, photo)));
   },
 
   uploadTaskResultPhotos(btn) {
@@ -258,7 +291,7 @@ Object.assign(app, {
     input.type = "file";
     input.accept = "image/*";
     input.multiple = true;
-    input.onchange = async () => {
+    input.addEventListener("change", async () => {
       const files = [...(input.files || [])];
       if (!files.length) return;
       const oldText = btn.innerText;
@@ -293,7 +326,7 @@ Object.assign(app, {
         btn.disabled = false;
         btn.innerText = oldText;
       }
-    };
+    }, { once: true });
     input.click();
   },
 
@@ -616,7 +649,7 @@ Object.assign(app, {
 
   restoreTaskResultSaveSnapshot(snapshot) {
     if (!snapshot) return;
-    this.data = snapshot.data;
+    this.restoreDataSnapshot(snapshot.data);
     this._baseData = snapshot.baseData;
     this._lastTaskMutationError = null;
   },
@@ -628,7 +661,7 @@ Object.assign(app, {
       const project = await this.fetchProjectDetail(projectId, { includeTasks: true });
       if (project) {
         this.mergeProjectDetail(project, { includeTasks: true });
-        this._baseData = this.cloneData(this.data);
+        this._baseData = this.dataSnapshot();
         this.invalidatePagedCaches?.({ stageId });
         this.render?.();
       }
@@ -681,8 +714,8 @@ Object.assign(app, {
       this._taskFinishInFlight[finishKey] = true;
     }
     const snapshot = finishTask ? {
-      data: this.cloneData(this.data),
-      baseData: this.cloneData(this._baseData || this.data)
+      data: this.dataSnapshot(),
+      baseData: this.cloneData(this._baseData || this.dataSnapshot())
     } : null;
     try {
       this.applyTaskResult(p, s, t, payload, finishTask);
@@ -773,7 +806,7 @@ Object.assign(app, {
       endBtn.type = "button";
       endBtn.className = "btn btn-purple modal-extra-action";
       endBtn.innerText = "结束任务";
-      endBtn.onclick = async () => {
+      endBtn.addEventListener("click", async () => {
         if (endBtn.disabled || ok?.disabled) return;
         const oldText = endBtn.innerText;
         const okWasDisabled = !!ok?.disabled;
@@ -794,7 +827,7 @@ Object.assign(app, {
             if (ok) ok.disabled = okWasDisabled;
           }
         }
-      };
+      });
       ok?.insertAdjacentElement("afterend", endBtn);
     }
   },

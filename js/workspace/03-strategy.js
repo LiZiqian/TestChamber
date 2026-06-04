@@ -3,28 +3,32 @@
    含策略页导航·BOM·测试策略·用例导入
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.strategy", {
 
   // ==================== 阶段策略配置页 ====================
   openStageStrategy(stageId) {
-    this.view.selectedStageId = stageId;
-    this.view.stageStrategyId = stageId;
-    this.view.module = "projectWorkspace";
+    this.patchViewState({
+      selectedStageId: stageId,
+      stageStrategyId: stageId,
+      module: "projectWorkspace"
+    });
     this.render();
   },
 
   closeStageStrategy() {
     // 自动同步策略进展
     this.autoSyncProgress();
-    this.view.stageStrategyId = null;
+    this.clearStageStrategyState();
     this.render();
   },
 
   leaveStageStrategy(targetModule = "projectWorkspace") {
     this.autoSyncProgress();
-    this.view.stageStrategyId = null;
-    this.view.module = targetModule;
-    if (targetModule !== "projectWorkspace") this.view.selectedCategoryId = null;
+    this.patchViewState({
+      stageStrategyId: null,
+      module: targetModule,
+      ...(targetModule !== "projectWorkspace" ? { selectedCategoryId: null } : {})
+    });
     this.persistStageStrategyMutation("leave_stage_strategy", "离开阶段策略页保存", { render: false });
     this.render();
   },
@@ -47,22 +51,45 @@ Object.assign(app, {
 
   renderStageStrategyPage() {
     const p = this.currentProject();
-    const s = p?.stages.find(st => st.id === this.view.stageStrategyId) || this.currentStage();
-    if (!p || !s) { this.view.stageStrategyId = null; this.render(); return; }
-    this.view.selectedStageId = s.id;
-    document.getElementById("content").innerHTML = `
-      <div class="card stage-edit-panel">
-        <div>
-          <h3 style="margin:0">阶段与方案设置</h3>
-          <div class="path">可随时修改阶段名称，并通过 + / - 调整该阶段包含的方案。</div>
-        </div>
-        <div class="inline-stage-editor">
-          ${this.inlineStageEditorHtml(s)}
-        </div>
-      </div>
-      <div class="card workspace-section section-purple">${this.workspaceBomHtml(s)}</div>
-      <div class="card workspace-section section-purple">${this.workspaceStrategyHtml(s)}</div>
-    `;
+    const s = p?.stages.find(st => st.id === this.stageStrategyId()) || this.currentStage();
+    if (!p || !s) { this.clearStageStrategyState(); this.render(); return; }
+    this.patchViewState({ selectedStageId: s.id });
+    this.replaceStageStrategyContentNodes(document.getElementById("content"), this.stageStrategyPageNodes(s));
+  },
+
+  replaceStageStrategyContentNodes(target, nodes = []) {
+    if (!target) return null;
+    if (typeof target.replaceChildren === "function") target.replaceChildren(...nodes);
+    else {
+      this.replaceHtml(target, "");
+      nodes.forEach(node => target.append?.(node));
+    }
+    return target;
+  },
+
+  stageStrategyPageNodes(stage) {
+    const editPanel = document.createElement("div");
+    editPanel.className = "card stage-edit-panel";
+    const intro = document.createElement("div");
+    const title = document.createElement("h3");
+    title.style.margin = "0";
+    title.textContent = "阶段与方案设置";
+    const desc = document.createElement("div");
+    desc.className = "path";
+    desc.textContent = "可随时修改阶段名称，并通过 + / - 调整该阶段包含的方案。";
+    intro.append(title, desc);
+    const editor = document.createElement("div");
+    editor.className = "inline-stage-editor";
+    this.replaceHtml(editor, this.inlineStageEditorHtml(stage));
+    editPanel.append(intro, editor);
+
+    const bom = document.createElement("div");
+    bom.className = "card workspace-section section-purple";
+    this.replaceHtml(bom, this.workspaceBomHtml(stage));
+    const strategy = document.createElement("div");
+    strategy.className = "card workspace-section section-purple";
+    this.replaceHtml(strategy, this.workspaceStrategyHtml(stage));
+    return [editPanel, bom, strategy];
   },
 
   // ==================== BOM 上料清单（删除规格/说明列）====================
@@ -73,7 +100,7 @@ Object.assign(app, {
           <h3 style="margin:0">BOM 上料清单</h3>
           <div class="bom-desc">BOM 上料清单用于记录不同方案之间的物料组成差异。每一行代表一种物料或配置项，每一列代表一个方案。<br>STEP1：请先点击「新增物料」添加物料行。<br>STEP2：为每个方案录入物料、规格、版本、数量或差异说明。</div>
         </div>
-        <button class="btn btn-sm" onclick="app.addBomRow()">+ 新增物料</button>
+        <button class="btn btn-sm" data-app-action="bom-add">+ 新增物料</button>
       </div>
       <div class="mini-table bom-table"><table class="bom-config-table">
         <colgroup>
@@ -91,9 +118,9 @@ Object.assign(app, {
         <tbody>${(stage.bom || []).map((r, idx) => `
           <tr>
             <td class="row-no">${idx + 1}</td>
-            <td><input value="${Utils.esc(r.materialName || "")}" onchange="app.updateBom(${idx},'materialName',this.value)" placeholder="必填"></td>
-            ${stage.skuNames.map((n, i) => `<td><input value="${Utils.esc(r['sku' + (i + 1)] || "")}" onchange="app.updateBom(${idx},'sku${i + 1}',this.value)" placeholder="说明"></td>`).join("")}
-            <td><button class="stage-row-delete-btn" onclick="app.deleteBomRow(${idx})" title="删除" aria-label="删除 BOM 物料">🗑</button></td>
+            <td><input value="${Utils.esc(r.materialName || "")}" data-app-action="bom-update" data-app-events="change" data-index="${idx}" data-field="materialName" placeholder="必填"></td>
+            ${stage.skuNames.map((n, i) => `<td><input value="${Utils.esc(r['sku' + (i + 1)] || "")}" data-app-action="bom-update" data-app-events="change" data-index="${idx}" data-field="sku${i + 1}" placeholder="说明"></td>`).join("")}
+            <td><button class="stage-row-delete-btn" data-app-action="bom-delete" data-index="${idx}" title="删除" aria-label="删除 BOM 物料">🗑</button></td>
           </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 3}" class="empty">暂无 BOM 物料</td></tr>`}</tbody>
       </table></div>`;
   },
@@ -138,7 +165,7 @@ Object.assign(app, {
     return text.category.includes(kw) || text.item.includes(kw);
   },
   stageStrategyVisibleRows(stage) {
-    const filters = this.view.stageStrategyFilters || {};
+    const filters = this.ensureViewMap("stageStrategyFilters");
     const includeKw = String(filters.includeKeyword || "").trim();
     const excludeKw = String(filters.excludeKeyword || "").trim();
     return (stage.strategy || [])
@@ -147,7 +174,7 @@ Object.assign(app, {
       .filter(({ row }) => !excludeKw || !this.stageStrategyRowMatches(row, excludeKw));
   },
   stageStrategySearchHtml(stage, visibleRows) {
-    const filters = this.view.stageStrategyFilters || {};
+    const filters = this.ensureViewMap("stageStrategyFilters");
     const includeKeyword = filters.includeKeyword || "";
     const excludeKeyword = filters.excludeKeyword || "";
     const total = (stage.strategy || []).length;
@@ -158,15 +185,15 @@ Object.assign(app, {
         <label class="strategy-search-field">
           <span>正向搜索</span>
           <input type="text" value="${Utils.esc(includeKeyword)}" placeholder="类别 / 用例名称"
-            oninput="app.setStageStrategyFilter('includeKeyword', this.value)">
+            data-app-action="stage-strategy-filter" data-app-events="input" data-field="includeKeyword">
         </label>
         <label class="strategy-search-field">
           <span>反向搜索</span>
           <input type="text" value="${Utils.esc(excludeKeyword)}" placeholder="排除类别 / 用例名称"
-            oninput="app.setStageStrategyFilter('excludeKeyword', this.value)">
+            data-app-action="stage-strategy-filter" data-app-events="input" data-field="excludeKeyword">
         </label>
         <div class="strategy-search-count">显示 ${visible} / ${total} 条</div>
-        <button type="button" class="btn btn-sm btn-outline" ${hasFilter ? "" : "disabled"} onclick="app.clearStageStrategyFilters()">清空</button>
+        <button type="button" class="btn btn-sm btn-outline" ${hasFilter ? "" : "disabled"} data-app-action="stage-strategy-clear">清空</button>
       </div>`;
   },
   workspaceStrategyHtml(stage) {
@@ -182,8 +209,8 @@ Object.assign(app, {
         </div>
         <div class="case-tools">
           <span class="case-master-badge">用例库：${caseCount} 条</span>
-          <button class="btn btn-sm btn-outline" onclick="app.downloadTestCaseTemplate()">下载导入用例模板</button>
-          <button class="btn btn-sm btn-outline" onclick="app.importTestCaseXlsx()">导入用例集</button>
+          <button class="btn btn-sm btn-outline" data-app-action="test-case-template-download">下载导入用例模板</button>
+          <button class="btn btn-sm btn-outline" data-app-action="test-case-import">导入用例集</button>
         </div>
       </div>
       ${this.stageStrategySearchHtml(stage, visibleRows)}
@@ -207,25 +234,18 @@ Object.assign(app, {
         <tbody>${visibleRows.map(({ row: r, index: idx }) => `
           <tr data-strategy-row="${idx}">
             <td class="row-no">${idx + 1}</td>
-            <td><input data-field="category" value="${Utils.esc(r.category || "")}" autocomplete="off"
-              onfocus="app.openCaseDropdown(${idx},'category',this)"
-              onclick="app.openCaseDropdown(${idx},'category',this)"
-              oninput="app.onStrategyInput(${idx},'category',this);app.openCaseDropdown(${idx},'category',this)"
+            <td><input data-field="category" data-index="${idx}" data-app-action="strategy-input" data-app-events="focusin click input" value="${Utils.esc(r.category || "")}" autocomplete="off"
               placeholder="选择或输入"></td>
-            <td><input data-field="item" value="${Utils.esc(r.item || "")}" autocomplete="off"
-              onfocus="app.openCaseDropdown(${idx},'item',this)"
-              onclick="app.openCaseDropdown(${idx},'item',this)"
-              oninput="app.onStrategyInput(${idx},'item',this);app.openCaseDropdown(${idx},'item',this)"
+            <td><input data-field="item" data-index="${idx}" data-app-action="strategy-input" data-app-events="focusin click input" value="${Utils.esc(r.item || "")}" autocomplete="off"
               placeholder="搜索/选择/输入"></td>
-            <td><input data-field="sampleSize" type="number" min="1" step="1" value="${Utils.esc(r.sampleSize || "")}"
-              oninput="app.onStrategyInput(${idx},'sampleSize',this)"
-              onblur="app.validateSampleSizeInput(this)" placeholder="正整数"></td>
-            ${stage.skuNames.map((n, i) => `<td style="text-align:center;vertical-align:middle"><input data-sku="${i + 1}" type="checkbox" style="width:auto;vertical-align:middle" ${r.skuMap?.[i + 1] ? 'checked' : ''} onchange="app.updateStrategySku(${idx},${i + 1},this.checked)"></td>`).join("")}
-            <td><button class="stage-row-delete-btn" onclick="app.deleteStrategyRow(${idx})" title="删除" aria-label="删除测试策略">🗑</button></td>
+            <td><input data-field="sampleSize" data-index="${idx}" data-app-action="strategy-input" data-app-events="input focusout" type="number" min="1" step="1" value="${Utils.esc(r.sampleSize || "")}"
+              placeholder="正整数"></td>
+            ${stage.skuNames.map((n, i) => `<td style="text-align:center;vertical-align:middle"><input data-sku="${i + 1}" data-index="${idx}" data-app-action="strategy-sku" data-app-events="change" type="checkbox" style="width:auto;vertical-align:middle" ${r.skuMap?.[i + 1] ? 'checked' : ''}></td>`).join("")}
+            <td><button class="stage-row-delete-btn" data-app-action="strategy-delete" data-index="${idx}" title="删除" aria-label="删除测试策略">🗑</button></td>
           </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 5}" class="empty">${(stage.strategy || []).length ? "无匹配策略，请调整搜索条件。" : "暂无策略。先新增测试项。"}</td></tr>`}</tbody>
       </table></div>
         <div class="task-add-footer">
-          <button class="task-add-main" onclick="app.addStrategyRow()">
+          <button class="task-add-main" data-app-action="strategy-add">
             <span class="row-action-btn row-add-btn"></span>
             <span>新增测试项</span>
           </button>
@@ -266,7 +286,7 @@ Object.assign(app, {
     clearTimeout(this._strategySyncTimer);
     this._strategySyncTimer = setTimeout(() => {
       this._strategySyncTimer = null;
-      if (!this.view.stageStrategyId) return;
+      if (!this.stageStrategyId()) return;
       try { this.autoSyncProgress(); } catch (e) { console.warn("autoSyncProgress 静默同步失败：", e); }
     }, delay);
   },
@@ -349,7 +369,7 @@ Object.assign(app, {
   async importTestCaseXlsx() {
     const input = document.createElement("input");
     input.type = "file"; input.accept = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    input.onchange = async () => {
+    input.addEventListener("change", async () => {
       const file = input.files?.[0]; if (!file) return;
       try {
         const buffer = await file.arrayBuffer();
@@ -381,7 +401,7 @@ Object.assign(app, {
       } catch (e) {
         alert("导入用例集失败：" + (e.message || e));
       }
-    };
+    }, { once: true });
     input.click();
   },
 

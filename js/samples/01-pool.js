@@ -3,54 +3,95 @@
    Split from the previous monolithic module.
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("samples.pool", {
 
-  samplePagerHtml(page, totalPages, total, pageSize, { loading = false } = {}) {
+  samplePagerNode(page, totalPages, total, pageSize, { loading = false } = {}) {
     const start = total ? (page - 1) * pageSize + 1 : 0;
     const end = total ? Math.min(total, page * pageSize) : 0;
-    const pageBtn = (label, target, disabled = false) => `
-      <button type="button" class="btn btn-sm btn-outline" ${disabled || loading ? "disabled" : `onclick="app.setSamplePage(${target})"`}>${label}</button>`;
-    return `
-      <div class="list-pager sample-pager ${loading ? "is-loading" : ""}">
-        <div class="sample-pager-row">
-          <span class="path">显示 ${start}-${end} / ${total} 台</span>
-          ${pageBtn("上一页", page - 1, page <= 1)}
-          <span class="path">第 ${page} / ${totalPages} 页</span>
-          ${pageBtn("下一页", page + 1, page >= totalPages)}
-          <select class="sample-page-size-select" onchange="app.setSamplePageSize(this.value)">
-            ${[50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
-          </select>
-          ${loading ? `<span class="path sample-pager-loading">加载中...</span>` : ""}
-        </div>
-      </div>`;
+    const pager = document.createElement("div");
+    pager.className = `list-pager sample-pager${loading ? " is-loading" : ""}`;
+    const row = document.createElement("div");
+    row.className = "sample-pager-row";
+
+    const summary = document.createElement("span");
+    summary.className = "path";
+    summary.textContent = `显示 ${start}-${end} / ${total} 台`;
+    row.append(summary);
+
+    const pageBtn = (label, target, disabled = false) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm btn-outline";
+      button.textContent = label;
+      if (disabled || loading) button.disabled = true;
+      else {
+        button.dataset.appAction = "sample-page";
+        button.dataset.value = String(target);
+      }
+      return button;
+    };
+    row.append(pageBtn("上一页", page - 1, page <= 1));
+
+    const pageText = document.createElement("span");
+    pageText.className = "path";
+    pageText.textContent = `第 ${page} / ${totalPages} 页`;
+    row.append(pageText);
+    row.append(pageBtn("下一页", page + 1, page >= totalPages));
+
+    const select = document.createElement("select");
+    select.className = "sample-page-size-select";
+    select.dataset.appAction = "sample-page-size";
+    select.dataset.appEvents = "change";
+    [50, 100, 200, 500].forEach(size => {
+      const option = document.createElement("option");
+      option.value = String(size);
+      option.textContent = `每页 ${size}`;
+      option.selected = pageSize === size;
+      select.append(option);
+    });
+    row.append(select);
+
+    if (loading) {
+      const loadingText = document.createElement("span");
+      loadingText.className = "path sample-pager-loading";
+      loadingText.textContent = "加载中...";
+      row.append(loadingText);
+    }
+    pager.append(row);
+    return pager;
   },
 
   setSamplePage(page) {
-    this.view.samplePage = Math.max(1, Number.parseInt(page, 10) || 1);
-    const cat = this.data.sampleLibrary.categories.find(c => c.id === this.view.selectedCategoryId);
-    if (this.view.module === "samples" && cat) this.refreshSamplePageRegion(cat);
+    this.setSamplePoolPageState(page);
+    const cat = this.currentSampleCategory();
+    if (cat && this.isCurrentSampleCategoryPage(cat.id)) this.refreshSamplePageRegion(cat);
     else this.renderSamples();
   },
 
   setSamplePageSize(size) {
-    this.view.samplePageSize = this.boundedListPageSize(size, 100);
-    this.view.samplePage = 1;
+    this.setSamplePoolPageSizeState(size, 100);
+    this.renderSamples();
+  },
+
+  updateSamplePoolFilter(name, value, { render = true } = {}) {
+    if (!this.setSamplePoolFilterState(name, value, { resetPage: render })) return;
+    if (render) {
+      this.renderSamples();
+    }
+  },
+
+  clearSamplePoolFilters() {
+    this.resetSamplePoolFiltersState();
     this.renderSamples();
   },
 
   samplePageQueryParams(cat) {
+    const state = this.samplePoolPageState(100);
     const params = {
-      page: Math.max(1, Number.parseInt(this.view.samplePage, 10) || 1),
-      pageSize: this.boundedListPageSize(this.view.samplePageSize, 100)
+      page: state.page,
+      pageSize: state.pageSize
     };
-    const map = {
-      keyword: this.view.sampleKeyword,
-      status: this.view.sampleStatusFilter,
-      problemState: this.view.sampleProblemFilter,
-      owner: this.view.sampleOwnerFilter,
-      borrower: this.view.sampleBorrowerFilter
-    };
-    Object.entries(map).forEach(([key, value]) => {
+    Object.entries(state.filters).forEach(([key, value]) => {
       const text = String(value || "").trim();
       if (text) params[key] = text;
     });
@@ -160,7 +201,7 @@ Object.assign(app, {
       loadingSet.delete(key);
       if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
       const entry = this.storeSamplePageResult(cat, key, params, result);
-      if (this.view.module === "samples" && this.view.selectedCategoryId === cat.id) {
+      if (this.isCurrentSampleCategoryPage(cat.id)) {
         this.refreshSamplePageRegion(cat);
         this.prefetchAdjacentSamplePages(cat, entry, params);
       }
@@ -170,7 +211,7 @@ Object.assign(app, {
       if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
       this.storeSamplePageError(cat, key, params, e.message);
       console.error("样机分页刷新失败：", e);
-      if (this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.refreshSamplePageRegion(cat);
+      if (this.isCurrentSampleCategoryPage(cat.id)) this.refreshSamplePageRegion(cat);
       return false;
     }
   },
@@ -181,14 +222,15 @@ Object.assign(app, {
     this.fetchSampleCategoriesSummary()
       .then(categories => {
         this._sampleCategorySummaryLoading = false;
-        const byId = new Map((this.data.sampleLibrary.categories || []).map(cat => [String(cat.id || ""), cat]));
+        const categoryRecords = this.sampleCategoryRecords();
+        const byId = new Map(categoryRecords.map(cat => [String(cat.id || ""), cat]));
         categories.forEach(summary => {
           const cat = byId.get(String(summary.id || ""));
           if (cat) Object.assign(cat, summary);
-          else this.data.sampleLibrary.categories.push({ ...summary, samples: [] });
+          else categoryRecords.push({ ...summary, samples: [] });
         });
         this._sampleCategorySummaryLoaded = true;
-        if (this.view.module === "samples" && !this.view.selectedCategoryId) this.renderSamples();
+        if (this.viewModule() === "samples" && !this.selectedCategoryId()) this.renderSamples();
       })
       .catch(e => {
         this._sampleCategorySummaryLoading = false;
@@ -207,7 +249,7 @@ Object.assign(app, {
         loadingSet.delete(key);
         if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
         const entry = this.storeSamplePageResult(cat, key, params, result);
-        if (!prefetch && this.view.module === "samples" && this.view.selectedCategoryId === cat.id) {
+        if (!prefetch && this.isCurrentSampleCategoryPage(cat.id)) {
           this.refreshSamplePageRegion(cat);
           this.prefetchAdjacentSamplePages(cat, entry, params);
         }
@@ -217,7 +259,7 @@ Object.assign(app, {
         if (this._samplePageLoadingKey === key) this._samplePageLoadingKey = "";
         this.storeSamplePageError(cat, key, params, e.message);
         console.error("样机分页加载失败：", e);
-        if (!prefetch && this.view.module === "samples" && this.view.selectedCategoryId === cat.id) this.refreshSamplePageRegion(cat);
+        if (!prefetch && this.isCurrentSampleCategoryPage(cat.id)) this.refreshSamplePageRegion(cat);
       });
   },
 
@@ -257,7 +299,7 @@ Object.assign(app, {
     const totalPages = Number(cached?.totalPages ?? meta?.totalPages ?? Math.max(1, Math.ceil(total / pageSize))) || 1;
     const rawPage = Number.parseInt(cached?.page || params.page, 10) || 1;
     const page = Math.min(Math.max(1, rawPage), totalPages);
-    this.view.samplePage = page;
+    this.setSamplePoolPageState(page);
     return { cat, params, key, filterKey, cached, meta, loading, page, pageSize, total, totalPages, items: cached?.items || [] };
   },
 
@@ -271,18 +313,54 @@ Object.assign(app, {
       : `显示 ${state.total} / ${totalInCategory} 台`;
   },
 
-  samplePageGridHtml(cat, state) {
-    const addCard = `
-        <div class="card add-card" onclick="app.addSample('${cat.id}')">
-          <div class="add-card-plus">+</div>
-          <div class="add-card-label">新增样机</div>
-        </div>`;
-    const body = state.loading && !state.cached
-      ? `<div class="empty sample-empty-hint sample-page-loading">正在加载第 ${state.page} 页样机...</div>`
-      : state.cached?.error
-        ? `<div class="empty sample-empty-hint">样机分页加载失败：${Utils.esc(state.cached.error)}</div>`
-        : (state.items.length ? state.items.map(s => this.sampleCardHtml(s)).join("") : `<div class="empty sample-empty-hint">暂无样机</div>`);
-    return `${addCard}${body}`;
+  appendHtmlFragment(target, html) {
+    const fragment = typeof this.htmlFragment === "function" ? this.htmlFragment(html) : null;
+    if (fragment) target.append(fragment);
+    else {
+      const fallback = document.createElement("div");
+      fallback.textContent = String(html || "");
+      target.append(fallback);
+    }
+  },
+
+  sampleAddCardNode(cat) {
+    const card = document.createElement("div");
+    card.className = "card add-card";
+    card.dataset.appAction = "sample-add";
+    card.dataset.id = cat.id || "";
+    const plus = document.createElement("div");
+    plus.className = "add-card-plus";
+    plus.textContent = "+";
+    const label = document.createElement("div");
+    label.className = "add-card-label";
+    label.textContent = "新增样机";
+    card.append(plus, label);
+    return card;
+  },
+
+  sampleEmptyHintNode(text, extraClass = "") {
+    const empty = document.createElement("div");
+    empty.className = `empty sample-empty-hint${extraClass ? " " + extraClass : ""}`;
+    empty.textContent = text;
+    return empty;
+  },
+
+  samplePageGridNodes(cat, state) {
+    const nodes = [this.sampleAddCardNode(cat)];
+    if (state.loading && !state.cached) {
+      nodes.push(this.sampleEmptyHintNode(`正在加载第 ${state.page} 页样机...`, "sample-page-loading"));
+    } else if (state.cached?.error) {
+      nodes.push(this.sampleEmptyHintNode(`样机分页加载失败：${state.cached.error}`));
+    } else if (state.items.length) {
+      state.items.forEach(sample => {
+        const holder = document.createDocumentFragment ? document.createDocumentFragment() : document.createElement("div");
+        this.appendHtmlFragment(holder, this.sampleCardHtml(sample));
+        nodes.push(...Array.from(holder.childNodes || holder.children || []));
+      });
+    } else {
+      nodes.push(this.sampleEmptyHintNode("暂无样机"));
+    }
+    return nodes;
   },
 
   refreshSamplePageRegion(cat) {
@@ -292,97 +370,293 @@ Object.assign(app, {
       return;
     }
     const state = this.samplePageState(cat);
-    const pagerHtml = this.samplePagerHtml(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached });
+    const pagerNode = () => this.samplePagerNode(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached });
     shell.dataset.pageKey = state.key;
     const topPager = document.getElementById("samplePagerTop");
     const bottomPager = document.getElementById("samplePagerBottom");
     const count = document.getElementById("samplePoolCount");
     const grid = document.getElementById("samplePoolGrid");
-    if (topPager) topPager.innerHTML = pagerHtml;
-    if (bottomPager) bottomPager.innerHTML = state.total > state.pageSize ? pagerHtml : "";
+    this.replaceContentNodes(topPager, [pagerNode()]);
+    this.replaceContentNodes(bottomPager, state.total > state.pageSize ? [pagerNode()] : []);
     if (count) count.innerText = this.samplePoolCountText(cat, state);
-    if (grid) grid.innerHTML = this.samplePageGridHtml(cat, state);
+    this.replaceContentNodes(grid, this.samplePageGridNodes(cat, state));
   },
 
   renderSamples() {
     const content = document.getElementById("content");
-    const cat = this.data.sampleLibrary.categories.find(c => c.id === this.view.selectedCategoryId);
+    const cat = this.currentSampleCategory();
+    const categories = this.sampleCategoryRecords();
+    const filters = this.samplePoolPageState(100).filters;
 
     if (!cat) {
       this.loadSampleCategorySummary();
-      const categoryCards = this.data.sampleLibrary.categories.map(c => `
-          <div class="card sample-card" onclick="app.openCategory('${c.id}')">
-            <div class="sample-pool-card-header">
-              <span class="sample-pool-card-name">${Utils.esc(c.name)}</span>
-              <button type="button" class="sample-card-edit-btn" onclick="event.stopPropagation();app.editSampleCategory('${c.id}')" title="编辑样机池">✎</button>
-            </div>
-            ${c.description ? `<div class="sample-pool-card-desc">${Utils.esc(c.description)}</div>` : ""}
-            ${this.sampleCategoryStatsHtml(c)}
-            <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.deleteSampleCategory('${c.id}')" title="档案销毁">🗑</button>
-          </div>`).join("");
-      content.innerHTML = `
-        <div class="grid sample-category-grid">${categoryCards}
-          <div class="card add-card" onclick="app.addSampleCategory()">
-            <div class="add-card-plus">+</div>
-            <div class="add-card-label">新增样机池</div>
-          </div>
-        </div>`;
+      this.replaceContentNode(content, this.sampleCategoryOverviewNode(categories));
         // 页脚说明
         const ft = document.getElementById("pageFooter");
         if (ft) {
           ft.style.display = "";
-          ft.innerHTML = `<p class="page-footer-text">📦 可创建多个样机池 &nbsp;&nbsp;|&nbsp;&nbsp; 普通样机的 SN / IMEI / 主板SN 保持唯一，重组样机允许关联重复标识 &nbsp;&nbsp;|&nbsp;&nbsp; 项目管理中的测试任务可自由地在多个样机池内选取</p>`;
+          this.replaceContentNode(ft, this.sampleCategoryFooterNode());
         }
       return;
     }
 
     const state = this.samplePageState(cat);
-    const pagerHtml = this.samplePagerHtml(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached });
-
     // 进入样机池内部时隐藏页脚
     const ft2 = document.getElementById("pageFooter");
     if (ft2) ft2.style.display = "none";
 
-    content.innerHTML = `
-      <div id="samplePageShell" class="sample-page-shell" data-category-id="${Utils.esc(cat.id || "")}" data-page-key="${Utils.esc(state.key)}">
-      <div class="card sample-pool-toolbar">
-        <div class="sample-pool-toolbar-title">
-          <b class="sample-pool-code">${Utils.esc(cat.name)}</b>
-          ${cat.description ? `<span class="path sample-pool-desc">${Utils.esc(cat.description)}</span>` : ""}
-        </div>
-        <div class="sample-pool-toolbar-filters">
-          <input class="sample-pool-search" placeholder="样机详情 / 问题 / 履历搜索（回车搜索）" value="${Utils.esc(this.view.sampleKeyword)}" oninput="app.view.sampleKeyword=this.value" onkeydown="if(event.key==='Enter'){app.view.sampleKeyword=this.value;app.view.samplePage=1;app.renderSamples()}">
-          <select class="sample-pool-filter-status" onchange="app.view.sampleStatusFilter=this.value;app.view.samplePage=1;app.renderSamples()">
-            <option value="">全部使用状态</option>
-            ${this.constants.sampleStatuses.map(x => `<option ${this.view.sampleStatusFilter === x ? 'selected' : ''}>${x}</option>`).join("")}
-          </select>
-          <select class="sample-pool-filter-result" onchange="app.view.sampleProblemFilter=this.value;app.view.samplePage=1;app.renderSamples()">
-            <option value="">全部故障状态</option>
-            <option value="fault" ${this.view.sampleProblemFilter === "fault" ? "selected" : ""}>有故障</option>
-            <option value="ok" ${this.view.sampleProblemFilter === "ok" ? "selected" : ""}>无故障</option>
-          </select>
-          <select class="sample-pool-filter-person" onchange="app.view.sampleOwnerFilter=this.value;app.view.samplePage=1;app.renderSamples()">
-            <option value="">全部挂账人</option>
-            ${[...new Set((cat.samples||[]).map(s=>s.owner).filter(Boolean))].sort().map(x=>`<option ${this.view.sampleOwnerFilter===x?'selected':''}>${Utils.esc(x)}</option>`).join("")}
-          </select>
-          <select class="sample-pool-filter-person" onchange="app.view.sampleBorrowerFilter=this.value;app.view.samplePage=1;app.renderSamples()">
-            <option value="">全部持有人</option>
-            ${[...new Set((cat.samples||[]).map(s=>s.borrower).filter(Boolean))].sort().map(x=>`<option ${this.view.sampleBorrowerFilter===x?'selected':''}>${Utils.esc(x)}</option>`).join("")}
-          </select>
-          <button type="button" class="btn btn-sm btn-outline sample-pool-clear-btn" onclick="app.view.sampleKeyword='';app.view.sampleStatusFilter='';app.view.sampleProblemFilter='';app.view.sampleOwnerFilter='';app.view.sampleBorrowerFilter='';app.view.samplePage=1;app.renderSamples()">清空</button>
-          <span id="samplePoolCount" class="path sample-pool-count">${this.samplePoolCountText(cat, state)}</span>
-        </div>
-        <div class="sample-pool-toolbar-actions">
-          <button class="btn sample-pool-main-btn" onclick="app.downloadSampleTemplate()">下载批量导入模板</button>
-          <button class="btn btn-purple sample-pool-main-btn" onclick="app.importSampleBatch('${cat.id}')">批量新增</button>
-        </div>
-      </div>
-      <div id="samplePagerTop" data-sample-pager="top">${pagerHtml}</div>
-      <div id="samplePoolGrid" class="grid-small sample-pool-grid">
-        ${this.samplePageGridHtml(cat, state)}
-      </div>
-      <div id="samplePagerBottom" data-sample-pager="bottom">${state.total > state.pageSize ? pagerHtml : ""}</div>
-      </div>`;
+    this.replaceContentNode(content, this.samplePageShellNode(cat, state, filters));
+  },
+
+  replaceContentNode(target, node) {
+    return this.replaceContentNodes(target, node ? [node] : []);
+  },
+
+  replaceContentNodes(target, nodes = []) {
+    if (!target) return null;
+    const items = (nodes || []).filter(Boolean);
+    if (typeof target.replaceChildren === "function") target.replaceChildren(...items);
+    else {
+      target.textContent = "";
+      items.forEach(node => target.append?.(node));
+    }
+    return target;
+  },
+
+  samplePageShellNode(cat, state, filters) {
+    const shell = document.createElement("div");
+    shell.id = "samplePageShell";
+    shell.className = "sample-page-shell";
+    shell.dataset.categoryId = cat.id || "";
+    shell.dataset.pageKey = state.key || "";
+    shell.append(this.samplePageToolbarNode(cat, state, filters));
+
+    const topPager = document.createElement("div");
+    topPager.id = "samplePagerTop";
+    topPager.dataset.samplePager = "top";
+    topPager.append(this.samplePagerNode(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached }));
+    shell.append(topPager);
+
+    const grid = document.createElement("div");
+    grid.id = "samplePoolGrid";
+    grid.className = "grid-small sample-pool-grid";
+    grid.append(...this.samplePageGridNodes(cat, state));
+    shell.append(grid);
+
+    const bottomPager = document.createElement("div");
+    bottomPager.id = "samplePagerBottom";
+    bottomPager.dataset.samplePager = "bottom";
+    if (state.total > state.pageSize) {
+      bottomPager.append(this.samplePagerNode(state.page, state.totalPages, state.total, state.pageSize, { loading: state.loading && !state.cached }));
+    }
+    shell.append(bottomPager);
+    return shell;
+  },
+
+  samplePageToolbarNode(cat, state, filters) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "card sample-pool-toolbar";
+
+    const title = document.createElement("div");
+    title.className = "sample-pool-toolbar-title";
+    const code = document.createElement("b");
+    code.className = "sample-pool-code";
+    code.textContent = cat.name || "";
+    title.append(code);
+    if (cat.description) {
+      const desc = document.createElement("span");
+      desc.className = "path sample-pool-desc";
+      desc.textContent = cat.description;
+      title.append(desc);
+    }
+    toolbar.append(title);
+
+    const filterBar = document.createElement("div");
+    filterBar.className = "sample-pool-toolbar-filters";
+    const search = document.createElement("input");
+    search.className = "sample-pool-search";
+    search.placeholder = "样机详情 / 问题 / 履历搜索（回车搜索）";
+    search.value = filters.keyword || "";
+    search.dataset.appAction = "sample-filter-search";
+    search.dataset.appEvents = "input keydown";
+    filterBar.append(search);
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-status", "status", "全部使用状态", this.constants.sampleStatuses, filters.status));
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-result", "problemState", "全部故障状态", [
+      { value: "fault", label: "有故障" },
+      { value: "ok", label: "无故障" }
+    ], filters.problemState));
+    const owners = [...new Set((cat.samples || []).map(s => s.owner).filter(Boolean))].sort();
+    const borrowers = [...new Set((cat.samples || []).map(s => s.borrower).filter(Boolean))].sort();
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-person", "owner", "全部挂账人", owners, filters.owner));
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-person", "borrower", "全部持有人", borrowers, filters.borrower));
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "btn btn-sm btn-outline sample-pool-clear-btn";
+    clear.dataset.appAction = "sample-filters-clear";
+    clear.textContent = "清空";
+    filterBar.append(clear);
+    const count = document.createElement("span");
+    count.id = "samplePoolCount";
+    count.className = "path sample-pool-count";
+    count.textContent = this.samplePoolCountText(cat, state);
+    filterBar.append(count);
+    toolbar.append(filterBar);
+
+    const actions = document.createElement("div");
+    actions.className = "sample-pool-toolbar-actions";
+    const template = document.createElement("button");
+    template.type = "button";
+    template.className = "btn sample-pool-main-btn";
+    template.dataset.appAction = "sample-template-download";
+    template.textContent = "下载批量导入模板";
+    const batch = document.createElement("button");
+    batch.type = "button";
+    batch.className = "btn btn-purple sample-pool-main-btn";
+    batch.dataset.appAction = "sample-batch-import";
+    batch.dataset.id = cat.id || "";
+    batch.textContent = "批量新增";
+    actions.append(template, batch);
+    toolbar.append(actions);
+    return toolbar;
+  },
+
+  sampleFilterSelectNode(className, filterName, placeholder, options, currentValue) {
+    const select = document.createElement("select");
+    select.className = className;
+    select.dataset.appAction = "sample-filter";
+    select.dataset.appEvents = "change";
+    select.dataset.sampleFilter = filterName;
+    const first = document.createElement("option");
+    first.value = "";
+    first.textContent = placeholder;
+    select.append(first);
+    (options || []).forEach(option => {
+      const value = typeof option === "string" ? option : option.value;
+      const label = typeof option === "string" ? option : option.label;
+      const node = document.createElement("option");
+      node.value = value || "";
+      node.textContent = label || "";
+      node.selected = String(currentValue || "") === String(value || "");
+      select.append(node);
+    });
+    return select;
+  },
+
+  sampleCategoryOverviewNode(categories = []) {
+    const grid = document.createElement("div");
+    grid.className = "grid sample-category-grid";
+    (categories || []).forEach(category => grid.append(this.sampleCategoryCardNode(category)));
+    grid.append(this.addSampleCategoryCardNode());
+    return grid;
+  },
+
+  sampleCategoryCardNode(category) {
+    const card = document.createElement("div");
+    card.className = "card sample-card";
+    card.dataset.appAction = "sample-category-open";
+    card.dataset.id = category.id || "";
+
+    const header = document.createElement("div");
+    header.className = "sample-pool-card-header";
+    const name = document.createElement("span");
+    name.className = "sample-pool-card-name";
+    name.textContent = category.name || "";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "sample-card-edit-btn";
+    edit.dataset.appAction = "sample-category-edit";
+    edit.dataset.id = category.id || "";
+    edit.dataset.stopPropagation = "1";
+    edit.title = "编辑样机池";
+    edit.textContent = "✎";
+    header.append(name, edit);
+    card.append(header);
+
+    if (category.description) {
+      const desc = document.createElement("div");
+      desc.className = "sample-pool-card-desc";
+      desc.textContent = category.description;
+      card.append(desc);
+    }
+
+    card.append(this.sampleCategoryStatsNode(category));
+
+    const destroy = document.createElement("button");
+    destroy.type = "button";
+    destroy.className = "sample-card-destroy-btn";
+    destroy.dataset.appAction = "sample-category-delete";
+    destroy.dataset.id = category.id || "";
+    destroy.dataset.stopPropagation = "1";
+    destroy.title = "档案销毁";
+    destroy.textContent = "🗑";
+    card.append(destroy);
+    return card;
+  },
+
+  sampleCategoryStatsNode(category) {
+    const fragment = document.createDocumentFragment();
+    const samples = category.samples || [];
+    const serverCounts = category.statusCounts || {};
+    const problemCounts = category.problemCounts || {};
+    const count = status => serverCounts[status] ?? samples.filter(s => this.sampleEffectiveStatus(s) === status).length;
+
+    const total = document.createElement("div");
+    total.className = "sample-pool-card-total";
+    const totalNumber = document.createElement("b");
+    totalNumber.textContent = String(category.sampleCount ?? samples.length);
+    const totalLabel = document.createElement("span");
+    totalLabel.textContent = "台样机";
+    total.append(totalNumber, totalLabel);
+    fragment.append(total);
+
+    const chipClass = {
+      "测试中": "testing", "闲置": "idle", "在位等待": "waiting",
+      "已退库": "retired", "取走分析": "analysis"
+    };
+    const chips = [];
+    this.constants.sampleStatuses.forEach(status => {
+      const n = count(status);
+      if (n <= 0) return;
+      chips.push({ label: status, count: n, cls: chipClass[status] || "" });
+    });
+    const faultN = problemCounts.fault ?? samples.filter(s => this.sampleHasProblem(s)).length;
+    if (faultN > 0) chips.push({ label: "有故障", count: faultN, cls: "fault" });
+
+    if (chips.length) {
+      const chipWrap = document.createElement("div");
+      chipWrap.className = "sample-pool-card-chips";
+      chips.forEach(item => {
+        const chip = document.createElement("span");
+        chip.className = `sample-pool-chip ${item.cls}`.trim();
+        const n = document.createElement("b");
+        n.textContent = String(item.count);
+        chip.append(n, ` ${item.label}`);
+        chipWrap.append(chip);
+      });
+      fragment.append(chipWrap);
+    }
+    return fragment;
+  },
+
+  addSampleCategoryCardNode() {
+    const card = document.createElement("div");
+    card.className = "card add-card";
+    card.dataset.appAction = "sample-category-add";
+    const plus = document.createElement("div");
+    plus.className = "add-card-plus";
+    plus.textContent = "+";
+    const label = document.createElement("div");
+    label.className = "add-card-label";
+    label.textContent = "新增样机池";
+    card.append(plus, label);
+    return card;
+  },
+
+  sampleCategoryFooterNode() {
+    const p = document.createElement("p");
+    p.className = "page-footer-text";
+    p.textContent = "📦 可创建多个样机池   |   普通样机的 SN / IMEI / 主板SN 保持唯一，重组样机允许关联重复标识   |   项目管理中的测试任务可自由地在多个样机池内选取";
+    return p;
   },
 
   sampleUsageStatusClass(status) {
@@ -407,10 +681,10 @@ Object.assign(app, {
     const qualityText = hasProblem ? "有故障" : "无故障";
     const problemText = this.sampleProblemSummaryText(s);
     const stageText = [s.sourceStageName || "-", s.sourceSkuName || "-"].filter(Boolean).join(" · ");
-    return `<div class="card sample-card sample-archive-card status-${usageClass} ${hasProblem ? "has-problem" : "is-ok"}" data-usage-status="${Utils.esc(usageStatus)}" data-quality-status="${hasProblem ? "fault" : "ok"}" onclick="app.openSampleDetail('${Utils.esc(s.id)}')">
+    return `<div class="card sample-card sample-archive-card status-${usageClass} ${hasProblem ? "has-problem" : "is-ok"}" data-usage-status="${Utils.esc(usageStatus)}" data-quality-status="${hasProblem ? "fault" : "ok"}" data-app-action="sample-open" data-id="${Utils.esc(s.id)}">
       <div class="sample-card-top">
         <b class="sample-card-code">${Utils.esc(this.sampleDisplayCode(s))}</b>
-        <button type="button" class="sample-card-destroy-btn" onclick="event.stopPropagation();app.destroySample('${Utils.esc(s.id)}')" title="档案销毁" aria-label="档案销毁">🗑</button>
+        <button type="button" class="sample-card-destroy-btn" data-app-action="sample-destroy" data-id="${Utils.esc(s.id)}" data-stop-propagation="1" title="档案销毁" aria-label="档案销毁">🗑</button>
       </div>
       <div class="sample-card-content">
         <div class="sample-card-main">
@@ -443,29 +717,6 @@ Object.assign(app, {
     return "未录入SN/IMEI/主板SN";
   },
 
-  sampleCategoryStatsHtml(category) {
-    const samples = category.samples || [];
-    const serverCounts = category.statusCounts || {};
-    const problemCounts = category.problemCounts || {};
-    const count = status => serverCounts[status] ?? samples.filter(s => this.sampleEffectiveStatus(s) === status).length;
-    const chipClass = {
-      "测试中": "testing", "闲置": "idle", "在位等待": "waiting",
-      "已退库": "retired", "取走分析": "analysis"
-    };
-    const chips = this.constants.sampleStatuses
-      .filter(s => count(s) > 0)
-      .map(s => `<span class="sample-pool-chip ${chipClass[s] || ''}"><b>${count(s)}</b> ${Utils.esc(s)}</span>`);
-    const faultN = problemCounts.fault ?? samples.filter(s => this.sampleHasProblem(s)).length;
-    if (faultN > 0) chips.push(`<span class="sample-pool-chip fault"><b>${faultN}</b> 有故障</span>`);
-
-    return `
-      <div class="sample-pool-card-total">
-        <b>${category.sampleCount ?? samples.length}</b>
-        <span>台样机</span>
-      </div>
-      ${chips.length ? `<div class="sample-pool-card-chips">${chips.join("")}</div>` : ""}`;
-  },
-
   sampleStatusStatClass(status) {
     if (status === "闲置") return "stat-done";
     if (status === "测试中") return "stat-running";
@@ -480,7 +731,7 @@ Object.assign(app, {
   sampleCategoryNameExists(name, excludeId = "") {
     const normalized = String(name || "").trim().toLowerCase();
     if (!normalized) return false;
-    return (this.data.sampleLibrary.categories || []).some(c =>
+    return this.sampleCategoryRecords().some(c =>
       c.id !== excludeId && String(c.name || "").trim().toLowerCase() === normalized
     );
   },
@@ -491,35 +742,35 @@ Object.assign(app, {
       <div class="form-group"><label>说明</label><textarea id="catDesc" placeholder="如 新一代小内折手机 / TSE是张三 / 此为特稿保密项目"></textarea></div>
     `, async () => {
       this.clearFieldValidationMarks();
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       const nameEl = document.getElementById("catName");
       const name = nameEl.value.trim();
       if (!name) { this.markFieldInvalid(nameEl, "代号不能为空"); return true; }
       if (this.sampleCategoryNameExists(name)) { this.markFieldInvalid(nameEl, `样机池名称"${name}"已存在，不能重复创建。`); return true; }
       const c = { id: Utils.id("cat_"), name, description: document.getElementById("catDesc").value.trim(), createdAt: Utils.now(), samples: [] };
-      this.data.sampleLibrary.categories.push(c);
-      this.view.selectedCategoryId = null;
+      this.sampleCategoryRecords().push(c);
+      this.patchViewState({ selectedCategoryId: null });
       const saved = await this.commitSampleCategoryMutation(c, {
         action: "create_sample_category",
         remark: "新建样机池",
         user: "管理员",
         createIfMissing: true
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("样机池已新建");
       return false;
     });
   },
 
   editSampleCategory(id) {
-    const c = this.data.sampleLibrary.categories.find(x => x.id === id);
+    const c = this.sampleCategoryRecords().find(x => x.id === id);
     if (!c) return;
     this.showModal("编辑样机池", `
       <div class="form-group"><label class="req">代号</label><input id="catName" value="${Utils.esc(c.name)}"></div>
       <div class="form-group"><label>说明</label><textarea id="catDesc" placeholder="如 新一代小内折手机 / TSE是张三 / 此为特稿保密项目">${Utils.esc(c.description || "")}</textarea></div>
     `, async () => {
       this.clearFieldValidationMarks();
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       const nameEl = document.getElementById("catName");
       const name = nameEl.value.trim();
       if (!name) { this.markFieldInvalid(nameEl, "代号不能为空"); return true; }
@@ -531,22 +782,22 @@ Object.assign(app, {
         remark: "编辑样机池",
         user: "管理员"
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("样机池已保存");
       return false;
     });
   },
 
   async deleteSampleCategory(id) {
-    if (!await this.ensureFullStateLoaded({ render: false })) return;
-    const c = this.data.sampleLibrary.categories.find(x => x.id === id);
+    if (!await this.ensureSampleDestroyImpactScope({ categoryId: id })) return;
+    const c = this.sampleCategoryRecords().find(x => x.id === id);
     if (!c) return;
     const impact = this.collectSampleCategoryDestroyImpact(c);
     this.confirmDeleteKeyword(
       "档案销毁",
       "档案销毁会物理删除该样机池、池内样机、照片/CT文件、问题表和样机事件数据。此操作不可恢复。",
       async () => {
-        const dataSnapshot = this.cloneData(this.data);
+        const dataSnapshot = this.dataSnapshot();
         const destroyedIds = new Set((c.samples || []).map(sample => String(sample?.id || "")).filter(Boolean));
         const impactedItems = [
           ...(impact.runningOrBlocked || []),
@@ -567,9 +818,11 @@ Object.assign(app, {
           .map(id => this.findSample(id)?.sample)
           .filter(Boolean);
         const eventSampleIds = new Set([...destroyedIds, ...affectedSampleIds]);
-        const sampleEvents = (this.data.sampleLibrary.logs || []).filter(log => eventSampleIds.has(String(log?.sampleId || "")));
-        this.data.sampleLibrary.categories = this.data.sampleLibrary.categories.filter(x => x.id !== id);
-        this.view.selectedCategoryId = null;
+        const sampleEvents = this.sampleEventRecords().filter(log => eventSampleIds.has(String(log?.sampleId || "")));
+        const categoryRecords = this.sampleCategoryRecords();
+        const categoryIndex = categoryRecords.findIndex(x => x.id === id);
+        if (categoryIndex >= 0) categoryRecords.splice(categoryIndex, 1);
+        this.patchViewState({ selectedCategoryId: null });
         const saved = await this.commitSampleCategoryMutation(c, {
           action: "destroy_sample_category",
           remark: "样机池档案销毁",
@@ -581,7 +834,7 @@ Object.assign(app, {
           render: false
         });
         if (!saved) {
-          this.data = dataSnapshot;
+          this.restoreDataSnapshot(dataSnapshot);
           return true;
         }
         this.renderSamples();
@@ -607,7 +860,7 @@ Object.assign(app, {
     ).length;
     const runningOrBlocked = [];
     const pending = [];
-    (this.data.projects || []).forEach(project => (project.stages || []).forEach(stage => (stage.tasks || []).forEach(task => {
+    this.projectRecords().forEach(project => (project.stages || []).forEach(stage => (stage.tasks || []).forEach(task => {
       if (!task || task.archived || this.isTaskCompleted(task)) return;
       const matchedIds = (task.sampleIds || []).filter(id => sampleIds.has(id));
       if (!matchedIds.length) return;
@@ -735,7 +988,7 @@ Object.assign(app, {
     const runningOrBlocked = [];
     const pending = [];
     const completedTaskRefs = [];
-    (this.data.projects || []).forEach(project => (project.stages || []).forEach(stage => (stage.tasks || []).forEach(task => {
+    this.projectRecords().forEach(project => (project.stages || []).forEach(stage => (stage.tasks || []).forEach(task => {
       if (!task || task.archived) return;
       if (!(task.sampleIds || []).includes(sampleId) && !(task.removedSampleRecords || []).some(item => item?.sampleId === sampleId)) return;
       const flow = this.taskFlowStatus(task);
@@ -838,7 +1091,7 @@ Object.assign(app, {
   },
 
   async destroySample(sampleId) {
-    if (!await this.ensureFullStateLoaded({ render: false })) return;
+    if (!await this.ensureSampleDestroyImpactScope({ sampleId })) return;
     const found = this.findSample(sampleId);
     if (!found) return;
     const check = this.canDestroySample(found.sample);
@@ -848,7 +1101,7 @@ Object.assign(app, {
       "档案销毁",
       `档案销毁会物理删除 ${this.sampleDisplayCode(found.sample)} 的样机档案、照片/CT文件和样机事件数据。此操作不可恢复。`,
       async () => {
-        const dataSnapshot = this.cloneData(this.data);
+        const dataSnapshot = this.dataSnapshot();
         const impactedItems = [
           ...(impact.runningOrBlocked || []),
           ...(impact.pending || [])
@@ -876,7 +1129,7 @@ Object.assign(app, {
           .map(id => this.findSample(id)?.sample)
           .filter(Boolean);
         const eventSampleIds = new Set([sampleId, ...affectedSampleIds]);
-        const sampleEvents = (this.data.sampleLibrary.logs || []).filter(log => eventSampleIds.has(String(log?.sampleId || "")));
+        const sampleEvents = this.sampleEventRecords().filter(log => eventSampleIds.has(String(log?.sampleId || "")));
         // 物理删除
         found.category.samples = (found.category.samples || []).filter(s => s.id !== sampleId);
         const saved = await this.commitSampleMutation(found.sample, {
@@ -889,7 +1142,7 @@ Object.assign(app, {
           sampleEvents
         });
         if (!saved) {
-          this.data = dataSnapshot;
+          this.restoreDataSnapshot(dataSnapshot);
           return true;
         }
         Utils.toast("样机档案已销毁，关联任务已处理。");
@@ -921,7 +1174,7 @@ Object.assign(app, {
     document.getElementById("deleteKeywordInput")?.focus();
   },
 
-  openCategory(id) { this.view.selectedCategoryId = id; this.view.samplePage = 1; this.render(); },
+  openCategory(id) { this.selectSampleCategoryState(id); this.render(); },
 
   // ---- 新建样机（简化：不强制项目/阶段/SKU）----,
 
@@ -1005,9 +1258,9 @@ Object.assign(app, {
       </div>
     `, async () => {
       this.clearFieldValidationMarks();
-      const category = this.data.sampleLibrary.categories.find(x => x.id === catId);
+      const category = this.sampleCategoryRecords().find(x => x.id === catId);
       if (!category) return;
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       const sn = document.getElementById("sampleSn").value.trim();
       const imei = document.getElementById("sampleImei").value.trim();
       const boardSn = document.getElementById("sampleBoardSn").value.trim();
@@ -1078,7 +1331,7 @@ Object.assign(app, {
         createSamples: true,
         samples: [sample]
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("已新增 1 台样机。");
       return false;
     });

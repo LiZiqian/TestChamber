@@ -2,7 +2,7 @@
    数字治理平台 V7 - 主渲染模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("app.render", {
 
   // ---- 渲染引擎 ----
   render() {
@@ -21,45 +21,64 @@ Object.assign(app, {
       projectWorkspace: this.renderProjectWorkspace,
       samples: this.renderSamples,
       devices: this.renderDevices
-    }[this.view.module] || this.renderHome;
+    }[this.viewModule()] || this.renderHome;
     fn.call(this);
     this.updateSelectPlaceholderState();
   },
 
+  textEl(tag, text, className = "") {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    el.textContent = text;
+    return el;
+  },
+
+  homeEntryCard({ module, className = "", icon, name, meta, style = "" }) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `home-entry-card ${className}`.trim();
+    button.dataset.appAction = "go";
+    button.dataset.module = module;
+    if (style) button.style.cssText = style;
+    button.append(
+      this.textEl("span", icon, "home-entry-icon"),
+      this.textEl("span", name, "home-entry-name"),
+      this.textEl("span", meta, "home-entry-meta")
+    );
+    return button;
+  },
+
   renderHome() {
-    const projectCount = this.data.projects.length;
-    const samplePoolCount = this.data.sampleLibrary.categories.length;
-    const sampleCount = (this.data.sampleLibrary.categories || [])
-      .reduce((sum, c) => sum + (Number(c.sampleCount) || (c.samples || []).length || 0), 0);
-    document.getElementById("content").innerHTML = `
-      <section class="home-shell">
-        <h1 class="home-title">终端硬件测试数字治理平台 <span>V7</span></h1>
-        <div class="home-entry-grid">
-          <button type="button" class="home-entry-card project-entry" onclick="app.go('projects')">
-            <span class="home-entry-icon">📁</span>
-            <span class="home-entry-name">项目管理</span>
-            <span class="home-entry-meta">${projectCount} 个项目</span>
-          </button>
-          <button type="button" class="home-entry-card sample-entry" onclick="app.go('samples')">
-            <span class="home-entry-icon">📦</span>
-            <span class="home-entry-name">样机档案池</span>
-            <span class="home-entry-meta">${samplePoolCount} 个样机池 · ${sampleCount} 台样机</span>
-          </button>
-          <button type="button" class="home-entry-card" onclick="app.go('devices')" style="opacity:0.7">
-            <span class="home-entry-icon">🔬</span>
-            <span class="home-entry-name">测试设备仓库</span>
-            <span class="home-entry-meta">敬请期待...</span>
-          </button>
-        </div>
-        <p class="home-slogan">从执行走向治理</p>
-      </section>`;
+    const content = document.getElementById("content");
+    if (!content) return;
+    const { projectCount, samplePoolCount, sampleCount } = this.homeMetrics();
+    const shell = document.createElement("section");
+    shell.className = "home-shell";
+
+    const title = document.createElement("h1");
+    title.className = "home-title";
+    title.append(document.createTextNode("终端硬件测试数字治理平台 "));
+    title.append(this.textEl("span", "V7"));
+
+    const grid = document.createElement("div");
+    grid.className = "home-entry-grid";
+    grid.append(
+      this.homeEntryCard({ module: "projects", className: "project-entry", icon: "📁", name: "项目管理", meta: `${projectCount} 个项目` }),
+      this.homeEntryCard({ module: "samples", className: "sample-entry", icon: "📦", name: "样机档案池", meta: `${samplePoolCount} 个样机池 · ${sampleCount} 台样机` }),
+      this.homeEntryCard({ module: "devices", icon: "🔬", name: "测试设备仓库", meta: "敬请期待...", style: "opacity:0.7" })
+    );
+
+    shell.append(title, grid, this.textEl("p", "从执行走向治理", "home-slogan"));
+    content.replaceChildren(shell);
   },
   renderDevices() {
-    document.getElementById("content").innerHTML = `
-      <div class="sample-archive-empty" style="min-height:calc(100vh - 160px)">
-        <b>测试设备仓库</b>
-        <span>敬请期待...</span>
-      </div>`;
+    const content = document.getElementById("content");
+    if (!content) return;
+    const empty = document.createElement("div");
+    empty.className = "sample-archive-empty";
+    empty.style.minHeight = "calc(100vh - 160px)";
+    empty.append(this.textEl("b", "测试设备仓库"), this.textEl("span", "敬请期待..."));
+    content.replaceChildren(empty);
   },
 
   renderPreserveScroll() {
@@ -73,71 +92,95 @@ Object.assign(app, {
   },
 
   renderNav() {
-    const projects = this.data?.projects || [];
-    const pools = this.data?.sampleLibrary?.categories || [];
-    // 默认展开（首次加载 _navExpanded 为 undefined 时）
-    if (!this.view._navExpanded) this.view._navExpanded = { projects: true, samples: true };
-    const expanded = this.view._navExpanded;
-
     // 指纹缓存：nav 数据未变时跳过 DOM 重建，避免慢机器上点击丢失
-    const fp = JSON.stringify([
-      this.view.module, this.view.selectedProjectId, this.view.selectedCategoryId,
-      expanded.projects, expanded.samples,
-      projects.map(p => [p.id, p.name]),
-      pools.map(c => [c.id, c.name])
-    ]);
+    const expanded = this.navExpandedState();
+    const fp = JSON.stringify(this.navFingerprintData());
     if (fp === this._navFingerprint) return;
     this._navFingerprint = fp;
 
-    const isActive = (id) => {
-      if (id === "projects" && this.view.module === "projectWorkspace") return true;
-      return this.view.module === id;
-    };
-
     const items = [
       { id: "home", icon: "🏠", label: "首页" },
-      { id: "projects", icon: "📁", label: "项目管理", sub: projects.map(p => ({
+      { id: "projects", icon: "📁", label: "项目管理", sub: this.projectRecords().map(p => ({
           id: `proj_${p.id}`, label: p.name,
-          active: (this.view.module === "projectWorkspace" && this.view.selectedProjectId === p.id)
+          active: this.isProjectNavActive(p.id)
         })) },
-      { id: "samples", icon: "📦", label: "样机档案池", sub: pools.map(c => ({
+      { id: "samples", icon: "📦", label: "样机档案池", sub: this.sampleCategoryRecords().map(c => ({
           id: `cat_${c.id}`, label: c.name,
-          active: (this.view.module === "samples" && this.view.selectedCategoryId === c.id)
+          active: this.isSampleCategoryNavActive(c.id)
         })) },
       { id: "devices", icon: "🔬", label: "测试设备仓库" }
     ];
 
-    document.getElementById("nav").innerHTML = items.map(item => {
+    const nav = document.getElementById("nav");
+    if (nav) nav.replaceChildren(...items.flatMap(item => {
       const hasSub = item.sub && item.sub.length > 0;
       const isExpanded = expanded[item.id] === true;
-      const subHtml = hasSub ? `
-        <div class="nav-sub ${isExpanded ? 'open' : ''}">
-          ${item.sub.map(s => `<div class="nav-sub-item ${s.active ? 'active' : ''}" title="${Utils.esc(s.label)}" onclick="event.stopPropagation();app._navGoSub('${s.id}')">${Utils.esc(s.label)}</div>`).join("")}
-        </div>` : "";
-      const toggleBtn = hasSub ? `<span class="nav-toggle ${isExpanded ? 'expanded' : ''}" title="${isExpanded ? '折叠' : '展开'}子目录" onclick="event.stopPropagation();app._navToggle('${item.id}')"></span>` : "";
-      return `
-        <div class="nav-item ${isActive(item.id) ? 'active' : ''} ${hasSub ? 'has-sub' : ''}" title="${Utils.esc(item.label)}" onclick="app.go('${item.id}')">
-          <span class="nav-item-main"><span class="nav-icon">${item.icon}</span><span class="nav-label">${Utils.esc(item.label)}</span></span>
-          ${toggleBtn}
-        </div>
-        ${subHtml}`;
-    }).join("");
+      const nodes = [this.navItemNode(item, { hasSub, isExpanded, active: this.isNavItemActive(item.id) })];
+      if (hasSub) nodes.push(this.navSubNode(item.sub, isExpanded));
+      return nodes;
+    }));
 
     // 数据工具（侧栏底部）
-    document.getElementById("navTools").innerHTML = `
-      <div class="nav-tool-item" onclick="app.exportBundle()" title="导出完整数据包">
-        <span class="nav-tool-icon">⬇</span><span class="nav-tool-label">导出完整数据包</span>
-      </div>
-      <div class="nav-tool-item" onclick="app.importBundle()" title="导入数据包">
-        <span class="nav-tool-icon">⬆</span><span class="nav-tool-label">导入数据包</span>
-      </div>`;
+    const navTools = document.getElementById("navTools");
+    if (navTools) navTools.replaceChildren(
+      this.navToolNode("bundle-export", "⬇", "导出完整数据包"),
+      this.navToolNode("bundle-import", "⬆", "导入数据包")
+    );
 
     this.applySidebarState();
   },
 
+  navItemNode(item, { hasSub = false, isExpanded = false, active = false } = {}) {
+    const node = document.createElement("div");
+    node.className = `nav-item ${active ? "active" : ""} ${hasSub ? "has-sub" : ""}`.trim();
+    node.title = item.label;
+    node.dataset.appAction = "go";
+    node.dataset.module = item.id;
+
+    const main = document.createElement("span");
+    main.className = "nav-item-main";
+    main.append(this.textEl("span", item.icon, "nav-icon"), this.textEl("span", item.label, "nav-label"));
+    node.append(main);
+
+    if (hasSub) {
+      const toggle = document.createElement("span");
+      toggle.className = `nav-toggle ${isExpanded ? "expanded" : ""}`.trim();
+      toggle.title = `${isExpanded ? "折叠" : "展开"}子目录`;
+      toggle.dataset.appAction = "nav-toggle";
+      toggle.dataset.id = item.id;
+      toggle.dataset.stopPropagation = "1";
+      node.append(toggle);
+    }
+    return node;
+  },
+
+  navSubNode(items = [], isExpanded = false) {
+    const sub = document.createElement("div");
+    sub.className = `nav-sub ${isExpanded ? "open" : ""}`.trim();
+    items.forEach(item => {
+      const node = document.createElement("div");
+      node.className = `nav-sub-item ${item.active ? "active" : ""}`.trim();
+      node.title = item.label;
+      node.dataset.appAction = "nav-go-sub";
+      node.dataset.id = item.id;
+      node.dataset.stopPropagation = "1";
+      node.textContent = item.label;
+      sub.append(node);
+    });
+    return sub;
+  },
+
+  navToolNode(action, icon, label) {
+    const node = document.createElement("div");
+    node.className = "nav-tool-item";
+    node.dataset.appAction = action;
+    node.title = label;
+    node.append(this.textEl("span", icon, "nav-tool-icon"), this.textEl("span", label, "nav-tool-label"));
+    return node;
+  },
+
   _navToggle(id) {
-    if (!this.view._navExpanded) this.view._navExpanded = {};
-    this.view._navExpanded[id] = !this.view._navExpanded[id];
+    this.toggleNavExpanded(id);
     this._navFingerprint = null;  // invalidate cache so expand/collapse renders
     this.renderNav();
   },
@@ -150,91 +193,100 @@ Object.assign(app, {
       await this.selectProject(id);
       return;
     } else if (type === "cat") {
-      this.view.selectedCategoryId = id;
-      this.view.samplePage = 1;
-      this.view.module = "samples";
+      this.selectSampleCategoryState(id);
     }
     this.render();
   },
 
   renderHeader() {
-    document.getElementById("pageTitle").innerHTML = this.breadcrumbHtml();
-    document.getElementById("contextText").innerText = "";
-    document.getElementById("actionArea").innerHTML = '';
+    const title = document.getElementById("pageTitle");
+    if (title) title.replaceChildren(...this.breadcrumbNodes());
+    const context = document.getElementById("contextText");
+    if (context) context.innerText = "";
+    const action = document.getElementById("actionArea");
+    if (action) action.replaceChildren();
   },
 
-  breadcrumbHtml() {
-    const parts = [{ label: "首页", action: "app.go('home')" }];
+  breadcrumbParts() {
+    const parts = [{ label: "首页", module: "home" }];
     const p = this.currentProject();
-    const cat = this.data.sampleLibrary.categories.find(c => c.id === this.view.selectedCategoryId);
-    if (this.view.module === "projects") {
-      parts.push({ label: "项目管理", action: "app.go('projects')" });
-    } else if (this.view.module === "projectWorkspace") {
-      parts.push({ label: "项目管理", action: "app.go('projects')" });
-      if (p) parts.push({ label: p.name, action: this.view.stageStrategyId ? "app.go('projectWorkspace')" : null });
-      if (this.view.stageStrategyId) parts.push({ label: "阶段配置", action: null });
-    } else if (this.view.module === "samples") {
-      parts.push({ label: "样机档案池", action: "app.go('samples')" });
-      if (cat) parts.push({ label: cat.name, action: null });
+    const cat = this.currentSampleCategory();
+    const module = this.viewModule();
+    if (module === "projects") {
+      parts.push({ label: "项目管理", module: "projects" });
+    } else if (module === "projectWorkspace") {
+      parts.push({ label: "项目管理", module: "projects" });
+      if (p) parts.push({ label: p.name, module: this.stageStrategyId() ? "projectWorkspace" : "" });
+      if (this.stageStrategyId()) parts.push({ label: "阶段配置", module: "" });
+    } else if (module === "samples") {
+      parts.push({ label: "样机档案池", module: "samples" });
+      if (cat) parts.push({ label: cat.name, module: "" });
     }
-    return parts.map((part, idx) => {
+    return parts;
+  },
+
+  breadcrumbNodes() {
+    return this.breadcrumbParts().flatMap((part, idx, parts) => {
       const isLast = idx === parts.length - 1;
-      const label = Utils.esc(part.label);
-      const node = part.action && !isLast
-        ? `<button type="button" onclick="${part.action}">${label}</button>`
-        : `<span>${label}</span>`;
-      return `${idx ? '<em>></em>' : ''}${node}`;
-    }).join("");
+      const nodes = [];
+      if (idx) nodes.push(this.textEl("em", ">"));
+      if (part.module && !isLast) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.appAction = "go";
+        button.dataset.module = part.module;
+        button.textContent = part.label;
+        nodes.push(button);
+      } else {
+        nodes.push(this.textEl("span", part.label));
+      }
+      return nodes;
+    });
   },
 
   go(module) {
-    if (this.view.stageStrategyId && typeof this.autoSyncProgress === "function") {
+    if (this.stageStrategyId() && typeof this.autoSyncProgress === "function") {
       this.autoSyncProgress();
-      this.view.stageStrategyId = null;
+      this.clearStageStrategyState();
     }
-    this.view.module = module;
-    if (module !== "projectWorkspace") this.view.stageStrategyId = null;
-    if (module === "samples") this.view.selectedCategoryId = null;
-    if (module === "samples") this.view.samplePage = 1;
-    if (module === "home") this.view.selectedCategoryId = null;
+    this.navigateModuleState(module);
     this.render();
   },
 
   // ---- 侧栏 ----
   toggleSidebar() {
-    this.view.sidebarCollapsed = !this.view.sidebarCollapsed;
-    localStorage.setItem("digital_governance_sidebar_collapsed", this.view.sidebarCollapsed ? "1" : "0");
+    this.toggleSidebarCollapsed();
+    localStorage.setItem("digital_governance_sidebar_collapsed", this.sidebarCollapsed() ? "1" : "0");
     this.applySidebarState();
   },
 
   applySidebarState() {
     const persisted = localStorage.getItem("digital_governance_sidebar_collapsed");
-    if (persisted !== null) this.view.sidebarCollapsed = persisted === "1";
+    if (persisted !== null) this.setSidebarCollapsed(persisted === "1");
     const sidebar = document.getElementById("sidebar");
     const toggle = document.getElementById("sidebarToggle");
     if (!sidebar) return;
-    sidebar.classList.toggle("collapsed", !!this.view.sidebarCollapsed);
+    sidebar.classList.toggle("collapsed", this.sidebarCollapsed());
     if (toggle) {
-      toggle.innerText = this.view.sidebarCollapsed ? "▶" : "◀";
-      toggle.title = this.view.sidebarCollapsed ? "展开左侧栏" : "收起左侧栏";
+      toggle.innerText = this.sidebarCollapsed() ? "▶" : "◀";
+      toggle.title = this.sidebarCollapsed() ? "展开左侧栏" : "收起左侧栏";
     }
   },
 
   // ---- 折叠 ----
   isCollapsed(sectionId) {
-    return !!(this.view.collapsed && this.view.collapsed[sectionId]);
+    return this.isSectionCollapsed(sectionId);
   },
   collapseButton(sectionId) {
     const collapsed = this.isCollapsed(sectionId);
-    return `<button class="btn btn-sm collapse-btn" onclick="app.toggleSection('${sectionId}')">${collapsed ? '展开' : '折叠'} ${collapsed ? '▾' : '▴'}</button>`;
+    return `<button class="btn btn-sm collapse-btn" data-app-action="toggle-section" data-id="${Utils.esc(sectionId)}">${collapsed ? '展开' : '折叠'} ${collapsed ? '▾' : '▴'}</button>`;
   },
   sectionToggleTriangle(sectionId) {
     const collapsed = this.isCollapsed(sectionId);
-    return `<button type="button" class="section-toggle-triangle" title="${collapsed ? '展开' : '收起'}" data-collapsed="${collapsed ? '1' : '0'}" onclick="app.toggleSection('${sectionId}')"></button>`;
+    return `<button type="button" class="section-toggle-triangle" title="${collapsed ? '展开' : '收起'}" data-collapsed="${collapsed ? '1' : '0'}" data-app-action="toggle-section" data-id="${Utils.esc(sectionId)}"></button>`;
   },
   toggleSection(sectionId) {
-    if (!this.view.collapsed) this.view.collapsed = {};
-    this.view.collapsed[sectionId] = !this.view.collapsed[sectionId];
+    this.toggleSectionState(sectionId);
     this.renderContent();
   },
 
@@ -248,7 +300,9 @@ Object.assign(app, {
   },
 
   renderEmpty(msg) {
-    document.getElementById("content").innerHTML = `<div class="card empty">${Utils.esc(msg)}</div>`;
+    const content = document.getElementById("content");
+    if (!content) return;
+    content.replaceChildren(this.textEl("div", msg, "card empty"));
   },
 
   // ---- 任务操作菜单统一管理 ----

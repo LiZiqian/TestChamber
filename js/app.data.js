@@ -2,7 +2,7 @@
    数字治理平台 V7 - 数据工具模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("app.data", {
 
   emptyData() {
     return {
@@ -211,8 +211,356 @@ Object.assign(app, {
   },
 
   // ---- 数据访问 ----
+  dataSnapshot() {
+    return this.cloneData(this.data);
+  },
+
+  restoreDataSnapshot(snapshot) {
+    this.data = this.cloneData(snapshot);
+    return this.data;
+  },
+
+  patchViewState(values = {}) {
+    this.view = { ...(this.view || {}), ...(values || {}) };
+    return this.view;
+  },
+
+  viewModule() {
+    return this.view?.module || "home";
+  },
+
+  selectedProjectId() {
+    return this.view?.selectedProjectId || null;
+  },
+
+  selectedStageId() {
+    return this.view?.selectedStageId || null;
+  },
+
+  selectedCategoryId() {
+    return this.view?.selectedCategoryId || null;
+  },
+
+  stageStrategyId() {
+    return this.view?.stageStrategyId || null;
+  },
+
+  sampleCategoryRecords() {
+    if (!this.data) this.data = this.emptyData();
+    if (!this.data.sampleLibrary) this.data.sampleLibrary = { categories: [], logs: [] };
+    if (!Array.isArray(this.data.sampleLibrary.categories)) this.data.sampleLibrary.categories = [];
+    return this.data.sampleLibrary.categories;
+  },
+
+  currentSampleCategory() {
+    const id = String(this.selectedCategoryId() || "");
+    return this.sampleCategoryRecords().find(category => String(category.id || "") === id) || null;
+  },
+
+  samplePoolPageState(fallbackPageSize = 100) {
+    return {
+      page: Math.max(1, Number.parseInt(this.view?.samplePage, 10) || 1),
+      pageSize: this.boundedViewPageSize(this.view?.samplePageSize, fallbackPageSize),
+      filters: {
+        keyword: this.view?.sampleKeyword || "",
+        status: this.view?.sampleStatusFilter || "",
+        problemState: this.view?.sampleProblemFilter || "",
+        owner: this.view?.sampleOwnerFilter || "",
+        borrower: this.view?.sampleBorrowerFilter || ""
+      }
+    };
+  },
+
+  setSamplePoolPageState(page) {
+    return this.patchViewState({ samplePage: Math.max(1, Number.parseInt(page, 10) || 1) });
+  },
+
+  setSamplePoolPageSizeState(size, fallback = 100) {
+    return this.patchViewState({
+      samplePageSize: this.boundedViewPageSize(size, fallback),
+      samplePage: 1
+    });
+  },
+
+  setSamplePoolFilterState(name, value, { resetPage = true } = {}) {
+    const map = {
+      keyword: "sampleKeyword",
+      status: "sampleStatusFilter",
+      problemState: "sampleProblemFilter",
+      owner: "sampleOwnerFilter",
+      borrower: "sampleBorrowerFilter"
+    };
+    const key = map[name];
+    if (!key) return null;
+    return this.patchViewState({
+      [key]: value || "",
+      ...(resetPage ? { samplePage: 1 } : {})
+    });
+  },
+
+  resetSamplePoolFiltersState() {
+    return this.patchViewState({
+      sampleKeyword: "",
+      sampleStatusFilter: "",
+      sampleProblemFilter: "",
+      sampleOwnerFilter: "",
+      sampleBorrowerFilter: "",
+      samplePage: 1
+    });
+  },
+
+  isCurrentSampleCategoryPage(categoryId) {
+    return this.viewModule() === "samples"
+      && String(this.selectedCategoryId() || "") === String(categoryId || "");
+  },
+
+  homeMetrics() {
+    const projects = this.projectRecords();
+    const categories = this.sampleCategoryRecords();
+    return {
+      projectCount: projects.length,
+      samplePoolCount: categories.length,
+      sampleCount: categories.reduce((sum, category) => (
+        sum + (Number(category.sampleCount) || (category.samples || []).length || 0)
+      ), 0),
+    };
+  },
+
+  navExpandedState() {
+    if (!this.view) this.view = {};
+    if (!this.view._navExpanded) this.view._navExpanded = { projects: true, samples: true };
+    return this.view._navExpanded;
+  },
+
+  toggleNavExpanded(id) {
+    const expanded = this.navExpandedState();
+    expanded[id] = !expanded[id];
+    return expanded;
+  },
+
+  isNavItemActive(id) {
+    const module = this.viewModule();
+    if (id === "projects" && module === "projectWorkspace") return true;
+    return module === id;
+  },
+
+  isProjectNavActive(projectId) {
+    return this.viewModule() === "projectWorkspace"
+      && String(this.selectedProjectId() || "") === String(projectId || "");
+  },
+
+  isSampleCategoryNavActive(categoryId) {
+    return this.viewModule() === "samples"
+      && String(this.selectedCategoryId() || "") === String(categoryId || "");
+  },
+
+  navFingerprintData() {
+    const expanded = this.navExpandedState();
+    return [
+      this.viewModule(),
+      this.selectedProjectId(),
+      this.selectedCategoryId(),
+      !!expanded.projects,
+      !!expanded.samples,
+      this.projectRecords().map(project => [project.id, project.name]),
+      this.sampleCategoryRecords().map(category => [category.id, category.name]),
+    ];
+  },
+
+  projectRecords() {
+    if (!this.data) this.data = this.emptyData();
+    if (!Array.isArray(this.data.projects)) this.data.projects = [];
+    return this.data.projects;
+  },
+
+  findProjectRecord(projectId) {
+    const id = String(projectId || "");
+    return this.projectRecords().find(project => String(project.id || "") === id) || null;
+  },
+
+  projectInitialStageId(project) {
+    return project?.stages?.[0]?.id || null;
+  },
+
+  isProjectSelected(projectId) {
+    return String(projectId || "") === String(this.view?.selectedProjectId || "");
+  },
+
+  projectStateNameExists(name, excludeId = "") {
+    const normalized = String(name || "").trim().toLowerCase();
+    if (!normalized) return false;
+    return this.projectRecords().some(project =>
+      String(project.id || "") !== String(excludeId || "")
+      && String(project.name || "").trim().toLowerCase() === normalized
+    );
+  },
+
+  appendProjectRecord(project) {
+    if (!project?.id) return null;
+    this.projectRecords().push(project);
+    return project;
+  },
+
+  removeProjectRecord(projectId) {
+    const id = String(projectId || "");
+    this.data.projects = this.projectRecords().filter(project => String(project.id || "") !== id);
+    return this.data.projects;
+  },
+
+  selectFirstProjectState(overrides = {}) {
+    const project = this.projectRecords()[0] || null;
+    return this.patchViewState({
+      selectedProjectId: project?.id || null,
+      selectedStageId: this.projectInitialStageId(project),
+      ...overrides,
+    });
+  },
+
+  selectProjectState(projectId, overrides = {}) {
+    return this.patchViewState({
+      selectedProjectId: projectId || null,
+      selectedStageId: Object.prototype.hasOwnProperty.call(overrides, "selectedStageId") ? overrides.selectedStageId : this.view?.selectedStageId,
+      ...overrides,
+    });
+  },
+
+  selectProjectWorkspaceState(projectId, { selectedStageId = null } = {}) {
+    return this.patchViewState({
+      selectedProjectId: projectId || null,
+      selectedStageId,
+      stageStrategyId: null,
+      module: "projectWorkspace",
+    });
+  },
+
+  selectSampleCategoryState(categoryId) {
+    return this.patchViewState({
+      selectedCategoryId: categoryId || null,
+      samplePage: 1,
+      module: "samples",
+    });
+  },
+
+  navigateModuleState(module) {
+    const next = { module: module || "home" };
+    if (next.module !== "projectWorkspace") next.stageStrategyId = null;
+    if (next.module === "samples") {
+      next.selectedCategoryId = null;
+      next.samplePage = 1;
+    }
+    if (next.module === "home") next.selectedCategoryId = null;
+    return this.patchViewState(next);
+  },
+
+  clearStageStrategyState() {
+    return this.patchViewState({ stageStrategyId: null });
+  },
+
+  sidebarCollapsed() {
+    return !!this.view?.sidebarCollapsed;
+  },
+
+  setSidebarCollapsed(collapsed) {
+    return this.patchViewState({ sidebarCollapsed: !!collapsed });
+  },
+
+  toggleSidebarCollapsed() {
+    return this.setSidebarCollapsed(!this.sidebarCollapsed());
+  },
+
+  isSectionCollapsed(sectionId) {
+    return !!(this.view?.collapsed && this.view.collapsed[sectionId]);
+  },
+
+  toggleSectionState(sectionId) {
+    if (!this.view) this.view = {};
+    if (!this.view.collapsed) this.view.collapsed = {};
+    this.view.collapsed[sectionId] = !this.view.collapsed[sectionId];
+    return this.view.collapsed[sectionId];
+  },
+
+  ensureViewMap(key, fallback = {}) {
+    if (!this.view) this.view = {};
+    if (!this.view[key] || typeof this.view[key] !== "object") this.view[key] = { ...fallback };
+    return this.view[key];
+  },
+
+  setViewMapValue(key, field, value, { removeEmpty = true, fallback = {} } = {}) {
+    const target = this.ensureViewMap(key, fallback);
+    if (removeEmpty && (value === "" || value === null || value === undefined)) {
+      delete target[field];
+    } else {
+      target[field] = value;
+    }
+    return target;
+  },
+
+  resetViewMap(key, value = {}) {
+    if (!this.view) this.view = {};
+    this.view[key] = { ...value };
+    return this.view[key];
+  },
+
+  resetTaskFlowPage() {
+    return this.patchViewState({ taskFlowPage: 1 });
+  },
+
+  boundedViewPageSize(value, fallback = 100) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(500, Math.max(20, n));
+  },
+
+  taskFlowPageState(fallbackPageSize = 100) {
+    return {
+      page: Math.max(1, Number.parseInt(this.view?.taskFlowPage, 10) || 1),
+      pageSize: this.boundedViewPageSize(this.view?.taskFlowPageSize, fallbackPageSize),
+      filters: this.ensureViewMap("taskFlowFilters")
+    };
+  },
+
+  setTaskFlowPageState(page) {
+    return this.patchViewState({ taskFlowPage: Math.max(1, Number.parseInt(page, 10) || 1) });
+  },
+
+  setTaskFlowPageSizeState(size, fallback = 100) {
+    return this.patchViewState({
+      taskFlowPageSize: this.boundedViewPageSize(size, fallback),
+      taskFlowPage: 1
+    });
+  },
+
+  isCurrentProjectWorkspaceStage(stageId) {
+    return this.viewModule() === "projectWorkspace"
+      && String(this.selectedStageId() || "") === String(stageId || "");
+  },
+
+  ensureWorkspaceStageSelection(project) {
+    if (!project?.stages?.length) return null;
+    const selectedId = this.selectedStageId();
+    if (!selectedId || !project.stages.some(stage => String(stage.id || "") === String(selectedId))) {
+      this.patchViewState({ selectedStageId: project.stages[0].id });
+    }
+    return this.selectedStageId();
+  },
+
+  stageSortMode() {
+    return !!this.view?.stageSortMode;
+  },
+
+  setStageSortModeState(enabled) {
+    return this.patchViewState({ stageSortMode: !!enabled });
+  },
+
+  sampleEventRecords() {
+    if (!this.data) this.data = this.emptyData();
+    if (!this.data.sampleLibrary) this.data.sampleLibrary = { categories: [], logs: [] };
+    if (!Array.isArray(this.data.sampleLibrary.logs)) this.data.sampleLibrary.logs = [];
+    return this.data.sampleLibrary.logs;
+  },
+
   currentProject() {
-    return this.data.projects.find(p => p.id === this.view.selectedProjectId) || this.data.projects[0] || null;
+    return this.findProjectRecord(this.view?.selectedProjectId) || this.projectRecords()[0] || null;
   },
   currentStage() {
     const p = this.currentProject();

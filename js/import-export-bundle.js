@@ -3,7 +3,7 @@
    混入全局 app
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("import-export-bundle", {
 
   // ── 导出 ──
 
@@ -68,7 +68,7 @@ Object.assign(app, {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".zip";
-    input.onchange = async () => {
+    input.addEventListener("change", async () => {
       const file = input.files && input.files[0];
       if (!file) return;
       Utils.toast("正在分析导入包…");
@@ -78,7 +78,7 @@ Object.assign(app, {
       } catch (e) {
         Utils.toast("导入分析失败: " + (e.message || e));
       }
-    };
+    }, { once: true });
     input.click();
   },
 
@@ -101,12 +101,12 @@ Object.assign(app, {
       className: "import-bundle-modal",
       cancelText: "取消",
     });
-    const cancelBtn = document.getElementById("modalCancel");
+    const cancelBtn = this.resetEventTarget(document.getElementById("modalCancel"));
     if (cancelBtn) {
-      cancelBtn.onclick = () => {
+      cancelBtn.addEventListener("click", () => {
         this._importState = null;
         this.closeModal();
-      };
+      });
     }
 
     // 插入「仅导入无冲突数据」按钮
@@ -548,7 +548,7 @@ Object.assign(app, {
       btn.className = "btn btn-outline";
       btn.textContent = "仅导入无冲突数据";
       btn.id = "quickImportBtn";
-      btn.onclick = () => this._onQuickImport();
+      btn.addEventListener("click", () => this._onQuickImport());
       // 插入到 cancel 和 ok 之间
       const okBtn = document.getElementById("modalOk");
       if (okBtn) {

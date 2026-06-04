@@ -2,7 +2,7 @@
    数字治理平台 V7 - 服务器通信模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("app.server", {
 
   // ---- 服务器通信 ----
   async fetchBootstrapState() {
@@ -26,8 +26,14 @@ Object.assign(app, {
     }
   },
 
-  async reloadFromServer({ render = true } = {}) {
-    const res = await fetch("/api/state", { cache: "no-store" });
+  fullStateUrl(reason = "manual-full-reload") {
+    const query = new URLSearchParams();
+    query.set("reason", String(reason || "unspecified"));
+    return `/api/state?${query.toString()}`;
+  },
+
+  async reloadFromServer({ render = true, reason = "manual-full-reload" } = {}) {
+    const res = await fetch(this.fullStateUrl(reason), { cache: "no-store" });
     const obj = await res.json();
     if (!res.ok || !obj.ok) throw new Error(obj.error || ("HTTP " + res.status));
     this.data = obj.data || this.emptyData();
@@ -43,23 +49,7 @@ Object.assign(app, {
     this.updateServerStatus("已刷新");
     if (this._normalizedChanged) {
       this._normalizedChanged = false;
-      this.save({ silent: true, remark: "自动清理重复项目人员" });
-    }
-  },
-
-  async ensureFullStateLoaded({ render = false } = {}) {
-    if (!this._statePartial) return true;
-    const viewSnapshot = this.cloneData(this.view);
-    try {
-      await this.reloadFromServer({ render: false });
-      this.view = { ...this.view, ...viewSnapshot };
-      if (render) this.render();
-      return true;
-    } catch (e) {
-      console.error("完整数据加载失败：", e);
-      this.updateServerStatus("完整加载失败");
-      alert("完整数据加载失败：" + e.message);
-      return false;
+      this.updateServerStatus("已刷新，需检查");
     }
   },
 
@@ -128,11 +118,6 @@ Object.assign(app, {
       }
       if (res.status === 409) {
         this.updateServerStatus("保存冲突");
-        if (silent && retryOnConflict && obj.server_revision) {
-          await this.reloadFromServer({ render: false });
-          this.updateServerStatus("已刷新");
-          return false;
-        }
         this._saveQueued = false;
         this._queuedRemark = "";
         if (!silent) alert("保存冲突：服务器上的数据已被其他人更新。\n\n请刷新页面后再继续操作。");
@@ -188,18 +173,15 @@ Object.assign(app, {
     }
     // 3. 如果本地有未保存编辑，先保存再继续
     if (this.hasLocalUnsavedChanges()) {
-      const saved = await this.save({ silent: false, remark });
-      if (!saved) return false;
+      alert(`${remark}失败：当前还有未保存的本地编辑。请先完成当前编辑，再重试。`);
+      this.updateServerStatus("有未保存编辑");
+      return false;
     }
     return true;
   },
 
   async syncAfterDirectMutation({ render = false, statusText = "已保存" } = {}) {
-    try {
-      await this.reloadFromServer({ render });
-    } catch (e) {
-      console.error("syncAfterDirectMutation 刷新失败：", e);
-    }
+    if (render && typeof this.render === "function") this.render();
     this.updateServerStatus(statusText);
   },
 
@@ -222,7 +204,7 @@ Object.assign(app, {
 
     if (renderPanel) {
       const panel = document.querySelector('[data-sample-archive-panel="photos"]');
-      if (panel && found?.sample) panel.innerHTML = this.samplePhotosHtml(found.sample);
+      if (panel && found?.sample) this.replaceHtml(panel, this.samplePhotosHtml(found.sample));
     }
 
     this.updateServerStatus(statusText);
@@ -239,11 +221,81 @@ Object.assign(app, {
     });
   },
 
-  async refreshTaskListAfterMutation(project, stage, { render = true } = {}) {
+  taskFlowQueryHasFilters(params = {}) {
+    return ["sku", "flowStatus", "ownerName", "categoryKeyword", "caseKeyword", "dtsKeyword", "resultKeyword"]
+      .some(key => String(params?.[key] || "").trim());
+  },
+
+  samplePageQueryHasFilters(params = {}) {
+    return ["keyword", "status", "problemState", "owner", "borrower"]
+      .some(key => String(params?.[key] || "").trim());
+  },
+
+  applyTaskStatusCountDelta(target, changes = []) {
+    if (!target || !changes.length) return;
+    const counts = { ...(target.statusCounts || {}) };
+    changes.forEach(change => {
+      const before = String(change.beforeStatus || "").trim();
+      const after = String(change.afterStatus || "").trim();
+      if (!before || !after || before === after) return;
+      counts[before] = Math.max(0, Number(counts[before] || 0) - 1);
+      counts[after] = Number(counts[after] || 0) + 1;
+    });
+    target.statusCounts = counts;
+  },
+
+  tryPatchCurrentTaskFlowPage(project, stage, affected = {}) {
+    if (!stage?.id || !affected || affected.tasksTruncated) return false;
+    if (!this._taskFlowPageCache || typeof this.taskFlowQueryParams !== "function" || typeof this.taskFlowCacheKey !== "function") return false;
+    const isCurrentTaskFlow = this.view?.module === "projectWorkspace"
+      && String(this.view?.selectedStageId || "") === String(stage.id || "");
+    if (!isCurrentTaskFlow) return false;
+    const params = this.taskFlowQueryParams(stage);
+    if (this.taskFlowQueryHasFilters(params)) return false;
+    const key = this.taskFlowCacheKey(stage, params);
+    const cache = this._taskFlowPageCache?.key === key ? this._taskFlowPageCache : null;
+    if (!cache || !Array.isArray(cache.rows)) return false;
+
+    const affectedTasks = (affected.tasks || []).filter(task => String(task?.stageId || "") === String(stage.id || ""));
+    const affectedTaskIds = (affected.taskIds || []).filter(Boolean).map(id => String(id));
+    if (!affectedTaskIds.length || affectedTasks.length !== affectedTaskIds.length) return false;
+
+    const rowByTaskId = new Map(cache.rows.map(row => [String(row?.task?.id || ""), row]));
+    if (!affectedTaskIds.every(id => rowByTaskId.has(id))) return false;
+
+    const stageTasksById = new Map((stage.tasks || []).map(task => [String(task.id || ""), task]));
+    affectedTasks.forEach(task => {
+      const id = String(task.id || "");
+      const row = rowByTaskId.get(id);
+      const mergedTask = stageTasksById.get(id) || task;
+      if (row) row.task = mergedTask;
+    });
+
+    const statusChanges = (this._lastMutationAffectedChanges?.taskStatus || [])
+      .filter(change => String(change.stageId || "") === String(stage.id || "") && affectedTaskIds.includes(String(change.taskId || "")));
+    if (cache.stats) this.applyTaskStatusCountDelta(cache.stats, statusChanges);
+    this.applyTaskStatusCountDelta(stage, statusChanges);
+
+    if (cache.stats) {
+      const ownerNames = new Set(cache.stats.ownerNames || stage.ownerNames || []);
+      affectedTasks.forEach(task => {
+        const ownerName = this.taskOwnerName?.(task.owner || "") || "";
+        if (ownerName) ownerNames.add(ownerName);
+      });
+      cache.stats.ownerNames = [...ownerNames].sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
+      stage.ownerNames = cache.stats.ownerNames;
+    }
+
+    this.refreshTaskFlowRegion(project, stage);
+    return true;
+  },
+
+  async refreshTaskListAfterMutation(project, stage, { render = true, affected = null } = {}) {
     if (!stage?.id) return false;
     const isCurrentTaskFlow = this.view?.module === "projectWorkspace"
       && String(this.view?.selectedStageId || "") === String(stage.id || "");
     if (render && isCurrentTaskFlow && typeof this.refreshCurrentTaskFlowPage === "function") {
+      if (this.tryPatchCurrentTaskFlowPage(project, stage, affected)) return true;
       this.invalidatePagedCaches({ stageId: stage.id });
       await this.refreshCurrentTaskFlowPage(project, stage);
       return true;
@@ -253,7 +305,41 @@ Object.assign(app, {
     return false;
   },
 
-  async refreshSampleListAfterMutation(sampleOrCategory, { render = true } = {}) {
+  tryPatchCurrentSamplePage(category, affected = {}) {
+    if (!category?.id || !affected || affected.samplesTruncated) return false;
+    if (typeof this.samplePageQueryParams !== "function" || typeof this.samplePageCacheKey !== "function") return false;
+    const isCurrentSamplePage = this.view?.module === "samples"
+      && String(this.view?.selectedCategoryId || "") === String(category.id || "");
+    if (!isCurrentSamplePage) return false;
+    const params = this.samplePageQueryParams(category);
+    if (this.samplePageQueryHasFilters(params)) return false;
+    const key = this.samplePageCacheKey(category, params);
+    const cache = this.getSamplePageCache?.(key) || (this._samplePageCache?.key === key ? this._samplePageCache : null);
+    if (!cache || !Array.isArray(cache.items)) return false;
+
+    const affectedSamples = (affected.samples || []).filter(sample => String(sample?.categoryId || "") === String(category.id || ""));
+    const affectedSampleIds = (affected.sampleIds || []).filter(Boolean).map(id => String(id));
+    if (!affectedSampleIds.length || affectedSamples.length !== affectedSampleIds.length) return false;
+
+    const itemById = new Map(cache.items.map(sample => [String(sample?.id || ""), sample]));
+    if (!affectedSampleIds.every(id => itemById.has(id))) return false;
+
+    const categorySamplesById = new Map((category.samples || []).map(sample => [String(sample.id || ""), sample]));
+    cache.items = cache.items.map(sample => {
+      const id = String(sample?.id || "");
+      return affectedSampleIds.includes(id) ? (categorySamplesById.get(id) || sample) : sample;
+    });
+    if (cache.stats) {
+      cache.stats.statusCounts = category.statusCounts || cache.stats.statusCounts || {};
+      cache.stats.problemCounts = category.problemCounts || cache.stats.problemCounts || {};
+      cache.stats.totalInCategory = category.sampleCount ?? cache.stats.totalInCategory;
+    }
+    this.setSamplePageCache?.(cache);
+    this.refreshSamplePageRegion(category);
+    return true;
+  },
+
+  async refreshSampleListAfterMutation(sampleOrCategory, { render = true, affected = null } = {}) {
     const categoryId = sampleOrCategory?.categoryId || sampleOrCategory?.id || "";
     if (!categoryId) return false;
     const category = this.data?.sampleLibrary?.categories?.find(c => String(c.id || "") === String(categoryId));
@@ -261,6 +347,7 @@ Object.assign(app, {
       && this.view?.module === "samples"
       && String(this.view?.selectedCategoryId || "") === String(category.id || "");
     if (render && isCurrentSamplePage && typeof this.refreshCurrentSamplePage === "function") {
+      if (this.tryPatchCurrentSamplePage(category, affected)) return true;
       this.invalidatePagedCaches({ categoryId });
       await this.refreshCurrentSamplePage(category);
       return true;
@@ -355,6 +442,19 @@ Object.assign(app, {
     });
     const suffix = query.toString() ? `?${query.toString()}` : "";
     const resp = await fetch(`/api/task-sample-candidates${suffix}`, { cache: "no-store" });
+    const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
+    if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
+    return json;
+  },
+
+  async fetchSampleDestroyImpactScope(params = {}) {
+    const query = new URLSearchParams();
+    ["sampleId", "categoryId"].forEach(key => {
+      const value = String(params?.[key] || "").trim();
+      if (value) query.set(key, value);
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const resp = await fetch(`/api/sample-destroy-impact${suffix}`, { cache: "no-store" });
     const json = await resp.json().catch(() => ({ ok: false, error: "服务器返回不是 JSON" }));
     if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
     return json;
@@ -467,6 +567,100 @@ Object.assign(app, {
     };
   },
 
+  mergeProjectSummaryRows(projects = []) {
+    if (!Array.isArray(this.data.projects)) this.data.projects = [];
+    const byId = new Map(this.data.projects.map(project => [String(project.id || ""), project]));
+    (projects || []).forEach(summary => {
+      const id = String(summary?.id || "");
+      if (!id) return;
+      const existing = byId.get(id);
+      if (existing) {
+        Object.assign(existing, summary, {
+          stages: Array.isArray(existing.stages) ? existing.stages : [],
+          _summaryOnly: !existing._detailLoaded,
+        });
+      } else {
+        const created = { ...summary, stages: [], _summaryOnly: true, _detailLoaded: false };
+        this.data.projects.push(created);
+        byId.set(id, created);
+      }
+    });
+    return this.data.projects;
+  },
+
+  mergeSampleCategorySummaryRows(categories = []) {
+    if (!this.data.sampleLibrary) this.data.sampleLibrary = { categories: [], logs: [] };
+    if (!Array.isArray(this.data.sampleLibrary.categories)) this.data.sampleLibrary.categories = [];
+    const byId = new Map(this.data.sampleLibrary.categories.map(category => [String(category.id || ""), category]));
+    (categories || []).forEach(summary => {
+      const id = String(summary?.id || "");
+      if (!id) return;
+      const existing = byId.get(id);
+      if (existing) {
+        Object.assign(existing, summary, {
+          samples: Array.isArray(existing.samples) ? existing.samples : [],
+          _summaryOnly: !existing.samplesLoaded,
+        });
+      } else {
+        const created = { ...summary, samples: [], _summaryOnly: true, samplesLoaded: false };
+        this.data.sampleLibrary.categories.push(created);
+        byId.set(id, created);
+      }
+    });
+    return this.data.sampleLibrary.categories;
+  },
+
+  applyMutationAffected(affected = {}) {
+    if (!affected || typeof affected !== "object") return false;
+    const changes = { taskStatus: [], sampleStatus: [] };
+    this.mergeProjectSummaryRows(affected.projectSummaries || []);
+    this.mergeSampleCategorySummaryRows(affected.sampleCategorySummaries || []);
+
+    (affected.tasks || []).forEach(task => {
+      const project = (this.data.projects || []).find(item => String(item.id || "") === String(task?.projectId || ""));
+      const stage = (project?.stages || []).find(item => String(item.id || "") === String(task?.stageId || ""));
+      if (!stage) return;
+      if (!Array.isArray(stage.tasks)) stage.tasks = [];
+      const existing = stage.tasks.find(item => String(item.id || "") === String(task.id || ""));
+      const beforeStatus = existing && typeof this.taskFlowStatus === "function" ? this.taskFlowStatus(existing) : "";
+      if (existing) Object.assign(existing, task);
+      else stage.tasks.push(task);
+      const merged = existing || task;
+      const afterStatus = typeof this.taskFlowStatus === "function" ? this.taskFlowStatus(merged) : "";
+      if (beforeStatus || afterStatus) {
+        changes.taskStatus.push({
+          projectId: task.projectId || project.id || "",
+          stageId: task.stageId || stage.id || "",
+          taskId: task.id || "",
+          beforeStatus,
+          afterStatus,
+        });
+      }
+    });
+
+    (affected.samples || []).forEach(sample => {
+      const category = (this.data.sampleLibrary?.categories || []).find(item => String(item.id || "") === String(sample?.categoryId || ""));
+      if (!category) return;
+      if (!Array.isArray(category.samples)) category.samples = [];
+      const existing = category.samples.find(item => String(item.id || "") === String(sample.id || ""));
+      const beforeStatus = existing && typeof this.sampleEffectiveStatus === "function" ? this.sampleEffectiveStatus(existing) : "";
+      if (existing) Object.assign(existing, sample);
+      else category.samples.push(sample);
+      const merged = existing || sample;
+      const afterStatus = typeof this.sampleEffectiveStatus === "function" ? this.sampleEffectiveStatus(merged) : "";
+      if (beforeStatus || afterStatus) {
+        changes.sampleStatus.push({
+          categoryId: sample.categoryId || category.id || "",
+          sampleId: sample.id || "",
+          beforeStatus,
+          afterStatus,
+        });
+      }
+    });
+    this._lastMutationAffectedChanges = changes;
+    return true;
+  },
+
   async applyImportBundleMutationResult(result = {}, { render = true } = {}) {
     const mutationSummary = result.mutationSummary || null;
     this.serverRevision = result.revision || result.newRevision || this.serverRevision;
@@ -474,12 +668,8 @@ Object.assign(app, {
     this.serverOnline = true;
 
     if (!mutationSummary || mutationSummary.requiresFullState) {
-      try {
-        await this.reloadFromServer({ render });
-      } catch (e) {
-        console.error("导入后完整刷新失败：", e);
-        this.updateServerStatus("导入已写入，同步失败");
-      }
+      console.error("导入提交缺少局部同步摘要，拒绝自动拉取完整 state。");
+      this.updateServerStatus("导入已写入，同步失败");
       return false;
     }
 
@@ -543,14 +733,8 @@ Object.assign(app, {
       this.updateServerStatus("已导入");
       return true;
     } catch (e) {
-      console.error("导入后局部同步失败，尝试完整刷新：", e);
+      console.error("导入后局部同步失败：", e);
       this.updateServerStatus("导入同步失败");
-      try {
-        await this.reloadFromServer({ render });
-      } catch (fallbackError) {
-        console.error("导入后完整刷新兜底失败：", fallbackError);
-        this.updateServerStatus("导入已写入，同步失败");
-      }
       return false;
     }
   },
@@ -611,6 +795,31 @@ Object.assign(app, {
         .finally(() => { delete this._sampleCategoryDetailPromises[key]; });
     }
     return this._sampleCategoryDetailPromises[key];
+  },
+
+  async ensureSampleDestroyImpactScope({ sampleId = "", categoryId = "" } = {}) {
+    try {
+      this.updateServerStatus("加载影响范围");
+      const scope = await this.fetchSampleDestroyImpactScope({ sampleId, categoryId });
+      const categoryIds = new Set((scope.sampleCategoryIds || []).map(id => String(id || "")).filter(Boolean));
+      if (categoryId) categoryIds.add(String(categoryId));
+      const projectIds = new Set((scope.projectIds || []).map(id => String(id || "")).filter(Boolean));
+      const categoryList = [...categoryIds];
+      const projectList = [...projectIds];
+
+      const categories = await Promise.all(categoryList.map(id => this.ensureSampleCategoryLoaded(id, { render: false })));
+      if (categories.some((item, idx) => !item && categoryList[idx])) return null;
+      const projects = await Promise.all(projectList.map(id => this.ensureProjectLoaded(id, { includeTasks: true, render: false })));
+      if (projects.some((item, idx) => !item && projectList[idx])) return null;
+
+      this.updateServerStatus("已加载");
+      return scope;
+    } catch (e) {
+      console.error("销毁影响范围加载失败：", e);
+      this.updateServerStatus("加载失败");
+      alert("销毁影响范围加载失败：" + e.message);
+      return null;
+    }
   },
 
   taskMutationSampleIds(task) {
@@ -754,10 +963,11 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.applyMutationAffected(json.affected);
       this.invalidateSampleHistoryCache(sampleIds);
       this._baseData = this.cloneData(this.data);
       this.updateServerStatus("已保存");
-      await this.refreshTaskListAfterMutation(project, stage, { render });
+      await this.refreshTaskListAfterMutation(project, stage, { render, affected: json.affected });
       return true;
     } catch (e) {
       console.error("任务增量保存失败：", e);
@@ -797,10 +1007,11 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.applyMutationAffected(json.affected);
       this.invalidateSampleHistoryCache([...new Set(tasks.flatMap(task => this.taskMutationSampleIds(task)))]);
       this._baseData = this.cloneData(this.data);
       this.updateServerStatus("已保存");
-      await this.refreshTaskListAfterMutation(project, stage, { render });
+      await this.refreshTaskListAfterMutation(project, stage, { render, affected: json.affected });
       return true;
     } catch (e) {
       console.error("批量任务增量保存失败：", e);
@@ -847,7 +1058,8 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
-      this.invalidateSampleHistoryCache([sample.id, ...((samples || []).map(s => s?.id)), ...((events || []).map(log => log?.sampleId))]);
+      this.applyMutationAffected(json.affected);
+      this.invalidateSampleHistoryCache([...(samples || []).map(s => s?.id), ...(sampleEvents || []).map(log => log?.sampleId)]);
       this._baseData = this.cloneData(this.data);
       this.invalidatePagedCaches();
       this.updateServerStatus("已保存");
@@ -890,6 +1102,7 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.applyMutationAffected(json.affected);
       this.invalidateSampleHistoryCache([...(samples || []).map(s => s?.id), ...(sampleEvents || []).map(log => log?.sampleId)]);
       this._baseData = this.cloneData(this.data);
       this.invalidatePagedCaches({ stageId: stage.id });
@@ -931,9 +1144,11 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.applyMutationAffected(json.affected);
+      this.invalidateSampleHistoryCache([sample.id, ...(samples || []).map(s => s?.id), ...(events || []).map(log => log?.sampleId)]);
       this._baseData = this.cloneData(this.data);
       this.updateServerStatus("已保存");
-      await this.refreshSampleListAfterMutation(sample, { render });
+      await this.refreshSampleListAfterMutation(sample, { render, affected: json.affected });
       return true;
     } catch (e) {
       console.error("样机增量保存失败：", e);
@@ -971,10 +1186,12 @@ Object.assign(app, {
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
+      this.applyMutationAffected(json.affected);
+      this.invalidateSampleHistoryCache([...(samples || []).map(s => s?.id), ...(sampleEvents || []).map(log => log?.sampleId)]);
       this._baseData = this.cloneData(this.data);
       this.updateServerStatus("已保存");
       if (createSamples && !deleteCategory) {
-        await this.refreshSampleListAfterMutation(category, { render });
+        await this.refreshSampleListAfterMutation(category, { render, affected: json.affected });
       } else {
         this.invalidatePagedCaches({ categoryId: category.id });
         if (render) this.render();

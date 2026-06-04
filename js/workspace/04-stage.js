@@ -2,7 +2,7 @@
    数字治理平台 V7 - 阶段与SKU编辑模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.stage", {
 
   // ==================== 阶段 CRUD ====================
   inlineStageEditorHtml(stage) {
@@ -10,22 +10,46 @@ Object.assign(app, {
     return `
       <div class="inline-stage-name">
         <label>阶段名称<span class="req-star">*</span></label>
-        <input id="inlineStageName" value="${Utils.esc(stage.name || "")}" oninput="app.updateInlineStageName(this.value)" onblur="app.normalizeInlineStageName(this)">
+        <input id="inlineStageName" value="${Utils.esc(stage.name || "")}" data-app-action="inline-stage-name" data-app-events="input focusout">
       </div>
       <div class="inline-sku-editor">
         <label>方案（SKU）设置<span class="req-star">*</span></label>
         <div id="inlineSkuList">
           ${skuNames.map((name, idx) => this.inlineSkuRowHtml(name, idx)).join("")}
         </div>
-        <button type="button" class="btn btn-sm btn-outline" onclick="app.addInlineSku()">+ 增加方案名称(SKU)</button>
+        <button type="button" class="btn btn-sm btn-outline" data-app-action="inline-sku-add">+ 增加方案名称(SKU)</button>
       </div>`;
   },
   inlineSkuRowHtml(name = "", idx = 0) {
     return `<div class="inline-sku-row">
       <div class="idx">#${idx + 1}</div>
-      <input class="inline-sku-name-input" value="${Utils.esc(name || "")}" placeholder="输入方案名" oninput="app.updateInlineSkus()" onblur="app.normalizeInlineSkus()">
-      <button type="button" class="icon-btn" onclick="app.removeInlineSku(this)">−</button>
+      <input class="inline-sku-name-input" value="${Utils.esc(name || "")}" placeholder="输入方案名" data-app-action="inline-stage-skus" data-app-events="input focusout">
+      <button type="button" class="icon-btn" data-app-action="inline-sku-remove">−</button>
     </div>`;
+  },
+  inlineSkuRowNode(name = "", idx = 0) {
+    const row = document.createElement("div");
+    row.className = "inline-sku-row";
+
+    const label = document.createElement("div");
+    label.className = "idx";
+    label.textContent = `#${idx + 1}`;
+
+    const input = document.createElement("input");
+    input.className = "inline-sku-name-input";
+    input.value = name || "";
+    input.placeholder = "输入方案名";
+    input.dataset.appAction = "inline-stage-skus";
+    input.dataset.appEvents = "input focusout";
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-btn";
+    remove.dataset.appAction = "inline-sku-remove";
+    remove.textContent = "−";
+
+    row.append(label, input, remove);
+    return row;
   },
   persistCurrentStageMutation(action = "update_stage_inline", remark = "阶段内联编辑", { render = false } = {}) {
     const p = this.currentProject();
@@ -82,9 +106,7 @@ Object.assign(app, {
     const list = document.getElementById("inlineSkuList");
     if (list) {
       const idx = list.querySelectorAll(".inline-sku-row").length;
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = this.inlineSkuRowHtml(value, idx).trim();
-      list.appendChild(wrapper.firstElementChild);
+      list.appendChild(this.inlineSkuRowNode(value, idx));
       this.refreshInlineSkuIndexes();
       return;
     }
@@ -119,18 +141,38 @@ Object.assign(app, {
       <div class="sku-row">
         <div class="idx">#${idx + 1}</div>
         <input class="sku-name-input" value="${Utils.esc(name || "")}" placeholder="${Utils.esc(placeholder)}">
-        <button type="button" class="icon-btn" onclick="app.removeSkuInput(this)">−</button>
+        <button type="button" class="icon-btn" data-app-action="sku-input-remove">−</button>
       </div>
     `).join("");
     return `<div class="sku-editor"><div id="skuList">${rows}</div>
-      <button type="button" class="btn btn-sm btn-outline" onclick="app.addSkuInput()">+ 增加方案名称(SKU)</button></div>`;
+      <button type="button" class="btn btn-sm btn-outline" data-app-action="sku-input-add">+ 增加方案名称(SKU)</button></div>`;
+  },
+  skuRowNode(value = "", idx = 1) {
+    const row = document.createElement("div");
+    row.className = "sku-row";
+
+    const label = document.createElement("div");
+    label.className = "idx";
+    label.textContent = `#${idx}`;
+
+    const input = document.createElement("input");
+    input.className = "sku-name-input";
+    input.value = value || "";
+    input.placeholder = "输入方案名，如：主方案、A1、B7";
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-btn";
+    remove.dataset.appAction = "sku-input-remove";
+    remove.textContent = "−";
+
+    row.append(label, input, remove);
+    return row;
   },
   addSkuInput(value = "") {
     const list = document.getElementById("skuList"); if (!list) return;
     const idx = list.querySelectorAll(".sku-row").length + 1;
-    const div = document.createElement("div"); div.className = "sku-row";
-    div.innerHTML = `<div class="idx">#${idx}</div><input class="sku-name-input" value="${Utils.esc(value)}" placeholder="输入方案名，如：主方案、A1、B7"><button type="button" class="icon-btn" onclick="app.removeSkuInput(this)">−</button>`;
-    list.appendChild(div); this.refreshSkuIndexes();
+    list.appendChild(this.skuRowNode(value, idx)); this.refreshSkuIndexes();
   },
   removeSkuInput(btn) {
     const list = document.getElementById("skuList"); if (!list) return;
@@ -154,7 +196,7 @@ Object.assign(app, {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
       if (!p) return;
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       const stageNameEl = document.getElementById("stageName");
       const name = stageNameEl.value.trim();
       if (!name) { this.markFieldInvalid(stageNameEl, "阶段名称不能为空"); return true; }
@@ -171,14 +213,14 @@ Object.assign(app, {
       }
       const s = { id: Utils.id("stage_"), name, skuNames, bom: [], strategy: [], progress: [], tasks: [] };
       p.stages.push(s);
-      this.view.selectedStageId = s.id;
+      this.patchViewState({ selectedStageId: s.id });
       const saved = await this.commitStageMutation(p, s, {
         action: "create_stage",
         remark: "新建阶段",
         user: "管理员",
         createIfMissing: true
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("阶段已新建");
       return false;
     });
@@ -193,7 +235,7 @@ Object.assign(app, {
     `, async () => {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       const stageNameEl = document.getElementById("stageName");
       const name = stageNameEl.value.trim();
       if (!name) { this.markFieldInvalid(stageNameEl, "阶段名称不能为空"); return true; }
@@ -209,7 +251,7 @@ Object.assign(app, {
         remark: "编辑阶段",
         user: "管理员"
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("阶段已保存");
       return false;
     });
@@ -235,12 +277,12 @@ Object.assign(app, {
       ? `\n\n该阶段含 ${taskCount} 个任务及其测试履历/日志，删除后不可恢复。`
       : "";
     this.showConfirm(`确认删除阶段「${stage.name}」？${extraWarn}`, async () => {
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       // 只释放未完成任务占用的样机；已完成任务的样机状态不变。
       const affectedSampleIds = new Set();
       activeTasks.forEach(t => (t.sampleIds || []).forEach(id => affectedSampleIds.add(id)));
       p.stages = p.stages.filter(s => s.id !== id);
-      this.view.selectedStageId = p.stages[0]?.id || null;
+      this.patchViewState({ selectedStageId: p.stages[0]?.id || null });
       affectedSampleIds.forEach(id => {
         if (typeof this.isSampleUsedByAnotherOpenTask === "function"
             && !this.isSampleUsedByAnotherOpenTask(id, null)
@@ -249,7 +291,7 @@ Object.assign(app, {
         }
       });
       const affectedSamples = [...affectedSampleIds].map(sampleId => this.findSample(sampleId)?.sample).filter(Boolean);
-      const sampleEvents = (this.data.sampleLibrary.logs || []).filter(log => affectedSampleIds.has(String(log?.sampleId || "")));
+      const sampleEvents = this.sampleEventRecords().filter(log => affectedSampleIds.has(String(log?.sampleId || "")));
       const saved = await this.commitStageMutation(p, stage, {
         action: "delete_stage",
         remark: "删除阶段",
@@ -259,7 +301,7 @@ Object.assign(app, {
         sampleEvents,
         render: false
       });
-      if (!saved) { this.data = snapshot; return; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return; }
       this.render();
       Utils.toast("阶段已删除");
     }, { title: "删除阶段", okText: "删除", okClass: "btn btn-danger" });
@@ -275,7 +317,7 @@ Object.assign(app, {
       </div>
     `, async () => {
       this.clearFieldValidationMarks();
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       const copyNameEl = document.getElementById("copyStageName");
       const name = copyNameEl.value.trim();
       if (!name) { this.markFieldInvalid(copyNameEl, "阶段名称不能为空"); return true; }
@@ -306,14 +348,14 @@ Object.assign(app, {
 
       const sourceIdx = p.stages.findIndex(s => s.id === id);
       p.stages.splice(sourceIdx + 1, 0, cloned);
-      this.view.selectedStageId = cloned.id;
+      this.patchViewState({ selectedStageId: cloned.id });
       const saved = await this.commitStageMutation(p, cloned, {
         action: "copy_stage",
         remark: "复制阶段",
         user: "管理员",
         createIfMissing: true
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast(`已复制阶段：${name}`);
       return false;
     });

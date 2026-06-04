@@ -1,9 +1,11 @@
 import copy
+import io
 import json
 import sqlite3
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -28,6 +30,12 @@ def empty_state():
 
 class NoopLock:
     def __enter__(self): return self
+    def __exit__(self, exc_type, exc, tb): return False
+
+
+class ExplodingLock:
+    def __enter__(self):
+        raise AssertionError("read path must not enter DB_LOCK")
     def __exit__(self, exc_type, exc, tb): return False
 
 
@@ -113,7 +121,396 @@ def state_conn(data):
     return conn
 
 
+class TrackingLock:
+    def __init__(self):
+        self.in_lock = False
+
+    def __enter__(self):
+        self.in_lock = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.in_lock = False
+        return False
+
+
 class ServerCoreTests(unittest.TestCase):
+    def test_get_state_reads_use_sqlite_snapshot_without_db_lock(self):
+        data = empty_state()
+        data["projects"] = [{"id": "p1", "name": "项目A", "stages": []}]
+        conn = state_conn(data)
+        conn.execute("UPDATE app_state SET revision = 9 WHERE id = 1")
+        old_connect = server.connect_db
+        old_lock = server.DB_LOCK
+        try:
+            server.connect_db = lambda: conn
+            server.DB_LOCK = ExplodingLock()
+
+            state, revision, _ = server.get_state(compact=True)
+            metadata_revision, _ = server.get_state_metadata()
+
+            self.assertEqual(revision, 9)
+            self.assertEqual(metadata_revision, 9)
+            self.assertEqual(state["projects"][0]["id"], "p1")
+        finally:
+            server.connect_db = old_connect
+            server.DB_LOCK = old_lock
+
+    def test_sample_destroy_impact_scope_uses_targeted_ids_without_db_lock(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [
+            {
+                "id": "cat_destroy",
+                "name": "销毁池",
+                "samples": [
+                    {"id": "sample_destroy", "sampleNo": "D001", "sn": "SN-D", "status": "测试中"},
+                ],
+            },
+            {
+                "id": "cat_keep",
+                "name": "保留池",
+                "samples": [
+                    {"id": "sample_keep", "sampleNo": "K001", "sn": "SN-K", "status": "测试中"},
+                ],
+            },
+        ]
+        data["projects"] = [{
+            "id": "project_destroy",
+            "name": "项目A",
+            "stages": [{
+                "id": "stage_destroy",
+                "projectId": "project_destroy",
+                "name": "阶段A",
+                "tasks": [
+                    {
+                        "id": "task_running",
+                        "projectId": "project_destroy",
+                        "stageId": "stage_destroy",
+                        "testItem": "运行任务",
+                        "status": "进行中",
+                        "sampleIds": ["sample_destroy", "sample_keep"],
+                    },
+                    {
+                        "id": "task_completed_removed",
+                        "projectId": "project_destroy",
+                        "stageId": "stage_destroy",
+                        "testItem": "历史任务",
+                        "status": "正常完成",
+                        "completed": True,
+                        "sampleIds": [],
+                        "removedSampleRecords": [{"sampleId": "sample_destroy"}],
+                    },
+                ],
+            }],
+        }]
+        conn = state_conn(data)
+        old_lock = server.DB_LOCK
+        try:
+            server.DB_LOCK = ExplodingLock()
+            category_scope = server.list_sample_destroy_impact_scope(conn, {"categoryId": ["cat_destroy"]})
+            sample_scope = server.list_sample_destroy_impact_scope(conn, {"sampleId": ["sample_destroy"]})
+        finally:
+            server.DB_LOCK = old_lock
+
+        self.assertEqual(category_scope["sampleIds"], ["sample_destroy"])
+        self.assertEqual(category_scope["relatedSampleIds"], ["sample_destroy", "sample_keep"])
+        self.assertEqual(category_scope["projectIds"], ["project_destroy"])
+        self.assertEqual(category_scope["stageIds"], ["stage_destroy"])
+        self.assertEqual(category_scope["taskIds"], ["task_running"])
+        self.assertEqual(category_scope["sampleCategoryIds"], ["cat_destroy", "cat_keep"])
+        self.assertIn("task_completed_removed", sample_scope["taskIds"])
+        self.assertEqual(sample_scope["projectIds"], ["project_destroy"])
+
+    def test_import_preview_cache_cleanup_enforces_entry_and_byte_limits(self):
+        old_entries = server.IMPORT_PREVIEW_MAX_ENTRIES
+        old_bytes = server.IMPORT_PREVIEW_MAX_CACHED_BYTES
+        old_previews = dict(server._IMPORT_PREVIEWS)
+        server._IMPORT_PREVIEWS.clear()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                server.IMPORT_PREVIEW_MAX_ENTRIES = 2
+                server.IMPORT_PREVIEW_MAX_CACHED_BYTES = 1000
+                base_ts = server.time.time()
+                for idx in range(3):
+                    preview_dir = Path(tmp) / f"preview_{idx}"
+                    preview_dir.mkdir()
+                    server._IMPORT_PREVIEWS[f"pv_{idx}"] = {
+                        "_ts": base_ts + idx,
+                        "_tmp_dir": str(preview_dir),
+                        "_cache_bytes": 80,
+                    }
+                server._cleanup_expired_previews()
+                self.assertEqual(sorted(server._IMPORT_PREVIEWS), ["pv_1", "pv_2"])
+                self.assertFalse((Path(tmp) / "preview_0").exists())
+
+                server._IMPORT_PREVIEWS.clear()
+                server.IMPORT_PREVIEW_MAX_ENTRIES = 8
+                server.IMPORT_PREVIEW_MAX_CACHED_BYTES = 150
+                for idx in range(3):
+                    preview_dir = Path(tmp) / f"bytes_{idx}"
+                    preview_dir.mkdir()
+                    server._IMPORT_PREVIEWS[f"pv_bytes_{idx}"] = {
+                        "_ts": base_ts + idx,
+                        "_tmp_dir": str(preview_dir),
+                        "_cache_bytes": 80,
+                    }
+                server._cleanup_expired_previews()
+                self.assertEqual(sorted(server._IMPORT_PREVIEWS), ["pv_bytes_2"])
+                self.assertFalse((Path(tmp) / "bytes_0").exists())
+                self.assertFalse((Path(tmp) / "bytes_1").exists())
+        finally:
+            server.IMPORT_PREVIEW_MAX_ENTRIES = old_entries
+            server.IMPORT_PREVIEW_MAX_CACHED_BYTES = old_bytes
+            server._IMPORT_PREVIEWS.clear()
+            server._IMPORT_PREVIEWS.update(old_previews)
+
+    def test_import_preview_uses_compact_state_snapshot(self):
+        old_get_state = server.get_state
+        old_previews = dict(server._IMPORT_PREVIEWS)
+        server._IMPORT_PREVIEWS.clear()
+        calls = []
+        try:
+            incoming = empty_state()
+            manifest = {
+                "format": "testchamber-export-bundle-v1",
+                "revision": 1,
+                "exportedAt": server.now_iso(),
+            }
+            bundle = io.BytesIO()
+            with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", server.json_dumps(manifest))
+                zf.writestr("state.json", server.json_dumps(incoming))
+
+            def fake_get_state(*, compact=False):
+                calls.append(compact)
+                return empty_state(), 12, "2026-06-04T00:00:00+08:00"
+
+            server.get_state = fake_get_state
+            headers, body = make_multipart(files=[
+                ("file", "bundle.zip", "application/zip", bundle.getvalue()),
+            ])
+
+            result = server.analyze_import_bundle(headers, body)
+
+            self.assertEqual(calls, [True])
+            self.assertEqual(result["source"]["revision"], 1)
+            entry = server._IMPORT_PREVIEWS[result["previewId"]]
+            self.assertNotIn("_incoming", entry)
+            self.assertNotIn("result", entry)
+            self.assertTrue(Path(entry["_payload_path"]).is_file())
+            incoming_payload, result_payload = server._load_import_preview_payload(entry)
+            self.assertEqual(incoming_payload.get("version"), "V7")
+            self.assertEqual(result_payload.get("previewId"), result["previewId"])
+        finally:
+            server.get_state = old_get_state
+            for preview_id in list(server._IMPORT_PREVIEWS):
+                server._cleanup_preview_temp(preview_id)
+            server._IMPORT_PREVIEWS.clear()
+            server._IMPORT_PREVIEWS.update(old_previews)
+
+    def test_import_revision_conflict_uses_metadata_without_composing_state(self):
+        data = empty_state()
+        conn = state_conn(data)
+        conn.execute("UPDATE app_state SET revision = 7 WHERE id = 1")
+        old_previews = dict(server._IMPORT_PREVIEWS)
+        old_compose_state = server.compose_state
+        server._IMPORT_PREVIEWS.clear()
+        try:
+            server._IMPORT_PREVIEWS["preview_stale"] = {
+                "_ts": server.time.time(),
+                "_revision": 3,
+                "result": {"conflicts": [], "blockers": []},
+            }
+            with patched_server_db(conn):
+                server.compose_state = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("stale import preview must not compose full state"))
+                result = server.commit_import_bundle({"previewId": "preview_stale", "decisions": {}})
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error_code"], "IMPORT_REVISION_CONFLICT")
+            self.assertEqual(result["server_revision"], 7)
+        finally:
+            server.compose_state = old_compose_state
+            server._IMPORT_PREVIEWS.clear()
+            server._IMPORT_PREVIEWS.update(old_previews)
+
+    def test_import_commit_uses_compact_snapshot_and_preserves_existing_photos(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat_current",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample_existing",
+                "sampleNo": "S-001",
+                "sn": "SN-DUP",
+                "status": "闲置",
+                "photos": [{
+                    "id": "photo_existing",
+                    "name": "旧照片.jpg",
+                    "type": "image/jpeg",
+                    "size": 3,
+                    "uploadedAt": "2026-06-04T00:00:00+08:00",
+                    "relativePath": "samples/sample_existing/photos/existing.jpg",
+                    "url": "/api/samples/sample_existing/photos/photo_existing",
+                }],
+            }],
+        }]
+        incoming = empty_state()
+        incoming["sampleLibrary"]["categories"] = [{
+            "id": "cat_import",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample_import",
+                "sampleNo": "S-002",
+                "sn": "SN-DUP",
+                "status": "闲置",
+                "photos": [{
+                    "id": "photo_import",
+                    "name": "导入照片.jpg",
+                    "type": "image/jpeg",
+                    "size": 4,
+                    "uploadedAt": "2026-06-04T01:00:00+08:00",
+                    "relativePath": "samples/sample_import/photos/import.jpg",
+                    "url": "/api/samples/sample_import/photos/photo_import",
+                }],
+            }],
+        }]
+
+        old_previews = dict(server._IMPORT_PREVIEWS)
+        old_get_state = server.get_state
+        calls = []
+        server._IMPORT_PREVIEWS.clear()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with patched_server_data_dirs(tmp):
+                    conn = state_conn(data)
+                    preview_dir = Path(tmp) / "preview_merge_photo"
+                    asset_dir = preview_dir / "assets" / "samples" / "sample_import" / "photos"
+                    asset_dir.mkdir(parents=True)
+                    (asset_dir / "import.jpg").write_bytes(b"new!")
+                    result_payload = {
+                        "source": {},
+                        "blockers": [],
+                        "autoApply": [],
+                        "conflicts": [{
+                            "conflictId": "conflict_photo",
+                            "type": "sample_identity_conflict",
+                            "entity": "sample",
+                            "currentId": "sample_existing",
+                            "incomingId": "sample_import",
+                            "preferredMergeTarget": "sample_existing",
+                            "mergeableFields": [],
+                            "autoMergeSubData": ["photos"],
+                        }],
+                    }
+                    payload_path = server._store_import_preview_payload(preview_dir, incoming, result_payload)
+                    server._IMPORT_PREVIEWS["preview_merge_photo"] = {
+                        "_ts": server.time.time(),
+                        "_tmp_dir": str(preview_dir),
+                        "_payload_path": str(payload_path),
+                        "_revision": 1,
+                        "_cache_bytes": payload_path.stat().st_size,
+                    }
+
+                    def tracking_get_state(*, compact=False):
+                        calls.append(compact)
+                        return old_get_state(compact=compact)
+
+                    server.get_state = tracking_get_state
+                    with patched_server_db(conn):
+                        result = server.commit_import_bundle({
+                            "previewId": "preview_merge_photo",
+                            "decisions": {
+                                "conflict_photo": {"action": "merge_into_existing", "targetId": "sample_existing"}
+                            },
+                        })
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(calls, [True])
+                    state, _, _ = server.compose_state(conn)
+                    sample = server._sample_index_by_id(state)["sample_existing"]
+                    photo_ids = {photo.get("id") for photo in sample.get("photos") or []}
+                    self.assertIn("photo_existing", photo_ids)
+                    self.assertIn("photo_import", photo_ids)
+        finally:
+            server.get_state = old_get_state
+            server._IMPORT_PREVIEWS.clear()
+            server._IMPORT_PREVIEWS.update(old_previews)
+
+    def test_save_state_current_snapshot_skips_full_photos_and_preserves_assets_and_events(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat_current",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample_existing",
+                "sampleNo": "S-001",
+                "sn": "SN-001",
+                "status": "闲置",
+                "photos": [{
+                    "id": "photo_existing",
+                    "name": "旧照片.jpg",
+                    "type": "image/jpeg",
+                    "size": 3,
+                    "uploadedAt": "2026-06-04T00:00:00+08:00",
+                    "relativePath": "samples/sample_existing/photos/existing.jpg",
+                    "url": "/api/samples/sample_existing/photos/photo_existing",
+                }],
+            }],
+            "logs": [],
+        }]
+        data["sampleLibrary"]["logs"] = [{
+            "id": "event_existing",
+            "sampleId": "sample_existing",
+            "time": "2026-06-04T00:00:00+08:00",
+            "source": "原事件",
+        }]
+        conn = state_conn(data)
+        compact_state, revision, _ = server.compose_state(conn, include_sample_photos=False, include_sample_logs=False)
+        sample = compact_state["sampleLibrary"]["categories"][0]["samples"][0]
+        sample["status"] = "测试中"
+
+        old_compose_state = server.compose_state
+        old_should_backup = server._should_backup
+        calls = []
+        try:
+            def tracking_compose_state(conn_arg, **kwargs):
+                calls.append(kwargs)
+                return old_compose_state(conn_arg, **kwargs)
+
+            server.compose_state = tracking_compose_state
+            server._should_backup = lambda *args, **kwargs: False
+            with patched_server_db(conn):
+                server.DB_LOCK = ExplodingLock()
+                ok, result = server.save_state(compact_state, revision, "127.0.0.1", remark="compact-save")
+
+            self.assertTrue(ok, result)
+            self.assertEqual(calls[0], {"include_sample_photos": False, "include_sample_logs": True})
+            state, _, _ = old_compose_state(conn)
+            saved_sample = server._sample_index_by_id(state)["sample_existing"]
+            self.assertEqual(saved_sample["status"], "测试中")
+            self.assertEqual(saved_sample["photos"][0]["id"], "photo_existing")
+            self.assertEqual(state["sampleLibrary"]["logs"][0]["id"], "event_existing")
+        finally:
+            server.compose_state = old_compose_state
+            server._should_backup = old_should_backup
+
+    def test_build_export_bundle_file_writes_temp_zip_without_byte_buffer(self):
+        data = empty_state()
+        data["projects"] = [{"id": "p1", "name": "项目A", "stages": []}]
+        conn = state_conn(data)
+        with patched_server_db(conn):
+            tmp_path, filename = server.build_export_bundle_file()
+        try:
+            self.assertTrue(tmp_path.is_file())
+            self.assertTrue(filename.startswith("testchamber_export_"))
+            with server.zipfile.ZipFile(tmp_path, "r") as zf:
+                names = set(zf.namelist())
+                self.assertIn("manifest.json", names)
+                self.assertIn("state.json", names)
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                self.assertEqual(manifest["format"], "testchamber-export-bundle-v1")
+                self.assertEqual(manifest["projectCount"], 1)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
     def test_detects_sample_occupancy_conflict_across_open_tasks(self):
         data = empty_state()
         data["projects"] = [{
@@ -215,12 +612,24 @@ class ServerCoreTests(unittest.TestCase):
             )
 
             try:
-                status, payload = call_handler_json(
-                    "do_POST",
-                    "/api/samples/sample_1/photos",
-                    body=body,
-                    headers=headers,
-                )
+                original_lock = server.DB_LOCK
+                original_write_bytes = Path.write_bytes
+
+                def checked_write_bytes(path_obj, *args, **kwargs):
+                    return original_write_bytes(path_obj, *args, **kwargs)
+
+                try:
+                    server.DB_LOCK = ExplodingLock()
+                    Path.write_bytes = checked_write_bytes
+                    status, payload = call_handler_json(
+                        "do_POST",
+                        "/api/samples/sample_1/photos",
+                        body=body,
+                        headers=headers,
+                    )
+                finally:
+                    Path.write_bytes = original_write_bytes
+                    server.DB_LOCK = original_lock
 
                 self.assertEqual(status, 200)
                 self.assertTrue(payload["ok"], payload)
@@ -237,11 +646,16 @@ class ServerCoreTests(unittest.TestCase):
                 )
 
                 rename_body = json.dumps({"name": "front-renamed.jpg", "user": "张三/001"}).encode("utf-8")
-                status, payload = call_handler_json(
-                    "do_PATCH",
-                    f"/api/samples/sample_1/photos/{photo['id']}",
-                    body=rename_body,
-                )
+                original_lock = server.DB_LOCK
+                try:
+                    server.DB_LOCK = ExplodingLock()
+                    status, payload = call_handler_json(
+                        "do_PATCH",
+                        f"/api/samples/sample_1/photos/{photo['id']}",
+                        body=rename_body,
+                    )
+                finally:
+                    server.DB_LOCK = original_lock
 
                 self.assertEqual(status, 200)
                 self.assertTrue(payload["ok"], payload)
@@ -255,10 +669,22 @@ class ServerCoreTests(unittest.TestCase):
                 self.assertEqual(audit["revision_before"], 2)
                 self.assertEqual(audit["revision_after"], 3)
 
-                status, payload = call_handler_json(
-                    "do_DELETE",
-                    f"/api/samples/sample_1/photos/{photo['id']}",
-                )
+                original_lock = server.DB_LOCK
+                original_unlink = Path.unlink
+
+                def checked_unlink(path_obj, *args, **kwargs):
+                    return original_unlink(path_obj, *args, **kwargs)
+
+                try:
+                    server.DB_LOCK = ExplodingLock()
+                    Path.unlink = checked_unlink
+                    status, payload = call_handler_json(
+                        "do_DELETE",
+                        f"/api/samples/sample_1/photos/{photo['id']}",
+                    )
+                finally:
+                    Path.unlink = original_unlink
+                    server.DB_LOCK = original_lock
 
                 self.assertEqual(status, 200)
                 self.assertTrue(payload["ok"], payload)
@@ -561,6 +987,12 @@ class ServerCoreTests(unittest.TestCase):
 
         self.assertTrue(ok, result)
         self.assertEqual(result["revision"], 2)
+        self.assertEqual(result["affected"]["projectIds"], ["p1"])
+        self.assertEqual(result["affected"]["stageIds"], ["st1"])
+        self.assertEqual(result["affected"]["taskIds"], ["task1"])
+        self.assertEqual(result["affected"]["sampleIds"], ["sample1"])
+        self.assertEqual(result["affected"]["tasks"][0]["status"], "进行中")
+        self.assertEqual(result["affected"]["samples"][0]["status"], "测试中")
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 2)
         task = state["projects"][0]["stages"][0]["tasks"][0]
@@ -569,6 +1001,101 @@ class ServerCoreTests(unittest.TestCase):
         self.assertEqual(task["logs"][0]["id"], "log1")
         self.assertEqual(sample["status"], "测试中")
         self.assertEqual(state["sampleLibrary"]["logs"][0]["id"], "event1")
+
+    def test_task_mutation_backup_uses_read_snapshot_without_second_db_lock(self):
+        data = empty_state()
+        data["projects"] = [{
+            "id": "p1",
+            "name": "项目A",
+            "stages": [{
+                "id": "st1",
+                "name": "阶段A",
+                "progress": [{"id": "prog1", "status": "待启动", "testItem": "吞吐"}],
+                "tasks": [{
+                    "id": "task1",
+                    "progressId": "prog1",
+                    "category": "射频",
+                    "testItem": "吞吐",
+                    "status": "待下发",
+                    "owner": "张三/001",
+                    "sampleIds": ["sample1"],
+                    "logs": [],
+                }],
+            }],
+        }]
+        data["sampleLibrary"] = {
+            "categories": [{
+                "id": "cat1",
+                "name": "样机池",
+                "samples": [{
+                    "id": "sample1",
+                    "sampleNo": "S001",
+                    "sn": "SN001",
+                    "status": "闲置",
+                    "owner": "张三/001",
+                    "problemRecords": [],
+                    "photos": [],
+                }],
+            }],
+            "logs": [],
+        }
+        conn = state_conn(data)
+
+        old_connect = server.connect_db
+        old_lock = server.DB_LOCK
+        old_should_backup = server._should_backup
+        old_write_backup = server.write_backup
+        backups = []
+        try:
+            server.connect_db = lambda: conn
+            server.DB_LOCK = ExplodingLock()
+            server._should_backup = lambda *args, **kwargs: True
+            server.write_backup = lambda snapshot, revision: backups.append((copy.deepcopy(snapshot), revision))
+            ok, result = server.commit_task_mutation({
+                "projectId": "p1",
+                "stageId": "st1",
+                "taskId": "task1",
+                "action": "task_start",
+                "stage": {
+                    "id": "st1",
+                    "projectId": "p1",
+                    "name": "阶段A",
+                    "progress": [{"id": "prog1", "status": "Testing", "testItem": "吞吐"}],
+                },
+                "task": {
+                    "id": "task1",
+                    "projectId": "p1",
+                    "stageId": "st1",
+                    "progressId": "prog1",
+                    "category": "射频",
+                    "testItem": "吞吐",
+                    "status": "进行中",
+                    "owner": "张三/001",
+                    "sampleIds": ["sample1"],
+                    "logs": [],
+                },
+                "samples": [{
+                    "id": "sample1",
+                    "sampleNo": "S001",
+                    "sn": "SN001",
+                    "status": "测试中",
+                    "owner": "张三/001",
+                    "currentProjectId": "p1",
+                    "currentStageId": "st1",
+                    "currentTaskId": "task1",
+                    "currentTestItem": "吞吐",
+                }],
+            }, "127.0.0.1")
+        finally:
+            server.connect_db = old_connect
+            server.DB_LOCK = old_lock
+            server._should_backup = old_should_backup
+            server.write_backup = old_write_backup
+
+        self.assertTrue(ok, result)
+        self.assertEqual(result["revision"], 2)
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0][1], 2)
 
     def test_commit_task_mutation_can_create_and_delete_task(self):
         data = empty_state()
@@ -605,6 +1132,8 @@ class ServerCoreTests(unittest.TestCase):
                 },
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["taskIds"], ["task_new"])
+            self.assertEqual(result["affected"]["tasks"][0]["id"], "task_new")
 
             state, revision, _ = server.compose_state(conn)
             self.assertEqual(revision, 2)
@@ -619,6 +1148,8 @@ class ServerCoreTests(unittest.TestCase):
                 "task": {"id": "task_new", "projectId": "p1", "stageId": "st1", "sampleIds": []},
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["taskIds"], ["task_new"])
+            self.assertEqual(result["affected"]["tasks"], [])
 
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 3)
@@ -831,6 +1362,8 @@ class ServerCoreTests(unittest.TestCase):
 
         self.assertTrue(ok, result)
         self.assertEqual(result["revision"], 2)
+        self.assertEqual(result["affected"]["taskIds"], ["task1"])
+        self.assertEqual(result["affected"]["sampleIds"], ["sample1"])
         self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM task_logs").fetchone()["count"], 1)
         self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM sample_events").fetchone()["count"], 1)
         self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM audit_log").fetchone()["count"], 1)
@@ -866,6 +1399,7 @@ class ServerCoreTests(unittest.TestCase):
         } for idx in range(40)]
 
         with patched_server_db(conn):
+            server.DB_LOCK = ExplodingLock()
             ok, result = server.commit_task_batch_mutation({
                 "projectId": "p1",
                 "stageId": "st1",
@@ -883,6 +1417,8 @@ class ServerCoreTests(unittest.TestCase):
         self.assertTrue(ok, result)
         self.assertEqual(result["revision"], 2)
         self.assertEqual(result["count"], 40)
+        self.assertEqual(len(result["affected"]["tasks"]), 40)
+        self.assertEqual(result["affected"]["tasksTruncated"], False)
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 2)
         self.assertEqual(len(state["projects"][0]["stages"][0]["tasks"]), 40)
@@ -983,6 +1519,7 @@ class ServerCoreTests(unittest.TestCase):
         conn = state_conn(data)
 
         with patched_server_db(conn):
+            server.DB_LOCK = ExplodingLock()
             ok, result = server.commit_sample_mutation({
                 "sampleId": "sample1",
                 "sample": {
@@ -1002,6 +1539,8 @@ class ServerCoreTests(unittest.TestCase):
                 }],
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["sampleIds"], ["sample1"])
+            self.assertEqual(result["affected"]["samples"][0]["status"], "取走分析")
             state, revision, _ = server.compose_state(conn)
             sample = state["sampleLibrary"]["categories"][0]["samples"][0]
             self.assertEqual(revision, 2)
@@ -1014,10 +1553,69 @@ class ServerCoreTests(unittest.TestCase):
                 "deleteSample": True,
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["sampleIds"], ["sample1"])
+            self.assertEqual(result["affected"]["samples"], [])
 
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 3)
         self.assertEqual(state["sampleLibrary"]["categories"][0]["samples"], [])
+
+    def test_commit_sample_destroy_unlinks_asset_files_outside_db_lock(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat1",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample1",
+                "sampleNo": "S001",
+                "sn": "SN001",
+                "status": "闲置",
+                "photos": [{
+                    "id": "photo_sample_destroy",
+                    "name": "销毁照片.jpg",
+                    "type": "image/jpeg",
+                    "size": 4,
+                    "uploadedAt": "2026-06-04T00:00:00+08:00",
+                    "relativePath": "samples/sample1/photos/destroy.jpg",
+                    "url": "/api/samples/sample1/photos/photo_sample_destroy",
+                }],
+            }],
+        }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patched_server_data_dirs(tmp):
+                conn = state_conn(data)
+                photo_path = server.SAMPLE_DATA_DIR / "sample1" / "photos" / "destroy.jpg"
+                photo_path.parent.mkdir(parents=True, exist_ok=True)
+                photo_path.write_bytes(b"gone")
+
+                tracking_lock = TrackingLock()
+                old_connect = server.connect_db
+                old_lock = server.DB_LOCK
+                original_unlink = Path.unlink
+                unlinked = []
+
+                def checked_unlink(path_obj, *args, **kwargs):
+                    self.assertFalse(tracking_lock.in_lock, "sample destroy file unlink must happen outside DB_LOCK")
+                    unlinked.append(Path(path_obj))
+                    return original_unlink(path_obj, *args, **kwargs)
+
+                try:
+                    server.connect_db = lambda: conn
+                    server.DB_LOCK = tracking_lock
+                    Path.unlink = checked_unlink
+                    ok, result = server.commit_sample_mutation({
+                        "sampleId": "sample1",
+                        "deleteSample": True,
+                    }, "127.0.0.1")
+                finally:
+                    Path.unlink = original_unlink
+                    server.connect_db = old_connect
+                    server.DB_LOCK = old_lock
+
+                self.assertTrue(ok, result)
+                self.assertIn(photo_path, unlinked)
+                self.assertFalse(photo_path.exists())
 
     def test_commit_sample_category_mutation_deletes_category_and_updates_tasks(self):
         data = empty_state()
@@ -1077,6 +1675,8 @@ class ServerCoreTests(unittest.TestCase):
                 }],
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["sampleCategoryIds"], ["cat1"])
+            self.assertEqual(result["affected"]["sampleCategorySummaries"], [])
 
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 2)
@@ -1086,11 +1686,69 @@ class ServerCoreTests(unittest.TestCase):
         self.assertEqual(task["sampleIds"], [])
         self.assertEqual(task["logs"][0]["id"], "log_destroy_pool")
 
+    def test_commit_sample_category_destroy_unlinks_asset_files_outside_db_lock(self):
+        data = empty_state()
+        data["sampleLibrary"]["categories"] = [{
+            "id": "cat1",
+            "name": "样机池",
+            "samples": [{
+                "id": "sample1",
+                "sampleNo": "S001",
+                "sn": "SN001",
+                "status": "闲置",
+                "photos": [{
+                    "id": "photo_category_destroy",
+                    "name": "池销毁照片.jpg",
+                    "type": "image/jpeg",
+                    "size": 4,
+                    "uploadedAt": "2026-06-04T00:00:00+08:00",
+                    "relativePath": "samples/sample1/photos/category-destroy.jpg",
+                    "url": "/api/samples/sample1/photos/photo_category_destroy",
+                }],
+            }],
+        }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patched_server_data_dirs(tmp):
+                conn = state_conn(data)
+                photo_path = server.SAMPLE_DATA_DIR / "sample1" / "photos" / "category-destroy.jpg"
+                photo_path.parent.mkdir(parents=True, exist_ok=True)
+                photo_path.write_bytes(b"gone")
+
+                tracking_lock = TrackingLock()
+                old_connect = server.connect_db
+                old_lock = server.DB_LOCK
+                original_unlink = Path.unlink
+                unlinked = []
+
+                def checked_unlink(path_obj, *args, **kwargs):
+                    self.assertFalse(tracking_lock.in_lock, "sample category destroy file unlink must happen outside DB_LOCK")
+                    unlinked.append(Path(path_obj))
+                    return original_unlink(path_obj, *args, **kwargs)
+
+                try:
+                    server.connect_db = lambda: conn
+                    server.DB_LOCK = tracking_lock
+                    Path.unlink = checked_unlink
+                    ok, result = server.commit_sample_category_mutation({
+                        "categoryId": "cat1",
+                        "deleteCategory": True,
+                    }, "127.0.0.1")
+                finally:
+                    Path.unlink = original_unlink
+                    server.connect_db = old_connect
+                    server.DB_LOCK = old_lock
+
+                self.assertTrue(ok, result)
+                self.assertIn(photo_path, unlinked)
+                self.assertFalse(photo_path.exists())
+
     def test_commit_project_mutation_creates_and_deletes_project(self):
         data = empty_state()
         conn = state_conn(data)
 
         with patched_server_db(conn):
+            server.DB_LOCK = ExplodingLock()
             ok, result = server.commit_project_mutation({
                 "projectId": "p_new",
                 "createIfMissing": True,
@@ -1104,6 +1762,8 @@ class ServerCoreTests(unittest.TestCase):
                 },
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["projectIds"], ["p_new"])
+            self.assertEqual(result["affected"]["projectSummaries"][0]["name"], "新项目")
             state, revision, _ = server.compose_state(conn)
             self.assertEqual(revision, 2)
             self.assertEqual(state["projects"][0]["name"], "新项目")
@@ -1114,6 +1774,8 @@ class ServerCoreTests(unittest.TestCase):
                 "deleteProject": True,
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["projectIds"], ["p_new"])
+            self.assertEqual(result["affected"]["projectSummaries"], [])
 
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 3)
@@ -1125,6 +1787,7 @@ class ServerCoreTests(unittest.TestCase):
         conn = state_conn(data)
 
         with patched_server_db(conn):
+            server.DB_LOCK = ExplodingLock()
             ok, result = server.commit_stage_mutation({
                 "projectId": "p1",
                 "stageId": "st_new",
@@ -1134,6 +1797,7 @@ class ServerCoreTests(unittest.TestCase):
                 "stage": {"id": "st_new", "projectId": "p1", "name": "阶段1", "skuNames": ["SKU1"], "progress": [], "tasks": []},
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["stageIds"], ["st_new"])
             state, revision, _ = server.compose_state(conn)
             self.assertEqual(revision, 2)
             self.assertEqual(state["projects"][0]["stages"][0]["id"], "st_new")
@@ -1146,6 +1810,7 @@ class ServerCoreTests(unittest.TestCase):
                 "stages": [],
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["stageIds"], ["st_new"])
 
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 3)
@@ -1156,6 +1821,7 @@ class ServerCoreTests(unittest.TestCase):
         conn = state_conn(data)
 
         with patched_server_db(conn):
+            server.DB_LOCK = ExplodingLock()
             ok, result = server.commit_sample_category_mutation({
                 "categoryId": "cat_new",
                 "createIfMissing": True,
@@ -1167,6 +1833,9 @@ class ServerCoreTests(unittest.TestCase):
                 ],
             }, "127.0.0.1")
             self.assertTrue(ok, result)
+            self.assertEqual(result["affected"]["sampleCategoryIds"], ["cat_new"])
+            self.assertEqual(result["affected"]["sampleIds"], ["sample_new_1", "sample_new_2"])
+            self.assertEqual(len(result["affected"]["samples"]), 2)
 
         state, revision, _ = server.compose_state(conn)
         self.assertEqual(revision, 2)

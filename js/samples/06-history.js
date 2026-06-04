@@ -3,7 +3,7 @@
    Split from the previous monolithic module.
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("samples.history", {
 
   switchSampleArchiveTab(tab) {
     document.querySelectorAll("[data-sample-archive-tab]").forEach(btn => {
@@ -86,7 +86,7 @@ Object.assign(app, {
       <div class="sample-history-photos-title">结果图片</div>
       <div class="sample-history-photo-grid">
         ${photos.map(photo => `
-          <button type="button" class="sample-history-photo" onclick="app.previewSamplePhoto('${Utils.esc(sampleId)}','${Utils.esc(photo.id)}')" title="${Utils.esc(photo.name || "结果图片")}">
+          <button type="button" class="sample-history-photo" data-app-action="sample-photo-preview" data-id="${Utils.esc(sampleId)}" data-photo-id="${Utils.esc(photo.id)}" title="${Utils.esc(photo.name || "结果图片")}">
             ${this.photoThumbUrl(photo) ? `<img src="${Utils.esc(this.photoThumbUrl(photo))}" alt="${Utils.esc(photo.name || "结果图片")}">` : ""}
             <span>${Utils.esc(photo.result || "-")} · ${Utils.esc(photo.user || "-")}</span>
           </button>
@@ -96,7 +96,7 @@ Object.assign(app, {
   },
 
   sampleEventLogsForSample(sampleId) {
-    return (this.data?.sampleLibrary?.logs || []).filter(log => String(log?.sampleId || "") === String(sampleId));
+    return this.sampleEventRecords().filter(log => String(log?.sampleId || "") === String(sampleId));
   },
 
   sampleTestHistoryHtml(sampleId) {
@@ -127,7 +127,7 @@ Object.assign(app, {
       const resultPhotos = Array.isArray(row.resultPhotos) ? row.resultPhotos : [];
       const orderedLogs = logs.slice().reverse();
       return `<div class="sample-history-item">
-        <button type="button" class="sample-history-summary" aria-expanded="false" onclick="app.toggleSampleHistoryItem(this)">
+        <button type="button" class="sample-history-summary" aria-expanded="false" data-app-action="sample-history-toggle">
           <span class="history-seq">履历 #${historySeq}</span>
           <b>${Utils.esc(row.testItem || task?.testItem || "-")}</b>
           <span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span>
@@ -157,9 +157,9 @@ Object.assign(app, {
     if (totalPages <= 1) return "";
     const page = Number(cache.page || 1);
     return `<div class="pager sample-history-pager">
-      <button type="button" class="btn btn-sm btn-outline sample-history-page-btn" ${page <= 1 ? "disabled" : ""} onclick="app.loadSampleHistoryPage('${Utils.esc(sampleId)}',${page - 1})">上一页</button>
+      <button type="button" class="btn btn-sm btn-outline sample-history-page-btn" ${page <= 1 ? "disabled" : `data-app-action="sample-history-page" data-id="${Utils.esc(sampleId)}" data-value="${page - 1}"`}>上一页</button>
       <span>${page} / ${totalPages} · 共 ${Number(cache.total || 0)} 条</span>
-      <button type="button" class="btn btn-sm btn-outline sample-history-page-btn" ${page >= totalPages ? "disabled" : ""} onclick="app.loadSampleHistoryPage('${Utils.esc(sampleId)}',${page + 1})">下一页</button>
+      <button type="button" class="btn btn-sm btn-outline sample-history-page-btn" ${page >= totalPages ? "disabled" : `data-app-action="sample-history-page" data-id="${Utils.esc(sampleId)}" data-value="${page + 1}"`}>下一页</button>
     </div>`;
   },
 
@@ -174,7 +174,7 @@ Object.assign(app, {
   // ---- 样机数字档案（含 IMEI）----,
 
   findSampleSnapshot(sampleId) {
-    for (const project of (this.data.projects || [])) {
+    for (const project of this.projectRecords()) {
       for (const stage of (project.stages || [])) {
         for (const task of (stage.tasks || [])) {
           const snap = task?.sampleSnapshots?.[sampleId];

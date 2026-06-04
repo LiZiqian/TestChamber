@@ -3,7 +3,7 @@
    Split from the previous monolithic module.
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("samples.detail", {
 
   openSampleDetail(sampleId, options = {}) {
     const found = this.findSample(sampleId);
@@ -21,11 +21,11 @@ Object.assign(app, {
       </div>
       <div class="sample-archive-shell">
         <aside class="sample-archive-nav">
-          <button type="button" class="active" data-sample-archive-tab="info" onclick="app.switchSampleArchiveTab('info')">样机信息</button>
-          <button type="button" data-sample-archive-tab="history" onclick="app.switchSampleArchiveTab('history')">测试履历</button>
-          <button type="button" data-sample-archive-tab="photos" onclick="app.switchSampleArchiveTab('photos')">图片数据</button>
-          <button type="button" data-sample-archive-tab="ct" onclick="app.switchSampleArchiveTab('ct')">CT三维数据</button>
-          <button type="button" data-sample-archive-tab="other" onclick="app.switchSampleArchiveTab('other')">其他</button>
+          <button type="button" class="active" data-sample-archive-tab="info" data-app-action="sample-archive-tab" data-tab="info">样机信息</button>
+          <button type="button" data-sample-archive-tab="history" data-app-action="sample-archive-tab" data-tab="history">测试履历</button>
+          <button type="button" data-sample-archive-tab="photos" data-app-action="sample-archive-tab" data-tab="photos">图片数据</button>
+          <button type="button" data-sample-archive-tab="ct" data-app-action="sample-archive-tab" data-tab="ct">CT三维数据</button>
+          <button type="button" data-sample-archive-tab="other" data-app-action="sample-archive-tab" data-tab="other">其他</button>
         </aside>
         <div class="sample-archive-content">
           <section class="sample-archive-panel active" data-sample-archive-panel="info">
@@ -115,7 +115,7 @@ Object.assign(app, {
         if (!parsed.ok) { this.markFieldInvalid(sdBorrowerEl, parsed.msg); return true; }
       }
 
-      const dataSnapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       s.sn = newSn;
       s.imei = newImei;
       s.boardSn = newBoardSn;
@@ -156,7 +156,7 @@ Object.assign(app, {
         user: "管理员"
       });
       if (!saved) {
-        this.data = dataSnapshot;
+        this.restoreDataSnapshot(snapshot);
         return true;
       }
       Utils.toast("样机详情已保存");
@@ -184,9 +184,9 @@ Object.assign(app, {
     const sample = this.findSample(sampleId)?.sample;
     if (!sample) return;
     const photosPanel = document.querySelector('[data-sample-archive-panel="photos"]');
-    if (photosPanel) photosPanel.innerHTML = this.samplePhotosHtml(sample);
+    if (photosPanel) this.replaceHtml(photosPanel, this.samplePhotosHtml(sample));
     const historyPanel = document.querySelector('[data-sample-archive-panel="history"]');
-    if (historyPanel) historyPanel.innerHTML = this.sampleTestHistoryHtml(sampleId);
+    if (historyPanel) this.replaceHtml(historyPanel, this.sampleTestHistoryHtml(sampleId));
   },
 
 });

@@ -3,7 +3,7 @@
    Split from the previous monolithic module.
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("samples.detailFields", {
 
   sampleArchivePlaceholder(title, text) {
     return `<div class="sample-archive-empty">
@@ -16,7 +16,7 @@ Object.assign(app, {
     // 失焦时严格按 "姓名/工号" 校验，不合法直接清空（不再保留残留串）。
     // 允许整字段为空，但只要填了就必须合法。
     return `<input id="${id}" value="${Utils.esc(value || "")}" placeholder="${Utils.esc(placeholder)}" autocomplete="off"
-      onblur="app.validateSamplePersonInput(this)">`;
+      data-app-action="sample-person-validate" data-app-events="focusout">`;
   },
 
   validateSamplePersonInput(input) {
@@ -35,7 +35,14 @@ Object.assign(app, {
       // 保留用户输入不清空，在输入框下方直接标红提示
       input.classList.add("is-invalid");
       if (group && !group.querySelector(".field-error")) {
-        group.insertAdjacentHTML("beforeend", `<div class="field-error">${Utils.esc(parsed.msg)}</div>`);
+        if (typeof this.appendFieldError === "function") {
+          this.appendFieldError(group, parsed.msg);
+        } else {
+          const node = document.createElement("div");
+          node.className = "field-error";
+          node.textContent = parsed.msg;
+          group.append(node);
+        }
       }
     } else {
       // 合法时规范化为 姓名/工号
@@ -46,7 +53,7 @@ Object.assign(app, {
   sampleLocationInputHtml(id, value = "") {
     const seen = new Set();
     const locations = [];
-    (this.data.projects || []).forEach(p => (p.locations || []).forEach(loc => {
+    this.projectRecords().forEach(p => (p.locations || []).forEach(loc => {
       const name = String(loc || "").trim();
       if (!name || seen.has(name)) return;
       seen.add(name);
@@ -81,7 +88,7 @@ Object.assign(app, {
     return fields.map(field => {
       const valueKey = field.value.toLowerCase();
       const matches = [];
-      for (const category of (this.data.sampleLibrary.categories || [])) {
+      for (const category of this.sampleCategoryRecords()) {
         for (const candidate of (category.samples || [])) {
           if (!candidate || String(candidate.id || "") === sampleId) continue;
           const matchedFields = this.sampleIdentityFields(candidate)
@@ -105,7 +112,7 @@ Object.assign(app, {
             <div class="sample-reassembly-group-title">${Utils.esc(group.label)}来源</div>
             <div class="sample-reassembly-group-body">
               ${group.matches.length ? group.matches.map(item => `
-                <button type="button" class="sample-reassembly-link" onclick="app.openSampleReadonly('${Utils.esc(item.sample.id)}')">
+                <button type="button" class="sample-reassembly-link" data-app-action="sample-readonly" data-id="${Utils.esc(item.sample.id)}">
                   <b>${Utils.esc(this.sampleDisplayCode(item.sample))}</b>
                   <span>${Utils.esc(item.category.name || "-")} · 匹配${Utils.esc(item.matchedFields.join("/"))}</span>
                 </button>

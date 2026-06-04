@@ -2,7 +2,7 @@
    数字治理平台 V7 - 样机选择器模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.samplePicker", {
 
   getSelectedTaskSampleIds(inputName) {
     const state = this._taskSamplePickerStates?.[inputName];
@@ -110,16 +110,15 @@ Object.assign(app, {
   },
 
   mergeTaskSampleCandidateResult(result = {}) {
-    if (!this.data.sampleLibrary) this.data.sampleLibrary = { categories: [], logs: [] };
-    if (!Array.isArray(this.data.sampleLibrary.categories)) this.data.sampleLibrary.categories = [];
     const summaryById = new Map((result.categories || []).map(category => [String(category.id || ""), category]));
-    const existingById = new Map(this.data.sampleLibrary.categories.map(category => [String(category.id || ""), category]));
+    const categories = this.sampleCategoryRecords();
+    const existingById = new Map(categories.map(category => [String(category.id || ""), category]));
     (result.categories || []).forEach(summary => {
       const id = String(summary.id || "");
       if (!id) return;
       if (!existingById.has(id)) {
         const category = { ...summary, samples: [], samplesLoaded: false, _summaryOnly: true };
-        this.data.sampleLibrary.categories.push(category);
+        categories.push(category);
         existingById.set(id, category);
       } else {
         const existing = existingById.get(id);
@@ -141,7 +140,7 @@ Object.assign(app, {
           samplesLoaded: false,
           _summaryOnly: true,
         };
-        this.data.sampleLibrary.categories.push(category);
+        categories.push(category);
         existingById.set(categoryId, category);
       }
       if (!Array.isArray(category.samples)) category.samples = [];
@@ -156,7 +155,7 @@ Object.assign(app, {
     const state = this.taskSamplePickerState(inputName);
     const el = document.getElementById?.(this.taskSamplePickerDomId(inputName));
     if (!state || !el) return;
-    el.innerHTML = this.taskSamplePickerContentHtml(state);
+    this.replaceHtml(el, this.taskSamplePickerContentHtml(state));
     if (state.progressSelectId && state.hintId) {
       this.updateTaskSampleLimitUI(state.progressSelectId, inputName, state.hintId);
     } else {
@@ -189,15 +188,15 @@ Object.assign(app, {
     const candidateHtml = state.loading
       ? `<div class="empty">正在加载候选样机...</div>`
       : state.error
-        ? `<div class="empty">候选样机加载失败：${Utils.esc(state.error)} <button type="button" class="btn btn-sm btn-outline" onclick="app.loadTaskSamplePickerPage('${state.inputName}', { page: ${page} })">重试</button></div>`
+        ? `<div class="empty">候选样机加载失败：${Utils.esc(state.error)} <button type="button" class="btn btn-sm btn-outline" data-app-action="task-sample-picker-page" data-id="${Utils.esc(state.inputName)}" data-value="${page}">重试</button></div>`
         : (result.items || []).map(sample => this.taskSamplePickerSampleRowHtml(sample, state)).join("") || `<div class="empty">没有匹配的候选样机。</div>`;
     return `
       <div class="task-sample-picker-toolbar">
-        <select id="${categoryId}" onchange="app.onTaskSamplePickerFilterChange('${state.inputName}', 'categoryId', this.value)">${categoryOptions}</select>
-        <select id="${statusId}" onchange="app.onTaskSamplePickerFilterChange('${state.inputName}', 'status', this.value)">${statusOptions}</select>
-        <input id="${keywordId}" class="dispatch-search-input task-sample-picker-search" value="${Utils.esc(state.keyword || "")}" placeholder="包含搜索" onkeydown="if(event.key==='Enter'){app.applyTaskSamplePickerSearch('${state.inputName}')}">
-        <input id="${excludeId}" class="dispatch-search-input dispatch-search-exclude task-sample-picker-search" value="${Utils.esc(state.excludeKeyword || "")}" placeholder="排除搜索" onkeydown="if(event.key==='Enter'){app.applyTaskSamplePickerSearch('${state.inputName}')}">
-        <button type="button" class="dispatch-search-btn" onclick="app.applyTaskSamplePickerSearch('${state.inputName}')" title="搜索">🔍</button>
+        <select id="${categoryId}" data-app-action="task-sample-picker-filter" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-field="categoryId">${categoryOptions}</select>
+        <select id="${statusId}" data-app-action="task-sample-picker-filter" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-field="status">${statusOptions}</select>
+        <input id="${keywordId}" class="dispatch-search-input task-sample-picker-search" value="${Utils.esc(state.keyword || "")}" placeholder="包含搜索" data-app-action="task-sample-picker-search" data-app-events="keydown" data-id="${Utils.esc(state.inputName)}">
+        <input id="${excludeId}" class="dispatch-search-input dispatch-search-exclude task-sample-picker-search" value="${Utils.esc(state.excludeKeyword || "")}" placeholder="排除搜索" data-app-action="task-sample-picker-search" data-app-events="keydown" data-id="${Utils.esc(state.inputName)}">
+        <button type="button" class="dispatch-search-btn" data-app-action="task-sample-picker-search" data-id="${Utils.esc(state.inputName)}" title="搜索">🔍</button>
         <span class="dispatch-match-count">${state.loading ? "加载中" : `候选 ${total} 台`}</span>
       </div>
       <div class="dispatch-sample-group task-sample-selected-group" data-sample-input-name="${Utils.esc(state.inputName)}">
@@ -218,8 +217,8 @@ Object.assign(app, {
             <span class="dispatch-selected-count" data-total="${total}">${page}/${totalPages}</span>
           </div>
           <div class="dispatch-sample-tools">
-            <button type="button" class="btn btn-sm btn-outline" ${page <= 1 || state.loading ? "disabled" : ""} onclick="app.loadTaskSamplePickerPage('${state.inputName}', { page: ${Math.max(1, page - 1)} })">上一页</button>
-            <button type="button" class="btn btn-sm btn-outline" ${page >= totalPages || state.loading ? "disabled" : ""} onclick="app.loadTaskSamplePickerPage('${state.inputName}', { page: ${page + 1} })">下一页</button>
+            <button type="button" class="btn btn-sm btn-outline" ${page <= 1 || state.loading ? "disabled" : `data-app-action="task-sample-picker-page" data-id="${Utils.esc(state.inputName)}" data-value="${Math.max(1, page - 1)}"`}>上一页</button>
+            <button type="button" class="btn btn-sm btn-outline" ${page >= totalPages || state.loading ? "disabled" : `data-app-action="task-sample-picker-page" data-id="${Utils.esc(state.inputName)}" data-value="${page + 1}"`}>下一页</button>
           </div>
         </div>
         <div class="dispatch-sample-body open task-sample-candidate-grid">
@@ -235,7 +234,7 @@ Object.assign(app, {
       const id = String(sample?.id || "");
       if (id) byId.set(id, sample);
     });
-    (this.data.sampleLibrary?.categories || []).forEach(category => {
+    this.sampleCategoryRecords().forEach(category => {
       (category.samples || []).forEach(sample => {
         const id = String(sample?.id || "");
         if (id && !byId.has(id)) byId.set(id, { ...sample, categoryName: category.name || "" });
@@ -250,9 +249,6 @@ Object.assign(app, {
     const status = this.normalizeSampleStatusValue(sample?.effectiveStatus || sample?.status);
     const selectable = isSelected || sample?.selectable !== false;
     const disabledReason = selectable ? "" : (sample?.disabledReason || "");
-    const changeAttr = state.progressSelectId && state.hintId
-      ? `onchange="app.onTaskSampleCheckboxChange('${state.progressSelectId}','${state.inputName}','${state.hintId}', this)"`
-      : `onchange="app.onTaskSampleCheckboxChange('','${state.inputName}','', this)"`;
     const identity = this.taskSamplePickerIdentityText(sample);
     const stageName = String(sample?.sourceStageName || "").trim();
     const skuName = String(sample?.sourceSkuName || "").trim();
@@ -267,11 +263,11 @@ Object.assign(app, {
         ? Utils.esc(testedItems.join("、"))
         : `${Utils.esc(testedItems.slice(0, 3).join("、"))} 等 ${testedItems.length} 项`;
     return `
-      <div class="dispatch-sample-row ${selectable ? "" : "is-disabled"}" onclick="app.onTaskSampleRowClick(event,'${state.inputName}','${state.progressSelectId}','${state.hintId}')" title="${Utils.esc(disabledReason)}">
+      <div class="dispatch-sample-row ${selectable ? "" : "is-disabled"}" data-app-action="task-sample-picker-row" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}" title="${Utils.esc(disabledReason)}">
         <div class="dispatch-sample-info">
           <div class="dispatch-sample-title-line">
-            <span class="dispatch-sample-id" onclick="event.preventDefault();event.stopPropagation();app.openSampleReadonly && app.openSampleReadonly('${Utils.esc(sid)}')">${Utils.esc(identity)}</span>
-            <label class="dispatch-sample-check"><input type="checkbox" name="${state.inputName}" value="${Utils.esc(sid)}" data-sample-pick="${state.inputName}" ${isSelected ? "checked" : ""} ${selectable ? "" : "disabled"} ${selectable ? changeAttr : ""}></label>
+            <span class="dispatch-sample-id" data-app-action="sample-readonly" data-id="${Utils.esc(sid)}" data-stop-propagation="1">${Utils.esc(identity)}</span>
+            <label class="dispatch-sample-check"><input type="checkbox" name="${state.inputName}" value="${Utils.esc(sid)}" data-sample-pick="${state.inputName}" ${isSelected ? "checked" : ""} ${selectable ? "" : "disabled"} ${selectable ? `data-app-action="task-sample-picker-checkbox" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}"` : ""}></label>
           </div>
           <span class="dispatch-sample-stage">${Utils.esc(sample?.categoryName || "")}${sample?.categoryName ? " · " : ""}阶段/方案：${stageSku}</span>
           <span class="dispatch-sample-tested">已测：${testedText}</span>
@@ -318,6 +314,16 @@ Object.assign(app, {
     return { ok: true, required, count: sampleIds.length, msg: "" };
   },
 
+  setTaskSampleLimitHintContent(hint, text, countText) {
+    if (!hint) return;
+    hint.textContent = "";
+    if (text) hint.append(text);
+    const count = document.createElement("span");
+    count.className = "sample-limit-count";
+    count.textContent = countText || "";
+    hint.append(count);
+  },
+
   updateTaskSampleLimitUI(progressSelectId, inputName, hintId) {
     this.updateDispatchSamplePoolCounts(inputName);
     const s = this.currentStage();
@@ -333,9 +339,9 @@ Object.assign(app, {
       hint.classList.add('bad');
       if (isGlobalCompact) {
         hint.title = `无法读取样机数配置。当前已选 ${sampleIds.length} 台。`;
-        hint.innerHTML = `<span class="sample-limit-count">${sampleIds.length}/?</span>`;
+        this.setTaskSampleLimitHintContent(hint, "", `${sampleIds.length}/?`);
       } else {
-        hint.innerHTML = `无法读取样机数配置。<span class="sample-limit-count">已选 ${sampleIds.length}</span>`;
+        this.setTaskSampleLimitHintContent(hint, "无法读取样机数配置。", `已选 ${sampleIds.length}`);
       }
       return;
     }
@@ -344,25 +350,25 @@ Object.assign(app, {
       if (isGlobalCompact) {
         hint.classList.add('full');
         hint.title = `样机已选满：需 ${required} 台，已选 ${sampleIds.length} 台。未勾选的样机已禁用。`;
-        hint.innerHTML = `<span class="sample-limit-count">${countText} 已选满</span>`;
+        this.setTaskSampleLimitHintContent(hint, "", `${countText} 已选满`);
       } else {
-        hint.innerHTML = `样机已满足：需 ${required} 台，已选 ${sampleIds.length} 台。<span class="sample-limit-count">OK</span>`;
+        this.setTaskSampleLimitHintContent(hint, `样机已满足：需 ${required} 台，已选 ${sampleIds.length} 台。`, "OK");
       }
     } else if (sampleIds.length < required) {
       hint.classList.add('warn');
       if (isGlobalCompact) {
         hint.title = `不足：需 ${required} 台，已选 ${sampleIds.length} 台。`;
-        hint.innerHTML = `<span class="sample-limit-count">${countText}</span>`;
+        this.setTaskSampleLimitHintContent(hint, "", countText);
       } else {
-        hint.innerHTML = `不足：需 ${required} 台，已选 ${sampleIds.length} 台。<span class="sample-limit-count">${countText}</span>`;
+        this.setTaskSampleLimitHintContent(hint, `不足：需 ${required} 台，已选 ${sampleIds.length} 台。`, countText);
       }
     } else {
       hint.classList.add('bad');
       if (isGlobalCompact) {
         hint.title = `超出：需 ${required} 台，已选 ${sampleIds.length} 台。`;
-        hint.innerHTML = `<span class="sample-limit-count">${countText}</span>`;
+        this.setTaskSampleLimitHintContent(hint, "", countText);
       } else {
-        hint.innerHTML = `超出：需 ${required} 台，已选 ${sampleIds.length} 台。<span class="sample-limit-count">${countText}</span>`;
+        this.setTaskSampleLimitHintContent(hint, `超出：需 ${required} 台，已选 ${sampleIds.length} 台。`, countText);
       }
     }
   },

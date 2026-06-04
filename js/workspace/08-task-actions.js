@@ -3,7 +3,7 @@
    含启动·阻塞·变更·删除·问题统计
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.taskActions", {
 
   deleteTask(taskId) {
     const p = this.currentProject();
@@ -18,7 +18,7 @@ Object.assign(app, {
         ? "该任务已经执行过，删除后会从任务管理中隐藏并归档，历史数据继续保留。"
         : "该任务尚未执行，删除后会从任务管理中物理移除。",
       async () => {
-        const dataSnapshot = this.cloneData(this.data);
+        const snapshot = this.dataSnapshot();
         this.releaseTaskSamples(t, {
           user: "管理员",
           source: executed ? "任务归档删除" : "任务删除",
@@ -41,7 +41,7 @@ Object.assign(app, {
           deleteMode: executed ? "" : "delete"
         });
         if (!saved) {
-          this.data = dataSnapshot;
+          this.restoreDataSnapshot(snapshot);
           return true;
         }
         Utils.toast(executed ? "任务已归档隐藏，样机履历已保留。" : "任务已删除。");
@@ -243,7 +243,7 @@ Object.assign(app, {
         ? this.sampleDisplayCode(found.sample)
         : (snapshot?.code || snapshot?.sampleNo || entry.sampleId);
       const codeHtml = found?.sample
-        ? `<button type="button" class="sample-log-link" onclick="event.stopPropagation();app.openSampleReadonly('${Utils.esc(entry.sampleId)}')">${Utils.esc(code)}</button>`
+        ? `<button type="button" class="sample-log-link" data-app-action="sample-readonly" data-stop-propagation="1" data-id="${Utils.esc(entry.sampleId)}">${Utils.esc(code)}</button>`
         : `<span class="sample-log-ref-missing" title="样机档案不存在或已销毁">${Utils.esc(code)}</span>`;
       const removedTag = entry.state === "removed" ? `<span class="task-result-tag-removed">变更</span>` : "";
       const problemText = Utils.esc([...set].join("；"));

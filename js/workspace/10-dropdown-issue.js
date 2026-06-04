@@ -2,7 +2,7 @@
    数字治理平台 V7 - 用例下拉与问题记录模块
    ======================================== */
 
-Object.assign(app, {
+app.registerModule("workspace.dropdownIssue", {
 
   // ==================== 用例下拉 ====================
   openCaseDropdown(rowIdx, field, inputEl) {
@@ -13,7 +13,8 @@ Object.assign(app, {
     }
     this._caseDropdownState = { rowIdx, field, inputEl, search: '' };
     const placeholder = field === 'item' ? '搜索用例名称' : '搜索测量类别';
-    dd.innerHTML = `<div class="case-dropdown-head"><input id="caseDropdownSearch" value="" placeholder="${placeholder}" oninput="app.filterCaseDropdown(this.value)"></div><div id="caseDropdownOptions" class="case-dropdown-options"></div>`;
+    dd.textContent = "";
+    dd.append(...this.caseDropdownShellNodes(placeholder));
     dd.classList.add('show');
     this.positionCaseDropdown();
     this.renderCaseDropdownOptions();
@@ -56,13 +57,62 @@ Object.assign(app, {
     this.renderCaseDropdownOptions();
     requestAnimationFrame(() => this.positionCaseDropdown(true));
   },
+  caseDropdownShellNodes(placeholder) {
+    const head = document.createElement("div");
+    head.className = "case-dropdown-head";
+    const input = document.createElement("input");
+    input.id = "caseDropdownSearch";
+    input.value = "";
+    input.placeholder = placeholder || "";
+    input.dataset.appAction = "case-dropdown-search";
+    input.dataset.appEvents = "input";
+    head.append(input);
+
+    const options = document.createElement("div");
+    options.id = "caseDropdownOptions";
+    options.className = "case-dropdown-options";
+    return [head, options];
+  },
+  caseDropdownEmptyNode(text) {
+    const node = document.createElement("div");
+    node.className = "case-empty";
+    node.textContent = text || "";
+    return node;
+  },
+  caseDropdownOptionNode(option, idx, field, selectedCategory = "") {
+    const node = document.createElement("div");
+    node.className = field === "category" ? "case-option" : "case-option item-mode";
+    node.dataset.caseOptionIndex = String(idx);
+    if (field === "category") {
+      const category = document.createElement("div");
+      category.className = "case-cat";
+      category.textContent = option.category || "";
+      const count = document.createElement("div");
+      count.className = "case-item";
+      count.textContent = `${option.count || 0} 条用例`;
+      node.append(category, count);
+    } else {
+      const main = document.createElement("div");
+      main.className = "case-main";
+      main.textContent = option.item || "";
+      node.append(main);
+      if (!selectedCategory) {
+        const sub = document.createElement("div");
+        sub.className = "case-sub";
+        sub.textContent = option.category || "";
+        node.append(sub);
+      }
+    }
+    return node;
+  },
   renderCaseDropdownOptions() {
     const state = this._caseDropdownState;
     const box = document.getElementById('caseDropdownOptions');
     if (!state || !box) return;
     const p = this.currentProject();
     const master = p?.testCaseMaster || [];
-    if (!master.length) { box.innerHTML = '<div class="case-empty">未导入用例库。可直接输入。</div>'; return; }
+    box.textContent = "";
+    if (!master.length) { box.append(this.caseDropdownEmptyNode("未导入用例库。可直接输入。")); return; }
     const s = this.currentStage();
     const row = s?.strategy?.[state.rowIdx] || {};
     const selectedCategory = String(row.category || '').trim();
@@ -92,20 +142,17 @@ Object.assign(app, {
         if (seen.has(key)) return false; seen.add(key); return true;
       }).sort((a, b) => String(a.item).localeCompare(String(b.item), 'zh-CN')).slice(0, 120);
     }
-    if (!options.length) { box.innerHTML = '<div class="case-empty">无匹配项，可直接输入。</div>'; return; }
+    if (!options.length) { box.append(this.caseDropdownEmptyNode("无匹配项，可直接输入。")); return; }
     this._caseDropdownOptions = options;
-    if (state.field === 'category') {
-      box.innerHTML = options.map((o, idx) => `<div class="case-option" data-case-option-index="${idx}"><div class="case-cat">${Utils.esc(o.category)}</div><div class="case-item">${o.count} 条用例</div></div>`).join('');
-    } else {
-      box.innerHTML = options.map((o, idx) => `<div class="case-option item-mode" data-case-option-index="${idx}"><div class="case-main">${Utils.esc(o.item)}</div>${selectedCategory ? '' : `<div class="case-sub">${Utils.esc(o.category)}</div>`}</div>`).join('');
-    }
-    box.querySelectorAll('.case-option').forEach(el => {
+    options.forEach((option, idx) => {
+      const el = this.caseDropdownOptionNode(option, idx, state.field, selectedCategory);
       el.addEventListener('mousedown', ev => {
         ev.preventDefault(); ev.stopPropagation();
         const idx = Number(el.dataset.caseOptionIndex);
         const opt = this._caseDropdownOptions?.[idx]; if (!opt) return;
         this.selectCaseSuggestion(state.rowIdx, state.field, opt.category, opt.item || '');
       });
+      box.append(el);
     });
   },
   closeCaseDropdown() {
@@ -134,7 +181,7 @@ Object.assign(app, {
 
   // ==================== 问题单 ====================
   updateIssueRecordRemark(projectId, stageId, taskId, value) {
-    const p = this.data.projects.find(x => x.id === projectId);
+    const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     const t = s?.tasks.find(x => x.id === taskId);
     if (!t) return;
@@ -160,7 +207,7 @@ Object.assign(app, {
       return `<span class="path">-</span>`;
     }
     if (!hasDts && !hasIssue) {
-      return `<span class="path task-issue-record-empty" onclick="app.openTaskIssueRecordModal('${pid}','${sid}','${tid}')">点击录入</span>`;
+      return `<span class="path task-issue-record-empty" role="button" tabindex="0" data-app-action="task-issue-record" data-project-id="${Utils.esc(pid)}" data-stage-id="${Utils.esc(sid)}" data-task-id="${Utils.esc(tid)}">点击录入</span>`;
     }
     const taskId = task?.id || "";
     const noteVal = Utils.esc(r.issueNote || "");
@@ -194,7 +241,7 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         <textarea id="issueRecordNote" rows="4" placeholder="填写问题确认说明">${Utils.esc(r.issueNote || "")}</textarea>
       </div>
     `, async () => {
-      const snapshot = this.cloneData(this.data);
+      const snapshot = this.dataSnapshot();
       t.issueRecord = {
         dtsNo: document.getElementById("issueRecordDtsNo").value.trim(),
         isIssue: document.getElementById("issueRecordIsIssue").value,
@@ -205,7 +252,7 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         remark: "录入任务问题单",
         user: "管理员",
       });
-      if (!saved) { this.data = snapshot; return true; }
+      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       return false;
     }, "保存");
   }
