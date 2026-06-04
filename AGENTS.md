@@ -1,4 +1,4 @@
-# TestChamber V7 — 数字治理平台 · AI 代码定位器
+﻿# TestChamber V7 — 数字治理平台 · AI 代码定位器
 （本文件不允许 claude code 修改/编辑/删除，本文件只允许 codex 进行编辑修改，该规则只适用于本文件）
 
 > **用途**：让 AI agent 快速定位需要修改的代码。每个函数、CSS 规则组、API 端点都标注 `文件:行号`。
@@ -9,9 +9,9 @@
 |------|-----|
 | 应用 | 数字治理平台 V7 |
 | 用途 | 终端硬件测试样机全生命周期：项目→阶段→任务→样机→结果 |
-| 部署 | Python stdlib `ThreadingHTTPServer`，端口 9398，SQLite WAL |
+| 部署 | Python stdlib `ThreadingHTTPServer`，端口 9398，SQLite WAL；运行数据默认强制外置到平台目录同级 `TestChamberV7_data/` |
 | 前端 | Vanilla JS SPA，`app.registerModule(name, members)` 命名模块注册；项目/工作台主页/策略/阶段/任务表/样机池主干已收敛到状态访问器，核心兼容层集中持有 `app.data/app.view` |
-| 规模 | ~18,000+ 行源码；`server.py` 约 7,544 行，已扩展到 SQLite 外置表、数据包导入导出、照片/事件/履历按需加载、任务/项目/阶段/样机增量写入、分页查询索引、样机身份查重索引、关键 P0 幂等兜底与空白平台整包导入兜底 |
+| 规模 | ~18,000+ 行源码；`server.py` 正在拆分到 `server_modules/`，已扩展到 SQLite 外置表、数据包导入导出、照片/事件/履历按需加载、任务/项目/阶段/样机增量写入、分页查询索引、样机身份查重索引、关键 P0 幂等兜底与空白平台整包导入兜底 |
 
 ### Codex 启动/验证方式
 
@@ -21,6 +21,8 @@
 cd C:\Users\ROG\Desktop\TestChamberV7
 python .\server.py --host 127.0.0.1 --port 9398
 ```
+
+默认业务数据目录是 `C:\Users\ROG\Desktop\TestChamberV7_data`；可用 `--data-dir <外置路径>` 或 `TESTCHAMBER_DATA_DIR` 指定其它代码目录外路径。启动时会用 copy-then-promote 方式复制旧版项目内 `data/` 与 `backups/` 到外置目录，逐文件校验通过后才提升为正式数据根；旧目录不会自动删除。
 
 后台启动时使用：
 
@@ -38,13 +40,13 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 ### 版本发布规则
 
 - `v7.0.0` 固定指向 2026-06-03 时 GitHub `origin/main` 的既有提交 `66ae30e`。
-- `v7.1.0` 是 7.1 系列性能和导航响应优化的统一 GitHub Release/tag 入口；当前发布显示版本为 `v7.1.3`。
+- `v7.1.0` 是 7.1 系列性能和导航响应优化的统一 GitHub Release/tag 入口；当前发布显示版本为 `v7.1.4`。
 - 7.1 系列每次 GitHub push 只递增最后一位 patch：`7.1.X` → `7.1.(X+1)`，`7.1` 主线保持不变。
 - 以后更新版本时，同步修改 `server.py` 的 `APP_VERSION` / `SERVER_VERSION`、`js/app.core.js` 的 `app.version`，并把 `index.html` 与 `css/style.css` 的静态资源 cachebuster 改为同一个语义版本号。
 - 发布前运行：`python -m py_compile server.py`、`python tests\test_server_core.py`、`python tests\test_import_conflicts.py`、`node tests\frontend_pagination_perf.test.cjs`、`node tests\frontend_status_transitions.test.cjs`。
 - 7.1 系列发布流程：提交到 `main`，推送 `origin main`，移动并强推既有 `v7.1.0` tag 到最新提交，再用 `gh release edit v7.1.0 --title "v7.1.X"` 更新同一个 Release 标题；不要为每次 7.1 patch 新建 Release。
 - 7.2 及以后新主线再按新主线策略创建对应 tag / Release。
-- Release 只发布源码；不要提交或上传 `data/`、`backups/`、`__pycache__/`、真实数据库或备份文件。
+- Release 只发布源码；不要提交或上传 `data/`、`backups/`、`TestChamberV7_data/`、`__pycache__/`、真实数据库或备份文件。
 
 ---
 
@@ -62,45 +64,47 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 
 | 要改什么 | 文件:函数 |
 |----------|-----------|
-| 全量 state 拼装 | `server.py:3403` `compose_state()` |
-| 全量 state 读取 | `server.py:3457` `get_state()` / `server.py:3467` `get_state_metadata()` / `server.py:6787` `Handler.do_GET()` `/api/state` |
-| 全量 state 保存 | `server.py:5494` `save_state()` / `server.py:7282` `Handler.do_PUT()` `/api/state`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| SQLite schema / 索引 | `server.py:401` `ensure_schema()`；`server.py:341` `ensure_table_column()`；`server.py:347` `backfill_query_state_columns()`；`server.py:382` `backfill_sample_identity_columns()` |
+| 全量 state 拼装 | `server.py:462` wrapper → `server_modules/state_read_service.py:62` `compose_state()` |
+| 全量 state 读取 | `server.py:479` wrapper → `server_modules/state_read_service.py:126` `get_state()` / `server.py:483` wrapper → `server_modules/state_read_service.py:141` `get_state_metadata()` / `server_modules/http_api.py:12` `handle_get()` `/api/state` |
+| 全量 state 保存 | `server.py:718` `save_state()` / `server_modules/state_persistence.py:34` `save_state()` / `server_modules/http_api.py:541` `handle_put()` `/api/state`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| compact state 外置字段保留 | `server.py:487` wrapper → `server_modules/state_externalization.py:46` `hydrate_externalized_sample_fields()`；防止 compact 客户端保存时丢失 DB 外置照片/事件 |
+| SQLite schema / 索引 | `server.py:197` `ensure_schema()`；`server.py:175` alias → `server_modules/database_schema.py:11` `ensure_table_column()`；`server.py:189` wrapper → `server_modules/database_backfills.py:18` `backfill_query_state_columns()`；`server.py:193` wrapper → `server_modules/database_backfills.py:53` `backfill_sample_identity_columns()`；`server.py:377` wrapper → `server_modules/database_backfills.py:72` `backfill_project_task_samples()` |
 | 查询状态列 | `project_tasks.flow_status`、`sample_records.effective_status/has_problem/board_sn/is_reassembled`，用于状态筛选、统计与身份查重避免整表 JSON 解析 |
-| 项目/阶段/任务外置同步 | `server.py:1400` `sync_project_library()` |
-| 项目/阶段/任务加载 | `server.py:1585` `load_project_library()` |
-| 样机库加载 | `server.py:1167` `load_sample_library(include_photos/include_logs)` |
-| 照片按需加载 | `server.py:1096` `load_sample_photos()` + `GET /api/samples/<id>/photos` |
-| 事件按需加载 | `server.py:1151` `load_sample_events()` + `GET /api/samples/<id>/events` |
-| 样机测试履历分页 API | `server.py:3166` `list_sample_history_page()` + `GET /api/samples/<id>/history` |
-| 启动骨架 API | `server.py:3370` `compose_bootstrap_state()` + `GET /api/bootstrap` |
-| 项目/样机池按需详情 API | `server.py:1675` `load_project_detail()` / `server.py:3269` `load_sample_category_detail()` |
-| 分页参数解析 | `server.py:1806` `parse_page_params()` |
-| 阶段任务分页 API | `server.py:2041` `list_stage_tasks_page()` + `GET /api/stages/<stageId>/tasks` |
-| 样机池分页 API | `server.py:2446` `list_samples_page()` + `GET /api/sample-categories/<catId>/samples` |
-| 任务样机候选分页 API | `server.py:2971` `list_task_sample_candidates_page()` + `GET /api/task-sample-candidates` |
-| 样机/样机池销毁影响范围 API | `server.py:2741` `list_sample_destroy_impact_scope()` + `GET /api/sample-destroy-impact`，返回受影响项目/样机池 ID，前端按需加载详情，不拉完整 `/api/state` |
-| 样机身份查重 API | `server.py:2868` `check_sample_identity_conflicts()` + `POST /api/sample-identity-check` |
-| 项目摘要 API | `server.py:3328` `list_project_summary()` + `GET /api/projects/summary` |
-| 样机池摘要 API | `server.py:2396` `list_sample_categories_summary()` + `GET /api/sample-categories` |
-| 项目记录增量 upsert/delete | `server.py:5789` `update_project_record()` / `server.py:5848` `delete_project_record()` |
-| 阶段记录增量 upsert/delete | `server.py:5866` `update_stage_record()` / `server.py:5924` `delete_stage_record()` |
-| 样机池记录增量 upsert/delete | `server.py:5941` `update_sample_category_record()` / `server.py:6707` `delete_sample_category_record()` |
-| 任务增量写入 API | `server.py:6253` `commit_task_mutation()` + `server.py:7180` `Handler.do_PATCH()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 批量任务增量写入 API | `server.py:6360` `commit_task_batch_mutation()` + `PATCH /api/stages/<stageId>/tasks/batch` |
-| 任务记录增量 upsert | `server.py:5715` `upsert_task_record()` |
-| 任务记录增量删除 | `server.py:5783` `delete_task_record()` |
-| 样机记录增量更新/创建 | `server.py:5805` `update_sample_record(create_if_missing)` |
-| 样机事件增量 upsert | `server.py:6073` `upsert_sample_events()` |
-| 任务结束幂等兜底 | `server.py:6184` `existing_finished_task()`；重复 `finish_task_result` 返回 `409 TASK_ALREADY_FINISHED` |
-| 样机新增选择状态兜底 | `server.py:6203` `detect_task_mutation_sample_status_blockers()`；新增样机只有“闲置”可写入任务 |
-| 项目/阶段增量写入 API | `server.py:6561` `commit_project_mutation()` / `server.py:6622` `commit_stage_mutation()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 样机增量写入 API | `server.py:6463` `commit_sample_mutation()` + `server.py:7180` `Handler.do_PATCH()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 样机池增量写入 API | `server.py:6729` `commit_sample_category_mutation()` + `server.py:7180` `Handler.do_PATCH()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 完整数据包导出 | `server.py:3703` `prepare_export_bundle_parts()` / `server.py:3784` `build_export_bundle_file()` + `server.py:6787` `GET /api/export-bundle` |
-| 数据包导入预览 | `server.py:3799` `analyze_import_bundle()` / `server.py:3879` `_diff_import_bundle()` + `server.py:7008` `POST /api/import-bundle/preview` |
-| 数据包导入提交 | `server.py:4488` `commit_import_bundle()` + `server.py:7008` `POST /api/import-bundle/commit`；提交链路写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 导入整树映射/一致性校验 | `server.py:5152` `_register_imported_stage_tree()` / `server.py:5169` `_register_imported_project_tree()` / `server.py:5224` `_validate_import_commit_state()` |
+| 项目/阶段/任务外置同步 | `server.py:354` `sync_project_library()` / `server_modules/project_library.py:18` |
+| 项目/阶段/任务加载 | `server.py:358` alias → `server_modules/project_queries.py:17` `load_project_library()` |
+| 样机库加载 | `server.py:336` `load_sample_library(include_photos/include_logs)` / `server_modules/sample_library.py:258` |
+| 照片按需加载 | `server.py:330` alias → `server_modules/sample_library.py:185` `load_sample_photos()` + `GET /api/samples/<id>/photos` |
+| 事件按需加载 | `server.py:332` `load_sample_events()` / `server_modules/sample_library.py:240` + `GET /api/samples/<id>/events` |
+| 样机测试履历分页 API | `server.py:420` alias → `server_modules/sample_history.py:152` `list_sample_history_page()` + `GET /api/samples/<id>/history` |
+| 启动骨架 API | `server.py:458` wrapper → `server_modules/state_read_service.py:29` `compose_bootstrap_state()` + `GET /api/bootstrap` |
+| 项目/样机池按需详情 API | `server.py:359` alias → `server_modules/project_queries.py:84` `load_project_detail()` / `server.py:423` wrapper → `server_modules/sample_queries.py:449` `load_sample_category_detail()` |
+| 分页参数解析 | `server.py:361` alias → `server_modules/task_queries.py:30` `parse_page_params()` |
+| 阶段任务分页 API | `server.py:389` alias → `server_modules/task_queries.py:201` `list_stage_tasks_page()` + `GET /api/stages/<stageId>/tasks` |
+| 样机池分页 API | `server.py:403` alias → `server_modules/sample_queries.py:283` `list_samples_page()` + `GET /api/sample-categories/<catId>/samples` |
+| 任务样机候选分页 API | `server.py:417` alias → `server_modules/task_queries.py:481` `list_task_sample_candidates_page()` + `GET /api/task-sample-candidates` |
+| 样机/样机池销毁影响范围 API | `server.py:413` alias → `server_modules/sample_constraints.py:45` `list_sample_destroy_impact_scope()` + `GET /api/sample-destroy-impact`，返回受影响项目/样机池 ID，前端按需加载详情，不拉完整 `/api/state` |
+| 样机身份查重 API | `server.py:416` alias → `server_modules/sample_constraints.py:172` `check_sample_identity_conflicts()` + `POST /api/sample-identity-check` |
+| 项目摘要 API | `server.py:432` `list_project_summary()` + `GET /api/projects/summary` |
+| 样机池摘要 API | `server.py:402` alias → `server_modules/sample_queries.py:233` `list_sample_categories_summary()` + `GET /api/sample-categories` |
+| 项目记录增量 upsert/delete | `server.py:767` alias → `server_modules/record_writers.py:168` `update_project_record()` / `server.py:768` alias → `server_modules/record_writers.py:227` `delete_project_record()` |
+| 阶段记录增量 upsert/delete | `server.py:769` alias → `server_modules/record_writers.py:245` `update_stage_record()` / `server.py:770` alias → `server_modules/record_writers.py:303` `delete_stage_record()` |
+| 样机池记录增量 upsert/delete | `server.py:771` alias → `server_modules/record_writers.py:320` `update_sample_category_record()` / `server.py:814` alias → `server_modules/mutation_services.py:469` `delete_sample_category_record()` |
+| 任务增量写入 API | `server.py:792` `commit_task_mutation()` + `server_modules/http_api.py:426` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 批量任务增量写入 API | `server.py:796` `commit_task_batch_mutation()` + `PATCH /api/stages/<stageId>/tasks/batch` |
+| 任务记录增量 upsert | `server.py:765` alias → `server_modules/record_writers.py:94` `upsert_task_record()` |
+| 任务记录增量删除 | `server.py:766` alias → `server_modules/record_writers.py:162` `delete_task_record()` |
+| 样机记录增量更新/创建 | `server.py:772` alias → `server_modules/record_writers.py:377` `update_sample_record(create_if_missing)` |
+| 样机事件增量 upsert | `server.py:773` alias → `server_modules/record_writers.py:452` `upsert_sample_events()` |
+| 任务结束幂等兜底 | `server.py:777` alias → `server_modules/task_mutation_rules.py:86` `existing_finished_task()`；重复 `finish_task_result` 返回 `409 TASK_ALREADY_FINISHED` |
+| 样机新增选择状态兜底 | `server.py:779` alias → `server_modules/task_mutation_rules.py:105` `detect_task_mutation_sample_status_blockers()`；新增样机只有“闲置”可写入任务 |
+| 项目/阶段增量写入 API | `server.py:804` `commit_project_mutation()` / `server.py:808` `commit_stage_mutation()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 样机增量写入 API | `server.py:800` `commit_sample_mutation()` + `server_modules/http_api.py:426` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 样机池增量写入 API | `server.py:815` `commit_sample_category_mutation()` + `server_modules/http_api.py:426` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 完整数据包导出 | `server.py:543` wrapper → `server_modules/bundle_preview_service.py:68` `prepare_export_bundle_parts()` / `server.py:555` wrapper → `server_modules/bundle_preview_service.py:124` `build_export_bundle_file()` + `server_modules/http_api.py:27` `GET /api/export-bundle` |
+| 数据包导入预览 | `server.py:559` wrapper → `server_modules/bundle_preview_service.py:140` `analyze_import_bundle()` / `server.py:562` alias → `server_modules/import_diff.py:82` `diff_import_bundle()` + `server_modules/http_api.py:255` `POST /api/import-bundle/preview` |
+| 数据包导入提交 | `server.py:658` `commit_import_bundle()` / `server_modules/import_bundle_service.py:97` + `server_modules/http_api.py:266` `POST /api/import-bundle/commit`；提交链路写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| HTTP runtime 依赖上下文 | `server.py:819` wrapper → `server_modules/http_runtime.py:8` `HTTP_RUNTIME_FIELDS` / `:52` `build_context()`；集中维护 `http_api.py` 所需依赖合同 |
+| 导入整树映射/一致性校验 | `server.py:663` alias → `server_modules/import_commit.py:48` `_register_imported_stage_tree()` / `server.py:664` alias → `server_modules/import_commit.py:61` `_register_imported_project_tree()` / `server.py:666` alias → `server_modules/import_commit.py:128` `_validate_import_commit_state()` |
 | 临时库压测脚本 | `tools/perf_benchmark.py` 默认造 20 项目 / 10万任务 / 30 池 / 7万样机 / 70万照片元数据 |
 | 临时库并发压测脚本 | `tools/concurrency_benchmark.py` 默认造 4 项目 / 1 万任务 / 6 池 / 5,000 样机，并发跑分页/摘要/销毁影响范围读与 SQLite 写事务；运行期将 `DB_LOCK` 替换为报错锁，验证业务路径不回退全局锁 |
 | 真实 HTTP 并发压测脚本 | `tools/http_concurrency_benchmark.py` 使用临时 SQLite 库启动 `ThreadingHTTPServer`，并发请求 bootstrap、摘要、任务分页、样机分页、销毁影响范围、照片上传/删除、`/api/export-bundle`、导入预览和导入提交；运行期将 `DB_LOCK` 替换为报错锁，导入提交遇到并发 revision 冲突会重试 |
@@ -158,7 +162,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 3. 阶段新增/编辑/删除/复制/排序、策略页内联阶段名与 SKU 编辑已切到 `commitStageMutation()`。
 4. 样机池新建/编辑、样机新增、样机批量导入已切到 `commitSampleCategoryMutation(createSamples)`。
 5. 任务表正式使用 `/api/stages/<stageId>/tasks` 服务端分页；样机池卡片使用 `/api/sample-categories` 摘要，池内样机使用 `/api/sample-categories/<catId>/samples` 分页。
-6. `index.html` 静态资源加 cachebuster，当前发布版本统一为 `v=7.1.3`，避免浏览器缓存旧 JS 影响验证。
+6. `index.html` 静态资源加 cachebuster，当前发布版本统一为 `v=7.1.4`，避免浏览器缓存旧 JS 影响验证。
 7. 已补 `tests/test_server_core.py` 覆盖项目增量、阶段增量、样机池创建与批量样机插入。
 8. 已推进到第五阶段：初始化不再直接拉全量 `/api/state`。
 
@@ -233,14 +237,14 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 5. **照片/结果图片后端直接变更链路（本轮已完成）**
    - 2026-06-03 已修复：样机照片上传/删除、任务结果图片上传成功后不再 `syncAfterDirectMutation()` / `reloadFromServer()` 拉取 `/api/state`，改由 `js/app.server.js` `applySamplePhotosMutationResult()` 合并接口返回的 `photos/revision` 并局部刷新照片面板/分页缓存。
    - 2026-06-03 已修复：照片重命名 PATCH 已统一写入 `audit_log`，并补 `tests/test_server_core.py` 覆盖照片上传、重命名、删除三段后端路由。
-   - 2026-06-03 已修复：照片/结果图上传和照片删除后端改为 `server.py:5630` `commit_sample_asset_mutation()`，只更新 `sample_assets`、当前样机 `updatedAt`、`app_state.revision` 和 `audit_log`；成功路径不再 `compose_state()` / `commit_data_mutation()` / `sync_project_library()` / `sync_sample_library()`。2026-06-04 起，照片上传/删除/重命名数据库变更改用 SQLite `BEGIN IMMEDIATE` 写事务，不再持有全局 `DB_LOCK`；照片上传文件写入和照片删除文件 unlink 也已移到 DB 提交临界区外。
+   - 2026-06-03 已修复：照片/结果图上传和照片删除后端改为 `server.py:744` `commit_sample_asset_mutation()`，只更新 `sample_assets`、当前样机 `updatedAt`、`app_state.revision` 和 `audit_log`；成功路径不再 `compose_state()` / `commit_data_mutation()` / `sync_project_library()` / `sync_sample_library()`。2026-06-04 起，照片上传/删除/重命名数据库变更改用 SQLite `BEGIN IMMEDIATE` 写事务，不再持有全局 `DB_LOCK`；照片上传文件写入和照片删除文件 unlink 也已移到 DB 提交临界区外。
 
 6. **样机全局查重（本轮已完成）**
-   - 2026-06-03 已新增 `sample_records.board_sn/is_reassembled` 查询列、回填和索引；`server.py:2868` `check_sample_identity_conflicts()` + `POST /api/sample-identity-check` 支持批量 SN/IMEI/主板SN 查重、重组样机豁免和编辑排除自身。
+   - 2026-06-03 已新增 `sample_records.board_sn/is_reassembled` 查询列、回填和索引；`server.py:416` alias → `server_modules/sample_constraints.py:172` `check_sample_identity_conflicts()` + `POST /api/sample-identity-check` 支持批量 SN/IMEI/主板SN 查重、重组样机豁免和编辑排除自身。
    - 2026-06-03 已修复：样机批量导入、新增样机、编辑样机身份不再为了查重调用 `ensureFullStateLoaded()` 或遍历完整样机库；批量导入一次调用服务端查重并保留本批次内重复过滤。
 
 7. **样机测试履历服务端分页（本轮已完成）**
-   - 2026-06-03 已新增 `server.py:3166` `list_sample_history_page()` + `GET /api/samples/<sampleId>/history`，由 SQLite 侧按 `sample_events` 与 `project_task_samples` 聚合任务、日志和结果图片，并支持分页。
+   - 2026-06-03 已新增 `server.py:420` alias → `server_modules/sample_history.py:152` `list_sample_history_page()` + `GET /api/samples/<sampleId>/history`，由 SQLite 侧按 `sample_events` 与 `project_task_samples` 聚合任务、日志和结果图片，并支持分页。
    - 2026-06-03 已修复：`js/samples/06-history.js:102` `sampleTestHistoryHtml()` 只渲染 `fetchSampleHistory()` 返回的缓存页，不再遍历本地 `projects/stages/tasks`；照片/任务/样机 mutation 会失效相关样机履历缓存。
 
 8. **增量 mutation 返回值与缓存失效粒度继续收窄**
@@ -259,55 +263,54 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 
 ## 文件地图 — 精确到函数
 
-### server.py (7544 行，含 SQLite 外置表、数据包导入导出、启动骨架 API、分页摘要 API、查询状态列、样机身份查重/履历分页 API、任务/项目/阶段/样机增量写入 API、P0 幂等兜底、空白平台整包导入兜底)
+### server.py (856 行，含 SQLite 外置表、数据包导入导出、启动骨架 API、分页摘要 API、查询状态列、样机身份查重/履历分页 API、任务/项目/阶段/样机增量写入 API、P0 幂等兜底、空白平台整包导入兜底)
 
 | 行号 | 符号 | 职责 |
 |------|------|------|
-| 67 / 79 | `empty_data()`, `ensure_dirs()` | 空状态模板, 目录创建 |
-| 107 / 116 | `connect_db()` / `write_db_connection()` | SQLite 连接(WAL, 30s timeout) 与无全局 Python 锁写事务 |
-| 244 / 258 / 272 / 290 | `_should_backup()`, `write_backup()`, `write_compact_backup_snapshot()`, `prune_backups()` | backup 节流判断、写入、无锁 compact 快照与清理 |
-| 341 / 347 / 382 / 401 | `ensure_table_column()` / `backfill_query_state_columns()` / `backfill_sample_identity_columns()` / `ensure_schema()` | SQLite 表结构 DDL/迁移、查询状态列/样机身份列回填、索引创建 |
-| 932 | `sync_sample_library()` | 样机库 → SQLite 同步(upsert+清理，写入 effective_status/has_problem/board_sn/is_reassembled) |
-| 1169 | `load_sample_library()` | SQLite → 内存样机库 |
-| 1246 / 1264 / 1289 | `list_item_key()`, `merge_record()`, `merge_list_by_id()` | 三向合并引擎 |
-| 1182–1191 | `PROJECT_CHILDREN`, `SAMPLE_CATEGORY_CHILDREN` | 项目/样机嵌套合并层级声明 |
-| 1373 | `merge_state()` | 顶层三向合并入口 |
-| 1400 | `sync_project_library()` | 项目/阶段/任务 → SQLite，写入 flow_status |
-| 1585 | `load_project_library()` | SQLite → 项目列表 |
-| 1975 / 1979 / 1998 | `task_query_requires_python_scan()` / `task_sql_filter_parts()` / `task_from_db_row()` | 任务分页 SQL 快路径辅助 |
-| 2041 | `list_stage_tasks_page()` | `/api/stages/<stageId>/tasks` 服务端分页，默认/状态/SKU/执行人走 SQL 分页 |
-| 2333 / 2346 / 2371 | `sample_query_requires_python_scan()` / `sample_sql_filter_parts()` / `sample_from_db_row()` | 样机分页 SQL 快路径辅助 |
-| 2396 | `list_sample_categories_summary()` | `/api/sample-categories` 样机池摘要，按 effective_status 统计 |
-| 2446 | `list_samples_page()` | `/api/sample-categories/<catId>/samples` 服务端分页，默认/状态/保管人/借用人走 SQL 分页 |
-| 2868 | `check_sample_identity_conflicts()` | `/api/sample-identity-check` 服务端样机身份查重，支持批量、重组豁免、编辑排除自身 |
-| 2971 | `list_task_sample_candidates_page()` | `/api/task-sample-candidates` 服务端分页候选 |
-| 3166 | `list_sample_history_page()` | `/api/samples/<sampleId>/history` 服务端履历分页聚合 |
-| 3269 | `load_sample_category_detail()` | 样机池详情按需加载 |
-| 3328 | `list_project_summary()` | `/api/projects/summary` 项目摘要 |
-| 3370 | `compose_bootstrap_state()` | `/api/bootstrap` 启动骨架 |
-| 3403 | `compose_state()` | 从 SQLite 拼装完整 state |
-| 3416 | `begin_read_snapshot()` | 完整 state / metadata 兼容读取的 SQLite 只读快照事务 |
-| 3424 | `init_db()` | 首次启动建库 + V6→V7 自动迁移 |
-| 3703 / 3740 / 3775 / 3784 / 3799 / 3879 / 4488 / 5344 / 5224 | `prepare_export_bundle_parts()` / `write_export_bundle_zip()` / `build_export_bundle()` / `build_export_bundle_file()` / `analyze_import_bundle()` / `_diff_import_bundle()` / `commit_import_bundle()` / `hydrate_import_target_photos()` / `_validate_import_commit_state()` | 完整数据包导出、HTTP 临时 zip 流式发送、预览、冲突分析、compact 提交、导入照片目标样机按需补读、空白平台整包导入一致性兜底 |
-| 5449 | `detect_sample_occupancy_conflicts()` | C1 占用冲突检测 |
-| 5494 | `save_state()` | PUT /api/state 处理 |
-| 5568 | `parse_multipart()` | multipart/form-data 解析 |
-| 5598 | `commit_data_mutation()` | 旧直接变更兼容入口；照片上传/删除已不再使用 |
-| 917 / 928 | `sample_asset_relative_paths()` / `cleanup_sample_asset_files()` | 样机资产文件路径收集与低频清理，销毁路径提交后再 unlink |
-| 692 / 722 | `write_sample_asset_file()` / `upsert_sample_asset_meta()` | 照片/结果图文件写入与 SQLite 资产记录 upsert 拆分 |
-| 5630 | `commit_sample_asset_mutation()` | 照片/结果图上传删除后的资产级 revision/audit/sample 更新时间提交 |
-| 5715 / 5789 / 5866 / 5941 / 5998 / 6073 | `upsert_task_record()` / `update_project_record()` / `update_stage_record()` / `update_sample_category_record()` / `update_sample_record()` / `upsert_sample_events()` | 任务/项目/阶段/样机池/样机/事件增量 upsert |
-| 6184 | `existing_finished_task()` | 结束任务幂等兜底，重复 finish 返回 `TASK_ALREADY_FINISHED` |
-| 6203 | `detect_task_mutation_sample_status_blockers()` | 新增任务样机状态兜底，只有“闲置”可新增选择 |
-| 6253 / 6360 / 6463 / 6561 / 6622 / 6729 | `commit_task_mutation()` / `commit_task_batch_mutation()` / `commit_sample_mutation()` / `commit_project_mutation()` / `commit_stage_mutation()` / `commit_sample_category_mutation()` | 任务、批量任务、样机、项目、阶段、样机池增量写入 API |
-| 6831 | `Handler` | HTTP 路由类 |
-| 6964 | `_is_public_static_path()` | 静态文件白名单 |
-| 6787 | `Handler.do_GET()` | GET 路由(全量 state、摘要、分页、样机履历、静态资源) |
-| 7008 | `Handler.do_POST()` | POST 路由(导入、样机身份查重、照片上传) |
-| 7137 | `Handler.do_DELETE()` | DELETE 路由(照片软删除) |
-| 7180 | `Handler.do_PATCH()` | PATCH 增量写入路由 |
-| 7282 | `Handler.do_PUT()` | PUT /api/state 路由 |
-| 7517 | `main()` | 启动入口 |
+| 88 / 92 | `empty_data()`, `ensure_dirs()` | 空状态模板, 目录创建 |
+| 104 / 109 | `connect_db()` / `write_db_connection()` | SQLite 连接(WAL, 30s timeout) 与无全局 Python 锁写事务 |
+| 156 / 161 / 165 / 171 | `_should_backup()`, `write_backup()`, `write_compact_backup_snapshot()`, `prune_backups()` | backup 节流判断、写入、无锁 compact 快照与清理 |
+| 175 / 189 / 193 / 197 | `ensure_table_column` alias / `backfill_query_state_columns()` / `backfill_sample_identity_columns()` / `ensure_schema()` | SQLite 表结构 DDL/迁移、查询状态列/样机身份列回填、索引创建 |
+| 324 | `sync_sample_library()` | 样机库 → SQLite 同步(upsert+清理，写入 effective_status/has_problem/board_sn/is_reassembled) |
+| 336 | `load_sample_library()` | SQLite → 内存样机库 |
+| `server_modules/state_merge.py:20 / :38 / :63` | `list_item_key()`, `merge_record()`, `merge_list_by_id()` | 三向合并引擎 |
+| 343 | `merge_state()` / wrapper | 顶层三向合并入口 |
+| 354 | `sync_project_library()` | 项目/阶段/任务 → SQLite，写入 flow_status |
+| 358 | `load_project_library` alias | SQLite → 项目列表 |
+| 387 / 388 / 389 | `task_query_requires_python_scan` / `task_sql_filter_parts` / `task_from_db_row` aliases | 任务分页 SQL 快路径辅助，实现在 `server_modules/task_queries.py` |
+| 389 | `list_stage_tasks_page` alias | `/api/stages/<stageId>/tasks` 服务端分页，默认/状态/SKU/执行人走 SQL 分页 |
+| 399 / 401 / 402 | `sample_query_requires_python_scan` / `sample_sql_filter_parts` / `sample_from_db_row` aliases | 样机分页 SQL 快路径辅助，实现在 `server_modules/sample_queries.py` |
+| 402 | `list_sample_categories_summary` alias | `/api/sample-categories` 样机池摘要，按 effective_status 统计 |
+| 403 | `list_samples_page` alias | `/api/sample-categories/<catId>/samples` 服务端分页，默认/状态/保管人/借用人走 SQL 分页 |
+| 416 | `check_sample_identity_conflicts` alias | `/api/sample-identity-check` 服务端样机身份查重，支持批量、重组豁免、编辑排除自身 |
+| 417 | `list_task_sample_candidates_page` alias | `/api/task-sample-candidates` 服务端分页候选 |
+| 420 | `list_sample_history_page` alias | `/api/samples/<sampleId>/history` 服务端履历分页聚合 |
+| 423 | `load_sample_category_detail()` | 样机池详情按需加载 |
+| 432 | `list_project_summary()` | `/api/projects/summary` 项目摘要 |
+| 458 | `compose_bootstrap_state()` | `/api/bootstrap` 启动骨架 |
+| 462 | `compose_state()` | 从 SQLite 拼装完整 state |
+| 471 | `begin_read_snapshot()` | 完整 state / metadata 兼容读取的 SQLite 只读快照事务 |
+| 475 | `init_db()` | 首次启动建库 + V6→V7 自动迁移 |
+| 543 / 547 / 551 / 555 / 559 / 562 / 658 / 672 / 666 | `prepare_export_bundle_parts()` / `write_export_bundle_zip()` / `build_export_bundle()` / `build_export_bundle_file()` / `analyze_import_bundle()` / `_diff_import_bundle` alias / `commit_import_bundle()` / `hydrate_import_target_photos()` / `_validate_import_commit_state` alias | 完整数据包导出、HTTP 临时 zip 流式发送、预览、冲突分析、compact 提交、导入照片目标样机按需补读、空白平台整包导入一致性兜底 |
+| 696 | `detect_sample_occupancy_conflicts` alias | C1 占用冲突检测 |
+| 718 | `save_state()` | PUT /api/state 处理 |
+| 739 | `parse_multipart` alias | multipart/form-data 解析 |
+| 740 | `commit_data_mutation()` | 旧直接变更兼容入口；照片上传/删除已不再使用 |
+| 334 / 338 | `sample_asset_relative_paths()` / `cleanup_sample_asset_files()` | 样机资产文件路径收集与低频清理，销毁路径提交后再 unlink |
+| 235 / 257 | `write_sample_asset_file()` / `upsert_sample_asset_meta()` | 照片/结果图文件写入与 SQLite 资产记录 upsert 拆分 |
+| 744 | `commit_sample_asset_mutation()` | 照片/结果图上传删除后的资产级 revision/audit/sample 更新时间提交 |
+| 765 / 767 / 769 / 771 / 772 / 773 | `upsert_task_record` / `update_project_record` / `update_stage_record` / `update_sample_category_record` / `update_sample_record` / `upsert_sample_events` aliases | 任务/项目/阶段/样机池/样机/事件增量 upsert，实现在 `server_modules/record_writers.py` |
+| 777 | `existing_finished_task` alias | 结束任务幂等兜底，重复 finish 返回 `TASK_ALREADY_FINISHED` |
+| 779 | `detect_task_mutation_sample_status_blockers` alias | 新增任务样机状态兜底，只有“闲置”可新增选择 |
+| 792 / 796 / 800 / 804 / 808 / 815 | `commit_task_mutation()` / `commit_task_batch_mutation()` / `commit_sample_mutation()` / `commit_project_mutation()` / `commit_stage_mutation()` / `commit_sample_category_mutation()` | 任务、批量任务、样机、项目、阶段、样机池增量写入 API |
+| 823 / `server_modules/http_handler.py:10` | `Handler` / `create_handler()` | HTTP 路由类工厂 |
+| `server_modules/http_routes.py:45` | `is_public_static_path()` | 静态文件白名单 |
+| `server_modules/http_handler.py:81` / `server_modules/http_api.py:12` | `Handler.do_GET()` / `handle_get()` | GET 路由(全量 state、摘要、分页、样机履历、静态资源) |
+| `server_modules/http_handler.py:84` / `server_modules/http_api.py:251` | `Handler.do_POST()` / `handle_post()` | POST 路由(导入、样机身份查重、照片上传) |
+| `server_modules/http_handler.py:87` / `server_modules/http_api.py:382` | `Handler.do_DELETE()` / `handle_delete()` | DELETE 路由(照片软删除) |
+| `server_modules/http_handler.py:90` / `server_modules/http_api.py:426` | `Handler.do_PATCH()` / `handle_patch()` | PATCH 增量写入路由 |
+| `server_modules/http_handler.py:93` / `server_modules/http_api.py:541` | `Handler.do_PUT()` / `handle_put()` | PUT /api/state 路由 |
+| 844 / `server_modules/server_runner.py:9` | `main()` / `run_server()` | 启动入口与命令行参数 |
 
 ### js/utils.js (615 行) — 纯工具函数
 
@@ -637,18 +640,18 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 
 | 要改什么 | 文件:函数(行号) |
 |----------|-----------------|
-| 后端端口/地址 | `server.py:5778-5779` |
+| 后端端口/地址 | `server_modules/server_runner.py:19-20` |
 | 最大上传体积 | `server.py:48` `MAX_UPLOAD_BYTES` |
-| backup频率/数量 | `server.py:197-210` |
-| 数据库表结构 | `server.py:401` `ensure_schema()` |
+| backup频率/数量 | `server.py:150-155` |
+| 数据库表结构 | `server.py:197` `ensure_schema()` |
 | 样机/任务状态枚举 | `js/app.core.js:37-38` |
 | 状态变更统一入口 | `js/app.data.js:716` `changeSampleStatus()` |
 | 任务状态标准化 | `js/workspace/01-shared.js:42` `taskFlowStatus()` |
 | 数据规范化(旧格式修复) | `js/app.data.js:34` `normalize()` |
-| 三向合并(服务端) | `server.py:1373` `merge_state()` |
+| 三向合并(服务端) | `server.py:343` `merge_state()` |
 | 保存流程(前端) | `js/app.server.js:68` `save()` |
-| 保存流程(后端) | `server.py:5494` `save_state()` |
-| 样机占用冲突C1(后端) | `server.py:5449` `detect_sample_occupancy_conflicts()` |
+| 保存流程(后端) | `server.py:718` `save_state()` |
+| 样机占用冲突C1(后端) | `server.py:696` alias → `server_modules/import_commit.py:348` `detect_sample_occupancy_conflicts()` |
 | 样机占用冲突C1(前端) | `js/app.server.js:85-98` |
 | 弹窗onOk行为 | `js/app.modal.js:26` `showModal()` (返回true=保持打开) |
 | 内联校验标红 | `js/app.modal.js:213` `markFieldInvalid()` / `:185` `appendFieldError()` / `:192` `insertFieldErrorAfter()` |
@@ -659,11 +662,11 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 人员下拉生成 | `js/workspace/01-shared.js:172` `projectMemberSelectHtml()` |
 | 样机释放 | `js/workspace/01-shared.js:199` `releaseTaskSamples()` |
 | 样机新增校验 | `js/samples/01-pool.js:1233` `addSample()` + `POST /api/sample-identity-check` |
-| 样机去重系统 | `js/samples/02-import-export.js:8` `importSampleBatch()` / `:252` `_checkServerIdentityDuplicate()` / 后端 `server.py:2868` `check_sample_identity_conflicts()` |
+| 样机去重系统 | `js/samples/02-import-export.js:8` `importSampleBatch()` / `:252` `_checkServerIdentityDuplicate()` / 后端 `server.py:416` alias → `server_modules/sample_constraints.py:172` `check_sample_identity_conflicts()` |
 | 样机详情弹窗 | `js/samples/07-detail.js:8` `openSampleDetail()` |
-| 样机照片上传(前端) | `js/samples/04-photos.js:228` / 后端 `server.py:5630` `commit_sample_asset_mutation()` |
+| 样机照片上传(前端) | `js/samples/04-photos.js:228` / 后端 `server.py:744` `commit_sample_asset_mutation()` |
 | 样机批量导入 | `js/samples/02-import-export.js:8` `importSampleBatch()` |
-| 样机测试履历 | `js/samples/06-history.js:102` `sampleTestHistoryHtml()` / 后端 `server.py:3021` `GET /api/samples/<id>/history` |
+| 样机测试履历 | `js/samples/06-history.js:102` `sampleTestHistoryHtml()` / 后端 `server_modules/http_routes.py:32` `sample_history_route()` / `server.py:420` alias → `server_modules/sample_history.py:152` `list_sample_history_page()` |
 | 阶段卡片渲染 | `js/workspace/02-home.js:52-99` |
 | 项目人员CRUD | `js/workspace/02-home.js:277-394` |
 | 项目位置CRUD | `js/workspace/02-home.js:195-238` |
@@ -680,7 +683,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 任务配置CSS | `css/33-task-config-modal.css` |
 | 样机选择器UI | `js/workspace/06-sample-picker.js:58` `buildTaskSamplePickerHtml()` / `:85` `loadTaskSamplePickerPage()` |
 | 样机选择整卡点击 | `js/workspace/06-sample-picker.js:409` `onTaskSampleRowClick()` |
-| 样机新增状态兜底 | 前端 `js/workspace/06-sample-picker.js:247` 使用后端可选性字段；后端 `server.py:6203` `detect_task_mutation_sample_status_blockers()` |
+| 样机新增状态兜底 | 前端 `js/workspace/06-sample-picker.js:247` 使用后端可选性字段；后端 `server.py:779` alias → `server_modules/task_mutation_rules.py:105` `detect_task_mutation_sample_status_blockers()` |
 | 样机选择器CSS | `css/34-sample-picker.css` |
 | 任务启动 | `js/workspace/08-task-actions.js:55` `startTask()` |
 | 任务阻塞 | `js/workspace/08-task-actions.js:406` `blockTask()` |
@@ -690,7 +693,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 结果录入弹窗 | `js/workspace/09-task-result.js:746` `uploadResult()` |
 | 结果表单收集 | `js/workspace/09-task-result.js:348` `collectTaskResultForm()` |
 | 结果应用 | `js/workspace/09-task-result.js:522` `applyTaskResult()` |
-| 结束任务防重复 | 前端 `js/workspace/09-task-result.js:676` `saveTaskResult()`；后端 `server.py:6184` `existing_finished_task()` |
+| 结束任务防重复 | 前端 `js/workspace/09-task-result.js:676` `saveTaskResult()`；后端 `server.py:777` alias → `server_modules/task_mutation_rules.py:86` `existing_finished_task()` |
 | 结果图片上传 | `js/workspace/09-task-result.js:285` |
 | 问题单录入 | `js/workspace/10-dropdown-issue.js:221` |
 | 任务日志展示 | `js/app.logs.js:258` `showTaskLogs()` |
@@ -699,7 +702,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 首页 | `js/app.render.js:51` `renderHome()` |
 | 项目删除影响分析 | `js/projects.js:222` `collectProjectDeleteImpact()` |
 | 一致性审计(浏览器) | `js/debug/auditConsistency.js:33` |
-| 静态文件白名单 | `server.py:5306` |
+| 静态文件白名单 | `server_modules/http_routes.py:109` `is_public_static_path()` |
 | 照片文件存储 | `data/samples/<sampleId>/photos/` |
 
 ---

@@ -1,7 +1,7 @@
-# TestChamber
+﻿# TestChamber
 
 <p align="center">
-  <a href="https://github.com/LiZiqian/TestChamber/releases/tag/v7.1.0"><img alt="Version 7.1.0" src="https://img.shields.io/badge/version-v7.1.0-2f80ed"></a>
+  <a href="https://github.com/LiZiqian/TestChamber/releases/tag/v7.1.0"><img alt="Version 7.1.4" src="https://img.shields.io/badge/version-v7.1.4-2f80ed"></a>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white">
   <img alt="Windows Intranet" src="https://img.shields.io/badge/platform-Windows%20Intranet-0078D4?logo=windows&logoColor=white">
   <img alt="SQLite WAL" src="https://img.shields.io/badge/database-SQLite%20WAL-003B57?logo=sqlite&logoColor=white">
@@ -14,9 +14,9 @@
 TestChamber 把“项目 -> 阶段 -> 测试任务 -> 样机 -> 结果 -> 履历”这条链路收进一个可以在 Windows 内网机器上直接运行的轻量系统。它不依赖外部云服务，不需要安装数据库服务器，也不需要 npm / pip 依赖；下载源码、启动 Python 服务、打开浏览器即可开始使用。
 
 > [!NOTE]
-> - 当前版本：`7.1.0`
+> - 当前版本：`7.1.4`
 > - 默认端口：`9398`（可自定义）
-> - 默认数据目录：`data/`
+> - 默认数据目录：平台目录同级的 `TestChamberV7_data/`
 > - 推荐运行环境：Windows + Python 3.9+ + Chrome / Edge
 
 ## 目录
@@ -423,23 +423,41 @@ D:\Miniforge3\python.exe
 
 ### 本地数据目录
 
-首次运行会自动创建：
+首次运行会自动创建平台目录同级的外置数据目录；例如平台在 `TestChamberV7/` 时，默认数据目录是 `TestChamberV7_data/`。
 
 ```text
-data/
+TestChamberV7_data/
 ├── testchamber.sqlite
-└── samples/
-    └── <sampleId>/
-        └── photos/
+├── deployment.json
+├── samples/
+│   └── <sampleId>/
+│       └── photos/
+├── backups/
+├── import-previews/
+└── exports/
 ```
 
 其中：
 
 | 路径 | 说明 |
 |------|------|
-| `data/testchamber.sqlite` | SQLite 主数据库 |
-| `data/samples/.../photos/` | 样机照片和缩略图 |
-| `backups/` | 自动备份目录 |
+| `TestChamberV7_data/testchamber.sqlite` | SQLite 主数据库 |
+| `TestChamberV7_data/deployment.json` | 当前部署身份 |
+| `TestChamberV7_data/samples/.../photos/` | 样机照片和缩略图 |
+| `TestChamberV7_data/backups/` | 自动备份目录 |
+| `TestChamberV7_data/import-previews/` | 导入预览临时目录 |
+| `TestChamberV7_data/exports/` | 导出临时 zip 目录 |
+
+如果旧版本已经在平台目录内存在 `data/` 或 `backups/`，新版本启动时会先复制到外置数据目录；旧目录不会自动删除。
+
+也可以手动执行同一套迁移逻辑：
+
+```powershell
+python tools\migrate_data_root.py
+python tools\migrate_data_root.py --data-dir D:\TestChamberData
+```
+
+迁移采用 `copy-then-promote`：先复制到临时 staging 目录，逐文件校验通过后才提升为正式外置数据目录；旧 `data/` 和 `backups/` 不会被删除。命令输出中的 `verified_files` 和 `copied_bytes` 可作为本次迁移的核对信号。
 
 ### 不要上传运行数据
 
@@ -463,7 +481,7 @@ __pycache__/
 导出完整数据包
 ```
 
-这样可以同时带走数据库状态、样机照片和引用关系。直接复制 `data/` 也可以作为本机级备份，但跨电脑迁移时更推荐数据包导出导入。
+这样可以同时带走数据库状态、样机照片和引用关系。直接复制外置 `TestChamberV7_data/` 也可以作为本机级备份，但跨电脑迁移时更推荐数据包导出导入。
 
 ## 常见问题
 
@@ -574,10 +592,10 @@ TestChamber/
 │   └── workspace/
 ├── templates/                # CSV / XLSX import templates
 ├── tests/                    # Python and frontend regression tests
-├── tools/                    # Benchmark tooling
-├── data/                     # Runtime data, ignored by Git
-└── backups/                  # Runtime backups, ignored by Git
+└── tools/                    # Benchmark tooling
 ```
+
+运行数据默认在仓库外的同级 `TestChamberV7_data/`，不属于平台源码目录。
 
 ### 核心数据流
 
@@ -705,6 +723,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/api/health -UseBasicParsing
 
 - `data/`
 - `backups/`
+- `TestChamberV7_data/`
 - `__pycache__/`
 - `*.sqlite`
 - `*.db`

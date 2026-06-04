@@ -1,0 +1,580 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+
+from server_modules import sample_queries
+
+
+def json_obj(text: str | None, fallback: object | None = None):
+    try:
+        return json.loads(text or "")
+    except Exception:
+        return fallback
+
+
+def first_query_value(query: dict[str, list[str]], name: str, default: str = "") -> str:
+    values = query.get(name)
+    if not values:
+        return default
+    return str(values[0] if values[0] is not None else default)
+
+
+def to_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_page_params(query: dict[str, list[str]], *, default_size: int = 100, max_size: int = 500) -> tuple[int, int]:
+    page = to_int(first_query_value(query, "page", "1"), 1)
+    page_size = to_int(first_query_value(query, "pageSize", str(default_size)), default_size)
+    page = max(1, page)
+    page_size = max(1, min(max_size, page_size))
+    return page, page_size
+
+
+def paginate_list(items: list[dict], page: int, page_size: int) -> tuple[list[dict], dict]:
+    total = len(items)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return items[start:end], {
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "totalPages": total_pages,
+    }
+
+
+def task_flow_status(task: dict) -> str:
+    status = str(task.get("status") or "").strip()
+    if status in ("异常完成", "异常终止", "失败", "Fail"):
+        return "异常终止"
+    if task.get("completed") or status in ("正常完成", "已完成", "通过", "Pass"):
+        return "正常完成"
+    if status in ("阻塞", "阻塞中"):
+        return "阻塞中"
+    if status in ("进行中", "Testing"):
+        return "进行中"
+    return "待下发"
+
+
+def person_name_from_text(text: object) -> str:
+    raw = str(text or "").strip()
+    if "/" in raw:
+        return raw.split("/", 1)[0].strip()
+    return raw
+
+
+def task_search_text(task: dict, progress: dict | None = None) -> str:
+    issue = task.get("issueRecord") if isinstance(task.get("issueRecord"), dict) else {}
+    chunks = [
+        task.get("category"),
+        task.get("testItem"),
+        task.get("owner"),
+        issue.get("dtsNo"),
+        issue.get("issueNote"),
+        task.get("result"),
+        task.get("resultSummary"),
+        task.get("completionType"),
+    ]
+    if progress:
+        chunks.extend([progress.get("category"), progress.get("testItem")])
+    for upload in task.get("resultUploads") or []:
+        if isinstance(upload, dict):
+            chunks.extend([upload.get("reason"), upload.get("summary"), upload.get("result")])
+    for fault in task.get("sampleFaultRecords") or []:
+        if isinstance(fault, dict):
+            chunks.extend([fault.get("problem"), fault.get("sampleNo"), fault.get("sn"), fault.get("imei")])
+    return " ".join(str(x or "") for x in chunks).lower()
+
+
+def task_matches_query(task: dict, progress: dict | None, query: dict[str, list[str]]) -> bool:
+    sku = first_query_value(query, "sku", "")
+    sku_index = str(task.get("skuIndex") or (progress or {}).get("skuIndex") or "")
+    if sku and sku != sku_index:
+        return False
+
+    flow_status = first_query_value(query, "flowStatus", "")
+    if flow_status and task_flow_status(task) != flow_status:
+        return False
+
+    owner_name = first_query_value(query, "ownerName", "")
+    if owner_name and person_name_from_text(task.get("owner")) != owner_name:
+        return False
+
+    category_kw = first_query_value(query, "categoryKeyword", "").strip().lower()
+    category = str(task.get("category") or (progress or {}).get("category") or "").lower()
+    if category_kw and category_kw not in category:
+        return False
+
+    case_kw = first_query_value(query, "caseKeyword", "").strip().lower()
+    test_item = str(task.get("testItem") or (progress or {}).get("testItem") or "").lower()
+    if case_kw and case_kw not in test_item:
+        return False
+
+    dts_kw = first_query_value(query, "dtsKeyword", "").strip().lower()
+    issue = task.get("issueRecord") if isinstance(task.get("issueRecord"), dict) else {}
+    if dts_kw and dts_kw not in str(issue.get("dtsNo") or "").lower():
+        return False
+
+    result_kw = first_query_value(query, "resultKeyword", "").strip().lower()
+    if result_kw and result_kw not in task_search_text(task, progress):
+        return False
+
+    return True
+
+
+def query_value_present(query: dict[str, list[str]], name: str) -> bool:
+    return bool(first_query_value(query, name, "").strip())
+
+
+def task_query_requires_python_scan(query: dict[str, list[str]]) -> bool:
+    return any(query_value_present(query, key) for key in ("categoryKeyword", "caseKeyword", "dtsKeyword", "resultKeyword"))
+
+
+def task_sql_filter_parts(stage_id: str, query: dict[str, list[str]], *, include_flow_status: bool = True) -> tuple[list[str], list[object]]:
+    where = ["stage_id = ?", "deleted_at IS NULL"]
+    args: list[object] = [stage_id]
+    sku = first_query_value(query, "sku", "")
+    if sku:
+        where.append("sku_index = ?")
+        args.append(to_int(sku, 0))
+    owner_name = first_query_value(query, "ownerName", "").strip()
+    if owner_name:
+        where.append("(owner = ? OR owner LIKE ?)")
+        args.extend([owner_name, f"{owner_name}/%"])
+    if include_flow_status:
+        flow_status = first_query_value(query, "flowStatus", "").strip()
+        if flow_status:
+            where.append("flow_status = ?")
+            args.append(flow_status)
+    return where, args
+
+
+def task_from_db_row(row: sqlite3.Row) -> dict:
+    task = json_obj(row["data_json"], {}) or {}
+    sample_ids = json_obj(row["sample_ids_json"], [])
+    if not isinstance(sample_ids, list):
+        sample_ids = []
+    task.update({
+        "id": row["id"],
+        "projectId": row["project_id"],
+        "stageId": row["stage_id"],
+        "progressId": row["progress_id"] or task.get("progressId") or "",
+        "category": row["category"] or task.get("category") or "",
+        "testItem": row["test_item"] or task.get("testItem") or "",
+        "skuIndex": to_int(row["sku_index"] if row["sku_index"] is not None else task.get("skuIndex")),
+        "status": row["status"] or task.get("status") or "",
+        "owner": row["owner"] or task.get("owner") or "",
+        "sampleIds": sample_ids,
+    })
+    if row["completed_at"] and not task.get("completedAt"):
+        task["completedAt"] = row["completed_at"]
+    return task
+
+
+def load_task_logs_for(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, list[dict]]:
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    rows = conn.execute(
+        f"""
+        SELECT task_id, data_json
+        FROM task_logs
+        WHERE task_id IN ({placeholders})
+        ORDER BY time, id
+        """,
+        task_ids,
+    ).fetchall()
+    logs_by_task: dict[str, list[dict]] = {}
+    for row in rows:
+        log = json_obj(row["data_json"], None)
+        if isinstance(log, dict):
+            logs_by_task.setdefault(row["task_id"], []).append(log)
+    return logs_by_task
+
+
+def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[str, list[str]]) -> dict:
+    page, page_size = parse_page_params(query, default_size=100, max_size=500)
+    stage_row = conn.execute(
+        """
+        SELECT id, project_id, name, data_json
+        FROM project_stages
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (stage_id,),
+    ).fetchone()
+    if not stage_row:
+        raise KeyError("阶段不存在")
+
+    stage = json_obj(stage_row["data_json"], {}) or {}
+    progress_items = stage.get("progress") if isinstance(stage.get("progress"), list) else []
+    progress_by_id = {str(p.get("id")): p for p in progress_items if isinstance(p, dict) and p.get("id")}
+
+    if not task_query_requires_python_scan(query):
+        where, args = task_sql_filter_parts(stage_id, query, include_flow_status=True)
+        base_where, base_args = task_sql_filter_parts(stage_id, query, include_flow_status=False)
+        total = int(conn.execute(
+            f"SELECT COUNT(*) AS count FROM project_tasks WHERE {' AND '.join(where)}",
+            args,
+        ).fetchone()["count"] or 0)
+        base_total = int(conn.execute(
+            f"SELECT COUNT(*) AS count FROM project_tasks WHERE {' AND '.join(base_where)}",
+            base_args,
+        ).fetchone()["count"] or 0)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(1, page), total_pages)
+        offset = (page - 1) * page_size
+
+        status_rows = conn.execute(
+            f"""
+            SELECT COALESCE(flow_status, '待下发') AS flow_status, COUNT(*) AS count
+            FROM project_tasks
+            WHERE {" AND ".join(base_where)}
+            GROUP BY flow_status
+            """,
+            base_args,
+        ).fetchall()
+        status_counts = {str(row["flow_status"] or "待下发"): int(row["count"] or 0) for row in status_rows}
+        owner_rows = conn.execute(
+            f"""
+            SELECT owner
+            FROM project_tasks
+            WHERE {" AND ".join(base_where)} AND COALESCE(owner, '') <> ''
+            GROUP BY owner
+            ORDER BY owner
+            """,
+            base_args,
+        ).fetchall()
+        owner_names = [str(row["owner"] or "") for row in owner_rows if str(row["owner"] or "").strip()]
+
+        rows = conn.execute(
+            f"""
+            SELECT id, project_id, stage_id, progress_id, category, test_item, sku_index, status, flow_status, owner,
+                   sample_ids_json, data_json, completed_at
+            FROM project_tasks
+            WHERE {" AND ".join(where)}
+            ORDER BY created_at, id
+            LIMIT ? OFFSET ?
+            """,
+            [*args, page_size, offset],
+        ).fetchall()
+
+        page_rows: list[dict] = []
+        for idx, row in enumerate(rows):
+            task = task_from_db_row(row)
+            progress = progress_by_id.get(str(task.get("progressId") or ""))
+            page_rows.append({
+                "key": task.get("id") or f"task_{idx}",
+                "task": task,
+                "progress": progress,
+                "flowStatus": row["flow_status"] or task_flow_status(task),
+            })
+
+        logs_by_task = load_task_logs_for(conn, [str(row["task"].get("id")) for row in page_rows if row.get("task")])
+        for row in page_rows:
+            task = row.get("task") or {}
+            task["logs"] = logs_by_task.get(str(task.get("id")), [])
+
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "totalPages": total_pages,
+            "stage": {
+                "id": stage_row["id"],
+                "projectId": stage_row["project_id"],
+                "name": stage_row["name"] or stage.get("name") or "",
+            },
+            "stats": {
+                "totalInStage": base_total,
+                "filtered": total,
+                "statusCounts": status_counts,
+                "ownerNames": owner_names,
+            },
+            "rows": page_rows,
+        }
+
+    where = ["stage_id = ?", "deleted_at IS NULL"]
+    args: list[object] = [stage_id]
+    sku = first_query_value(query, "sku", "")
+    if sku:
+        where.append("sku_index = ?")
+        args.append(to_int(sku, 0))
+    category_kw = first_query_value(query, "categoryKeyword", "").strip().lower()
+    if category_kw:
+        where.append("(LOWER(category) LIKE ? OR LOWER(data_json) LIKE ?)")
+        like = f"%{category_kw}%"
+        args.extend([like, like])
+    case_kw = first_query_value(query, "caseKeyword", "").strip().lower()
+    if case_kw:
+        where.append("(LOWER(test_item) LIKE ? OR LOWER(data_json) LIKE ?)")
+        like = f"%{case_kw}%"
+        args.extend([like, like])
+    owner_name = first_query_value(query, "ownerName", "").strip().lower()
+    if owner_name:
+        where.append("LOWER(owner) LIKE ?")
+        args.append(f"%{owner_name}%")
+
+    rows = conn.execute(
+        f"""
+        SELECT id, project_id, stage_id, progress_id, category, test_item, sku_index, status, owner,
+               sample_ids_json, data_json, completed_at
+        FROM project_tasks
+        WHERE {" AND ".join(where)}
+        ORDER BY created_at, id
+        """,
+        args,
+    ).fetchall()
+
+    all_rows: list[dict] = []
+    status_counts: dict[str, int] = {}
+    owner_names: set[str] = set()
+    for idx, row in enumerate(rows):
+        task = task_from_db_row(row)
+        owner = str(task.get("owner") or "").strip()
+        if owner:
+            owner_names.add(owner)
+        progress = progress_by_id.get(str(task.get("progressId") or ""))
+        flow_status = task_flow_status(task)
+        status_counts[flow_status] = status_counts.get(flow_status, 0) + 1
+        if not task_matches_query(task, progress, query):
+            continue
+        all_rows.append({
+            "key": task.get("id") or f"task_{idx}",
+            "task": task,
+            "progress": progress,
+            "flowStatus": flow_status,
+        })
+
+    page_rows, meta = paginate_list(all_rows, page, page_size)
+    logs_by_task = load_task_logs_for(conn, [str(row["task"].get("id")) for row in page_rows if row.get("task")])
+    for row in page_rows:
+        task = row.get("task") or {}
+        task["logs"] = logs_by_task.get(str(task.get("id")), [])
+
+    return {
+        **meta,
+        "stage": {
+            "id": stage_row["id"],
+            "projectId": stage_row["project_id"],
+            "name": stage_row["name"] or stage.get("name") or "",
+        },
+        "stats": {
+            "totalInStage": len(rows),
+            "filtered": len(all_rows),
+            "statusCounts": status_counts,
+            "ownerNames": sorted(owner_names),
+        },
+        "rows": page_rows,
+    }
+
+
+def query_id_list(query: dict[str, list[str]], name: str, *, max_items: int = 500) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in query.get(name) or []:
+        for part in str(raw or "").split(","):
+            value = part.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+            if len(result) >= max_items:
+                return result
+    return result
+
+
+def sample_candidate_keyword_where(keyword: str, *, negate: bool = False) -> tuple[str, list[object]]:
+    like = f"%{keyword.lower()}%"
+    expr = """
+        (LOWER(r.sample_no) LIKE ? OR LOWER(r.sn) LIKE ? OR LOWER(r.imei) LIKE ?
+         OR LOWER(r.owner) LIKE ? OR LOWER(r.borrower) LIKE ? OR LOWER(r.location) LIKE ?
+         OR LOWER(c.name) LIKE ? OR LOWER(r.data_json) LIKE ?)
+    """
+    if negate:
+        expr = f"NOT {expr}"
+    return expr, [like, like, like, like, like, like, like, like]
+
+
+def open_task_occupancy_for_sample_ids(conn: sqlite3.Connection, sample_ids: list[str], *, exclude_task_id: str = "") -> dict[str, list[dict]]:
+    ids = [str(x or "").strip() for x in sample_ids if str(x or "").strip()]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    where = [
+        f"sample_id IN ({placeholders})",
+        "flow_status NOT IN ('正常完成', '异常终止')",
+    ]
+    args: list[object] = [*ids]
+    if exclude_task_id:
+        where.append("task_id != ?")
+        args.append(exclude_task_id)
+    rows = conn.execute(
+        f"""
+        SELECT sample_id, task_id, project_id, stage_id, test_item, status
+        FROM project_task_samples
+        WHERE {" AND ".join(where)}
+        ORDER BY updated_at DESC, task_id
+        """,
+        args,
+    ).fetchall()
+    occupancy: dict[str, list[dict]] = {}
+    for row in rows:
+        sid = str(row["sample_id"] or "")
+        if not sid:
+            continue
+        occupancy.setdefault(sid, []).append({
+            "taskId": str(row["task_id"] or ""),
+            "projectId": str(row["project_id"] or ""),
+            "stageId": str(row["stage_id"] or ""),
+            "testItem": str(row["test_item"] or ""),
+            "status": str(row["status"] or ""),
+        })
+    return occupancy
+
+
+def task_sample_candidate_from_row(row: sqlite3.Row) -> dict:
+    sample = sample_queries.sample_from_db_row(row)
+    sample["categoryName"] = row["category_name"] or ""
+    sample["effectiveStatus"] = sample_queries.sample_effective_status(sample)
+    sample["hasProblem"] = sample_queries.sample_has_problem(sample)
+    return sample
+
+
+def sample_record_status(sample: dict) -> str:
+    return str(sample.get("status") or "闲置").strip() or "闲置"
+
+
+def decorate_task_sample_candidates(
+    samples: list[dict],
+    *,
+    selected_ids: set[str],
+    occupancy: dict[str, list[dict]],
+) -> list[dict]:
+    for sample in samples:
+        sid = str(sample.get("id") or "")
+        selected = sid in selected_ids
+        status = sample_record_status(sample)
+        occupied_tasks = occupancy.get(sid, [])
+        status_blocked = status != "闲置"
+        selectable = selected or (not status_blocked and not occupied_tasks)
+        if selected:
+            disabled_reason = ""
+        elif occupied_tasks:
+            disabled_reason = "样机已被其他未完成任务占用"
+        elif status_blocked:
+            disabled_reason = f"当前状态为「{status}」，不能加入测试任务"
+        else:
+            disabled_reason = ""
+        sample["alreadySelected"] = selected
+        sample["selectable"] = selectable
+        sample["disabledReason"] = disabled_reason
+        sample["occupyingTasks"] = occupied_tasks
+    return samples
+
+
+def list_task_sample_candidates_page(conn: sqlite3.Connection, query: dict[str, list[str]]) -> dict:
+    page, page_size = parse_page_params(query, default_size=50, max_size=100)
+    task_id = first_query_value(query, "taskId", "").strip()
+    selected_ids = query_id_list(query, "selectedIds", max_items=500)
+    selected_set = set(selected_ids)
+    category_id = first_query_value(query, "categoryId", "").strip()
+    keyword = first_query_value(query, "keyword", "").strip().lower()
+    exclude_keyword = first_query_value(query, "excludeKeyword", "").strip().lower()
+    status = first_query_value(query, "status", "").strip()
+
+    categories = sample_queries.list_sample_categories_summary(conn)
+    where = ["r.deleted_at IS NULL", "c.deleted_at IS NULL"]
+    args: list[object] = []
+    if category_id:
+        where.append("r.category_id = ?")
+        args.append(category_id)
+    if selected_ids:
+        placeholders = ",".join("?" for _ in selected_ids)
+        where.append(f"r.id NOT IN ({placeholders})")
+        args.extend(selected_ids)
+    if status:
+        where.append(f"{sample_queries.sample_usage_status_sql_expr('r.status')} = ?")
+        args.append(status)
+    if keyword:
+        expr, expr_args = sample_candidate_keyword_where(keyword)
+        where.append(expr)
+        args.extend(expr_args)
+    if exclude_keyword:
+        expr, expr_args = sample_candidate_keyword_where(exclude_keyword, negate=True)
+        where.append(expr)
+        args.extend(expr_args)
+
+    total = int(conn.execute(
+        f"""
+        SELECT COUNT(*) AS count
+        FROM sample_records r
+        JOIN sample_categories c ON c.id = r.category_id
+        WHERE {" AND ".join(where)}
+        """,
+        args,
+    ).fetchone()["count"] or 0)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    offset = (page - 1) * page_size
+
+    rows = conn.execute(
+        f"""
+        SELECT r.id, r.category_id, c.name AS category_name,
+               r.sample_no, r.sn, r.imei, r.board_sn, r.is_reassembled, r.status, r.has_problem, r.effective_status,
+               r.location, r.owner, r.borrower, r.data_json
+        FROM sample_records r
+        JOIN sample_categories c ON c.id = r.category_id
+        WHERE {" AND ".join(where)}
+        ORDER BY c.sort_order, c.id, r.created_at, r.id
+        LIMIT ? OFFSET ?
+        """,
+        [*args, page_size, offset],
+    ).fetchall()
+    items = [task_sample_candidate_from_row(row) for row in rows]
+
+    selected_items: list[dict] = []
+    if selected_ids:
+        placeholders = ",".join("?" for _ in selected_ids)
+        selected_rows = conn.execute(
+            f"""
+            SELECT r.id, r.category_id, c.name AS category_name,
+                   r.sample_no, r.sn, r.imei, r.board_sn, r.is_reassembled, r.status, r.has_problem, r.effective_status,
+                   r.location, r.owner, r.borrower, r.data_json
+            FROM sample_records r
+            JOIN sample_categories c ON c.id = r.category_id
+            WHERE r.deleted_at IS NULL AND c.deleted_at IS NULL AND r.id IN ({placeholders})
+            ORDER BY c.sort_order, c.id, r.created_at, r.id
+            """,
+            selected_ids,
+        ).fetchall()
+        selected_by_id = {str(row["id"] or ""): task_sample_candidate_from_row(row) for row in selected_rows}
+        selected_items = [selected_by_id[sid] for sid in selected_ids if sid in selected_by_id]
+
+    all_candidate_ids = [str(item.get("id") or "") for item in [*items, *selected_items]]
+    occupancy = open_task_occupancy_for_sample_ids(conn, all_candidate_ids, exclude_task_id=task_id)
+    decorate_task_sample_candidates(items, selected_ids=selected_set, occupancy=occupancy)
+    decorate_task_sample_candidates(selected_items, selected_ids=selected_set, occupancy=occupancy)
+
+    return {
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "totalPages": total_pages,
+        "items": items,
+        "selectedItems": selected_items,
+        "selectedCount": len(selected_ids),
+        "categories": categories,
+        "filters": {
+            "taskId": task_id,
+            "categoryId": category_id,
+            "keyword": keyword,
+            "excludeKeyword": exclude_keyword,
+            "status": status,
+        },
+    }

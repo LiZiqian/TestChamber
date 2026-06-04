@@ -314,8 +314,11 @@ def main():
         "DATA_DIR": server.DATA_DIR,
         "SAMPLE_DATA_DIR": server.SAMPLE_DATA_DIR,
         "BACKUP_DIR": server.BACKUP_DIR,
+        "IMPORT_PREVIEW_DIR": server.IMPORT_PREVIEW_DIR,
+        "EXPORT_DIR": server.EXPORT_DIR,
         "DB_PATH": server.DB_PATH,
         "DEPLOYMENT_FILE": server.DEPLOYMENT_FILE,
+        "_RUNTIME_PATHS": server._RUNTIME_PATHS,
     }
     old_lock = server.DB_LOCK
 
@@ -326,9 +329,12 @@ def main():
         data_dir.mkdir(parents=True, exist_ok=True)
         server.DATA_DIR = data_dir
         server.SAMPLE_DATA_DIR = data_dir / "samples"
-        server.BACKUP_DIR = root / "backups"
+        server.BACKUP_DIR = data_dir / "backups"
+        server.IMPORT_PREVIEW_DIR = data_dir / "import-previews"
+        server.EXPORT_DIR = data_dir / "exports"
         server.DB_PATH = db_path
         server.DEPLOYMENT_FILE = data_dir / "deployment.json"
+        server._RUNTIME_PATHS = server.runtime_paths.build_runtime_paths(data_dir)
         server.ensure_dirs()
 
         conn = sqlite3.connect(db_path)
@@ -405,8 +411,11 @@ def main():
             server.DATA_DIR = old_paths["DATA_DIR"]
             server.SAMPLE_DATA_DIR = old_paths["SAMPLE_DATA_DIR"]
             server.BACKUP_DIR = old_paths["BACKUP_DIR"]
+            server.IMPORT_PREVIEW_DIR = old_paths["IMPORT_PREVIEW_DIR"]
+            server.EXPORT_DIR = old_paths["EXPORT_DIR"]
             server.DB_PATH = old_paths["DB_PATH"]
             server.DEPLOYMENT_FILE = old_paths["DEPLOYMENT_FILE"]
+            server._RUNTIME_PATHS = old_paths["_RUNTIME_PATHS"]
 
 
 if __name__ == "__main__":

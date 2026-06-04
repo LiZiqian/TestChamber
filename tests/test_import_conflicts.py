@@ -16,12 +16,19 @@ import server as _server
 _TEST_TMP = tempfile.TemporaryDirectory(prefix="tcv7_import_tests_")
 DATA_DIR = Path(_TEST_TMP.name) / "data"
 SAMPLE_DATA_DIR = DATA_DIR / "samples"
+BACKUP_DIR = DATA_DIR / "backups"
+IMPORT_PREVIEW_DIR = DATA_DIR / "import-previews"
+EXPORT_DIR = DATA_DIR / "exports"
 DB_PATH = DATA_DIR / "testchamber.sqlite"
 DEPLOYMENT_FILE = DATA_DIR / "deployment.json"
 _server.DATA_DIR = DATA_DIR
 _server.SAMPLE_DATA_DIR = SAMPLE_DATA_DIR
+_server.BACKUP_DIR = BACKUP_DIR
+_server.IMPORT_PREVIEW_DIR = IMPORT_PREVIEW_DIR
+_server.EXPORT_DIR = EXPORT_DIR
 _server.DB_PATH = DB_PATH
 _server.DEPLOYMENT_FILE = DEPLOYMENT_FILE
+_server._RUNTIME_PATHS = _server.runtime_paths.build_runtime_paths(DATA_DIR)
 ensure_dirs()
 
 _passed = 0

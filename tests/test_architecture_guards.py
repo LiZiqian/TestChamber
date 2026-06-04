@@ -11,7 +11,16 @@ from tools import update_agents_map  # noqa: E402
 
 
 SERVER_PATH = ROOT / "server.py"
+DATABASE_BACKFILLS_PATH = ROOT / "server_modules" / "database_backfills.py"
+STATE_READ_SERVICE_PATH = ROOT / "server_modules" / "state_read_service.py"
+STATE_EXTERNALIZATION_PATH = ROOT / "server_modules" / "state_externalization.py"
+STATE_PERSISTENCE_PATH = ROOT / "server_modules" / "state_persistence.py"
+SAMPLE_QUERIES_PATH = ROOT / "server_modules" / "sample_queries.py"
+IMPORT_BUNDLE_SERVICE_PATH = ROOT / "server_modules" / "import_bundle_service.py"
+BUNDLE_PREVIEW_SERVICE_PATH = ROOT / "server_modules" / "bundle_preview_service.py"
+HTTP_RUNTIME_PATH = ROOT / "server_modules" / "http_runtime.py"
 HTTP_CONCURRENCY_PATH = ROOT / "tools" / "http_concurrency_benchmark.py"
+RUNTIME_PATHS_PATH = ROOT / "server_modules" / "runtime_paths.py"
 
 
 def source_lines(path):
@@ -31,34 +40,74 @@ def top_level_body(lines, name):
 
 class ArchitectureGuardTests(unittest.TestCase):
     def test_runtime_db_lock_is_only_used_for_startup_migration(self):
-        lines = source_lines(SERVER_PATH)
-        lock_lines = [i + 1 for i, line in enumerate(lines) if "with DB_LOCK:" in line]
-        self.assertEqual(lock_lines, [next(i + 1 for i, line in enumerate(lines) if line.strip() == "with DB_LOCK:")])
-
-        init_start = next(i + 1 for i, line in enumerate(lines) if line.startswith("def init_db("))
-        next_top_level = next(
-            i + 1
-            for i, line in enumerate(lines[init_start:], init_start)
-            if line.startswith("def ") or line.startswith("class ")
-        )
-        self.assertGreater(lock_lines[0], init_start)
-        self.assertLess(lock_lines[0], next_top_level)
+        self.assertNotIn("with DB_LOCK:", "\n".join(source_lines(SERVER_PATH)))
+        body = top_level_body(source_lines(STATE_READ_SERVICE_PATH), "init_db")
+        self.assertEqual(body.count("with ctx.db_lock:"), 1)
 
     def test_full_state_save_uses_sqlite_write_transaction_and_compact_current_snapshot(self):
-        body = top_level_body(source_lines(SERVER_PATH), "save_state")
-        self.assertIn("with write_db_connection() as conn:", body)
+        body = top_level_body(source_lines(STATE_PERSISTENCE_PATH), "save_state")
+        self.assertIn("with ctx.write_db_connection() as conn:", body)
         self.assertNotIn("with DB_LOCK", body)
         self.assertIn("include_sample_photos=False", body)
+        self.assertIn("ctx.hydrate_externalized_sample_fields(new_data, current_data)", body)
+
+    def test_externalized_sample_field_hydration_stays_in_state_externalization_module(self):
+        server_body = top_level_body(source_lines(SERVER_PATH), "hydrate_externalized_sample_fields")
+        module_body = top_level_body(source_lines(STATE_EXTERNALIZATION_PATH), "hydrate_externalized_sample_fields")
+        self.assertIn("state_externalization.hydrate_externalized_sample_fields", server_body)
+        self.assertNotIn("photosExternalized", server_body)
+        self.assertIn("photosExternalized", module_body)
+        self.assertIn("eventsExternalized", module_body)
+        self.assertIn("content_hash(log)", module_body)
+
+    def test_sample_category_detail_query_stays_in_sample_queries_module(self):
+        server_body = top_level_body(source_lines(SERVER_PATH), "load_sample_category_detail")
+        module_body = top_level_body(source_lines(SAMPLE_QUERIES_PATH), "load_sample_category_detail")
+        self.assertIn("sample_queries.load_sample_category_detail", server_body)
+        self.assertNotIn("SELECT", server_body)
+        self.assertIn("FROM sample_categories", module_body)
+        self.assertIn("FROM sample_records", module_body)
+
+    def test_database_backfill_sql_stays_in_backfill_module(self):
+        server_lines = source_lines(SERVER_PATH)
+        module_text = "\n".join(source_lines(DATABASE_BACKFILLS_PATH))
+        for name in ("backfill_query_state_columns", "backfill_sample_identity_columns", "backfill_project_task_samples"):
+            body = top_level_body(server_lines, name)
+            self.assertIn(f"database_backfills.{name}", body)
+            self.assertNotIn("SELECT", body)
+        self.assertIn("FROM project_tasks", module_text)
+        self.assertIn("FROM sample_records", module_text)
+        self.assertIn("UPDATE sample_records", module_text)
+
+    def test_http_runtime_context_contract_stays_in_http_runtime_module(self):
+        server_body = top_level_body(source_lines(SERVER_PATH), "http_runtime_context")
+        module_text = "\n".join(source_lines(HTTP_RUNTIME_PATH))
+        self.assertIn("http_runtime.build_context(globals())", server_body)
+        self.assertNotIn("SimpleNamespace(", server_body)
+        self.assertIn("HTTP_RUNTIME_FIELDS", module_text)
+        self.assertIn('"compose_bootstrap_state"', module_text)
+        self.assertIn('"load_sample_category_detail"', module_text)
+        self.assertIn('"commit_import_bundle"', module_text)
+        self.assertIn('"save_state"', module_text)
 
     def test_import_preview_cache_keeps_large_payloads_on_disk(self):
-        lines = source_lines(SERVER_PATH)
-        analyze_body = top_level_body(lines, "analyze_import_bundle")
-        commit_body = top_level_body(lines, "commit_import_bundle")
-        self.assertIn("_store_import_preview_payload", analyze_body)
+        analyze_body = top_level_body(source_lines(BUNDLE_PREVIEW_SERVICE_PATH), "analyze_import_bundle")
+        commit_body = top_level_body(source_lines(IMPORT_BUNDLE_SERVICE_PATH), "commit_import_bundle")
+        self.assertIn("store_import_preview_payload", analyze_body)
         self.assertIn("_payload_path", analyze_body)
         self.assertNotIn('"_incoming": incoming_state', analyze_body)
         self.assertNotIn('"result": result', analyze_body)
         self.assertIn("_load_import_preview_payload", commit_body)
+
+    def test_runtime_data_migration_keeps_copy_then_promote_verification(self):
+        text = "\n".join(source_lines(RUNTIME_PATHS_PATH))
+        prepare_body = top_level_body(source_lines(RUNTIME_PATHS_PATH), "prepare_runtime_paths")
+        self.assertIn("copy_tree_without_loss_detailed", prepare_body)
+        self.assertIn('"mode": "copy-then-promote"', prepare_body)
+        self.assertIn('"copiedBytes": copied_bytes', prepare_body)
+        self.assertIn('"verifiedFiles": verified_files', prepare_body)
+        self.assertIn("filecmp.cmp(item, copied_to, shallow=False)", text)
+        self.assertIn(".legacy-conflict-", text)
 
     def test_http_concurrency_benchmark_exercises_real_server_and_export(self):
         text = HTTP_CONCURRENCY_PATH.read_text(encoding="utf-8")
