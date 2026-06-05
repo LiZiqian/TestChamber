@@ -1,7 +1,7 @@
 # TestChamber
 
 <p align="center">
-  <a href="https://github.com/LiZiqian/TestChamber/releases/tag/v7.2.0"><img alt="Version 7.2.0" src="https://img.shields.io/badge/version-v7.2.0-2f80ed"></a>
+  <a href="https://github.com/LiZiqian/TestChamber/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/LiZiqian/TestChamber?label=version&color=2f80ed"></a>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white">
   <img alt="Windows Intranet" src="https://img.shields.io/badge/platform-Windows%20Intranet-0078D4?logo=windows&logoColor=white">
   <img alt="SQLite WAL" src="https://img.shields.io/badge/database-SQLite%20WAL-003B57?logo=sqlite&logoColor=white">
@@ -14,7 +14,7 @@
 TestChamber 把“项目 -> 阶段 -> 测试任务 -> 样机 -> 结果 -> 履历”这条链路收进一个可以在 Windows 内网机器上直接运行的轻量系统。它不依赖外部云服务，不需要安装数据库服务器，也不需要 npm / pip 依赖；下载源码、启动 Python 服务、打开浏览器即可开始使用。
 
 > [!NOTE]
-> - 当前版本：`7.2.0`
+> - 当前版本：见根目录 `VERSION` 与 GitHub Releases
 > - 默认端口：`9398`（可自定义）
 > - 默认数据目录：项目内 `data/`
 > - 推荐运行环境：Windows + Python 3.9+ + Chrome / Edge
@@ -812,11 +812,10 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/api/health -UseBasicParsing
 
 ### 发布前检查
 
-1. 更新 `backend/server.py` 的 `APP_VERSION` / `SERVER_VERSION`。
-2. 更新 `frontend/js/app.core.js` 的 `app.version`。
-3. 同步 `frontend/index.html` 和 `frontend/css/style.css` 的静态资源 cachebuster。
-4. 跑完核心测试。
-5. 确认没有提交运行数据。
+1. 更新根目录 `VERSION`。
+2. 跑完核心测试。
+3. 确认没有提交运行数据。
+4. 提交并更新当前主线对应的 tag / Release；`7.2.X` 复用 `v7.2.0`。
 
 ### 不应提交到仓库
 
@@ -839,6 +838,6 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/api/health -UseBasicParsing
 
 ### Release 提醒
 
-`7.1` 系列复用同一个 GitHub Release/tag 入口 `v7.1.0`；`7.2.0` 是新的主线版本，使用独立 tag / Release：`v7.2.0`。
+`7.1` 系列复用同一个 GitHub Release/tag 入口 `v7.1.0`；`7.2` 系列复用同一个 GitHub Release/tag 入口 `v7.2.0`，Release 标题更新为当前 `VERSION`，例如 `v7.2.1`。
 
 如果某个 tag 或 release 已经创建，旧 release 源码包会保留当时的文件快照。即使后续从 `main` 删除了某个文件，旧 release 包也不会自动变化。需要让旧版本源码包也变干净时，应重新打 tag 或重新发布 release。

@@ -27,11 +27,11 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from server_modules import app_metadata, bundle_preview_service, chamber_package, database_backfills, database_schema, http_handler, http_helpers, http_multipart, http_routes, http_runtime, import_bundle_service, import_commit, import_defaults, import_diff, mutation_services, mutation_summary, project_library, project_queries, record_writers, runtime_paths, sample_assets, sample_constraints, sample_history, sample_library, sample_queries, server_runner, state_externalization, state_merge, state_persistence, state_read_service, status_normalization, storage_core, task_mutation_rules, task_queries, zip_security
+from server_modules import app_metadata, bundle_preview_service, chamber_package, database_backfills, database_schema, http_handler, http_helpers, http_multipart, http_routes, http_runtime, import_bundle_service, import_commit, import_defaults, import_diff, mutation_services, mutation_summary, project_library, project_queries, record_writers, runtime_paths, sample_assets, sample_constraints, sample_history, sample_library, sample_queries, server_runner, state_externalization, state_merge, state_persistence, state_read_service, status_normalization, storage_core, task_mutation_rules, task_queries, version, zip_security
 
 
-APP_VERSION = "7.2.0"
-SERVER_VERSION = "TestChamberServer/7.2.0"
+APP_VERSION = version.APP_VERSION
+SERVER_VERSION = version.SERVER_VERSION
 ROOT_DIR = PROJECT_ROOT
 FRONTEND_DIR = ROOT_DIR / "frontend"
 DATA_ROOT_ENV_VAR = runtime_paths.DATA_ROOT_ENV_VAR

@@ -9,6 +9,14 @@ import uuid
 from urllib.parse import parse_qs, unquote, urlparse
 
 
+VERSION_TEMPLATE_TOKEN = "__APP_VERSION__"
+
+
+def _send_versioned_text(handler, ctx, target, content_type: str, *, cache: str) -> None:
+    text = target.read_text(encoding="utf-8").replace(VERSION_TEMPLATE_TOKEN, ctx.APP_VERSION)
+    handler._send_bytes(text.encode("utf-8"), content_type, cache=cache)
+
+
 def _selection_from_query(query: dict[str, list[str]]) -> dict[str, list[str]]:
     aliases = {
         "projectIds": ("projectId", "projectIds", "projects"),
@@ -278,7 +286,7 @@ def handle_get(handler, ctx) -> None:
         if not ctx.INDEX_PATH.exists():
             handler._send_json({"ok": False, "error": "index.html 不存在"}, 404)
             return
-        handler._send_file(ctx.INDEX_PATH, "text/html; charset=utf-8", cache="no-cache")
+        _send_versioned_text(handler, ctx, ctx.INDEX_PATH, "text/html; charset=utf-8", cache="no-cache")
         return
 
     if not handler._is_public_static_path(path):
@@ -292,6 +300,9 @@ def handle_get(handler, ctx) -> None:
         return
     if target.is_file():
         content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        if path == "/css/style.css":
+            _send_versioned_text(handler, ctx, target, content_type, cache="public, max-age=86400, must-revalidate")
+            return
         handler._send_file(target, content_type)
         return
 

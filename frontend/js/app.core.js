@@ -2,8 +2,10 @@
    数字治理平台 V7 - 核心框架
    ======================================== */
 
+const testChamberVersionMeta = document.querySelector('meta[name="testchamber-version"]');
+
 const app = {
-  version: "7.2.0",
+  version: (testChamberVersionMeta?.getAttribute("content") || "").trim() || "dev",
   _modules: {},
   _moduleOwners: {},
   state: {
