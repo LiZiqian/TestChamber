@@ -4,9 +4,6 @@ __pycache__/
 # Runtime database and generated data
 data/
 
-# Runtime backups
-backups/
-
 # OS/editor noise
 .DS_Store
 Thumbs.db
