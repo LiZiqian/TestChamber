@@ -1,0 +1,240 @@
+/* ========================================
+   TestChamber V7 - Task result sample rows, problems, photos
+   Split from the previous monolithic module.
+   ======================================== */
+
+/* ========================================
+   结果录入 — 样机去向、问题记录、照片上传
+   ======================================== */
+
+.task-result-sample-list {
+  display: grid;
+  gap: 10px;
+}
+.task-result-sample-row {
+  display: grid;
+  grid-template-columns: 34px minmax(170px, 1fr) minmax(120px, .7fr) minmax(150px, .8fr) minmax(190px, 1fr);
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.task-result-sample-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  align-self: start;
+  color: #64748b;
+  background: #eef2f7;
+  border: 1px solid #e2e8f0;
+  font-size: 13px;
+  font-weight: 900;
+}
+.task-result-sample-row.is-removed {
+  border-color: var(--status-sample-removed-border);
+  background: var(--status-sample-removed-bg);
+}
+.task-result-sample-code {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-bottom: 6px;
+}
+.task-result-sample-code b {
+  font-size: 15px;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-result-sample-code span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-result-sample-state {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.task-result-sample-state.active {
+  color: var(--status-sample-idle-text);
+  background: var(--status-sample-idle-bg);
+}
+.task-result-sample-state.removed,
+.badge.status-removed {
+  color: var(--status-sample-removed-text);
+  background: var(--status-sample-removed-bg);
+}
+
+/* —— 样机去向四列网格 —— */
+.task-result-modal .task-result-route-grid {
+  grid-column: 3 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 12px;
+  align-items: end;
+}
+.task-result-modal .task-result-route-grid .form-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+.task-result-modal .task-result-route-grid .form-group > label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+.task-result-modal .task-result-route-grid select,
+.task-result-modal .task-result-route-grid input {
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 20px;
+}
+.task-result-modal .task-result-route-grid select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #f1f5f9;
+}
+/* 挂账人与「样机去向/去向位置/取走人」保持视觉距离 */
+.task-result-modal .task-result-route-grid .task-result-account-group {
+  padding-left: 14px;
+  border-left: 1px dashed var(--primary-border);
+}
+@media (max-width: 900px) {
+  .task-result-modal .task-result-route-grid {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* 窄屏改为上分隔线 + 上间距，取消左分隔 */
+  .task-result-modal .task-result-route-grid .task-result-account-group {
+    padding-left: 0;
+    border-left: none;
+    padding-top: 10px;
+    border-top: 1px dashed var(--primary-border);
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 500px) {
+  .task-result-modal .task-result-route-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.task-result-problem-field {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+.task-result-problem-board {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.task-result-problem-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.task-result-problem-head b {
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 900;
+}
+.task-result-problem-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-result-existing-problems {
+  display: grid;
+  gap: 8px;
+}
+.task-result-existing-problem-row {
+  display: grid;
+  grid-template-columns: 46px minmax(180px, 1.2fr) minmax(92px, .45fr) minmax(150px, .8fr) 34px;
+  gap: 8px;
+  align-items: center;
+}
+.task-result-problem-no {
+  display: inline-grid;
+  place-items: center;
+  height: 34px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 900;
+}
+.task-result-problem-empty {
+  padding: 10px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  color: var(--muted);
+  background: #f8fafc;
+  font-size: 12px;
+}
+.task-result-new-problem > label {
+  display: block;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+.task-result-modal .task-result-new-problem > label {
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.task-result-problem-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px;
+  gap: 10px;
+  align-items: center;
+}
+.task-result-photo-btn {
+  height: 42px;
+  white-space: nowrap;
+}
+.task-result-photo-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.task-result-photo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+}
+.task-result-photo-chip img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #f1f5f9;
+}
+.task-result-photo-chip span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

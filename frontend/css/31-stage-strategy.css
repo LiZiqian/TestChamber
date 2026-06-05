@@ -1,0 +1,214 @@
+/* ========================================
+   阶段配置 — BOM 上料清单、测试策略表、用例下拉框
+   ======================================== */
+
+.strategy-config-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.bom-config-table th,
+.bom-config-table td,
+.strategy-config-table th,
+.strategy-config-table td {
+  white-space: nowrap;
+}
+.bom-config-table input,
+.strategy-config-table input {
+  width: 100%;
+  min-width: 0;
+}
+.bom-config-table .col-row-no,
+.strategy-config-table .col-row-no { width: 56px }
+.strategy-config-table .col-test-category { width: 260px }
+.strategy-config-table .col-test-item { width: 300px }
+.strategy-config-table .col-sample-size { width: 92px }
+.strategy-config-table .col-strategy-sku { width: 92px }
+.bom-config-table .col-action,
+.strategy-config-table .col-action { width: 86px }
+.strategy-config-table input[data-field="sampleSize"] {
+  text-align: center;
+}
+
+/* ---- Case Dropdown ---- */
+.case-dropdown {
+  position: fixed; display: none; z-index: 220; background: #fff;
+  border: 1px solid #cbd5e1; border-radius: 12px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, .20);
+  overflow: hidden; max-height: 320px; width: 320px; max-width: calc(100vw - 24px);
+}
+.case-dropdown.show { display: block }
+.case-dropdown-head {
+  padding: 8px; border-bottom: 1px solid var(--border);
+  background: #f8fafc; position: sticky; top: 0; z-index: 1;
+}
+.case-dropdown-head input { height: 32px; font-size: 12px; padding: 6px 8px }
+.case-dropdown-options { max-height: 260px; overflow: auto }
+.case-option {
+  padding: 8px 10px; border-bottom: 1px solid #f1f5f9;
+  cursor: pointer; font-size: 12px; line-height: 1.35; background: #fff;
+}
+.case-option:hover { background: #eff6ff }
+.case-option .case-cat { font-weight: 800; color: var(--primary); margin-bottom: 2px }
+.case-option .case-item { color: #111827 }
+.case-option.item-mode .case-main { font-size: 13px; font-weight: 700; color: #111827; line-height: 1.35 }
+.case-option.item-mode .case-sub { font-size: 11px; color: #64748b; margin-top: 3px }
+.case-filter-note { font-size: 11px; color: #475569; padding: 6px 8px 0; line-height: 1.45 }
+.case-filter-note b { color: var(--primary) }
+.case-section-title {
+  font-size: 11px; color: #64748b; background: #f8fafc;
+  padding: 6px 10px; border-bottom: 1px solid #e5e7eb; font-weight: 700;
+}
+.case-empty { padding: 16px; color: var(--muted); font-size: 12px; text-align: center }
+.case-master-badge {
+  font-size: 12px; color: #166534; background: #dcfce7;
+  border: 1px solid #bbf7d0; border-radius: 999px; padding: 4px 8px;
+}
+.case-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+
+/* ---- 策略表正向/反向搜索 ---- */
+.strategy-search-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(220px, 320px) max-content max-content;
+  align-items: end;
+  column-gap: 10px;
+  row-gap: 8px;
+  padding: 10px 0 12px;
+}
+.strategy-search-field {
+  display: grid;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+.strategy-search-field span {
+  font-size: 12px;
+  font-weight: 800;
+  color: #475569;
+}
+.strategy-search-field input {
+  height: 34px;
+  font-size: 13px;
+}
+.strategy-search-count {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.strategy-search-bar .btn {
+  height: 34px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .strategy-search-bar {
+    grid-template-columns: 1fr;
+  }
+  .strategy-search-count {
+    justify-content: flex-start;
+  }
+}
+
+/* ---- 测试策略配置表格：自适应高度 + 表头冻结 ---- */
+.strategy-table {
+  max-height: clamp(280px, 60vh, 900px);
+  overflow: auto;
+  position: relative;
+  scrollbar-gutter: stable;
+}
+.strategy-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #f3f6fa;
+  box-shadow: 0 2px 4px rgba(0,0,0,.06);
+}
+
+.strategy-table input.invalid { border-color: #dc2626; background: #fef2f2 }
+.strategy-table input[type="checkbox"] { transform: scale(1.5); transform-origin: center; margin: 0 4px }
+
+/* ---- BOM 上料清单说明 ---- */
+.bom-desc,
+.strategy-desc {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---- BOM 上料清单表格：宽度自适应，避免全屏横向滚动 ---- */
+.bom-table {
+  max-height: clamp(240px, 42vh, 520px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.bom-config-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+}
+.bom-config-table th,
+.bom-config-table td {
+  padding: 8px 6px;
+  vertical-align: middle;
+}
+.bom-config-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f3f6fa;
+}
+.bom-config-table .col-row-no {
+  width: 44px;
+}
+.bom-config-table .col-bom-material {
+  width: clamp(180px, 22%, 260px);
+}
+.bom-config-table .col-bom-sku {
+  width: auto;
+}
+.bom-config-table .col-action {
+  width: 64px;
+}
+.bom-config-table .row-no {
+  text-align: center;
+}
+.bom-config-table input {
+  height: 34px;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.stage-row-delete-btn {
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  min-width: 0;
+  width: 34px;
+  height: 30px;
+  padding: 4px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.stage-row-delete-btn:hover {
+  color: #b91c1c;
+}
+
+/* ---- Strategy Config Table Columns ---- */
+.strategy-config-table { table-layout: fixed }
+.strategy-config-table .col-row-no { width: 56px }
+.strategy-config-table .col-test-category { width: 236px }
+.strategy-config-table .col-test-item { width: 276px }
+.strategy-config-table .col-sample-size { width: 120px }
+.strategy-config-table .col-sample-size input { text-align: left }
+.strategy-config-table .col-sample-size input::placeholder { text-align: left }
+.strategy-config-table .col-strategy-sku { width: 92px }
+.strategy-config-table .col-action { width: 86px }

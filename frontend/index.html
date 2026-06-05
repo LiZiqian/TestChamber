@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>数字治理平台 V7</title>
+  <link rel="stylesheet" href="/css/style.css?v=7.2.0">
+</head>
+<body>
+  <!-- 侧栏 -->
+  <div id="sidebar" class="sidebar">
+    <nav id="nav"></nav>
+    <div class="sidebar-footer">
+      <div id="navTools" class="nav-tools"></div>
+      <div id="saveState" class="save-state">加载中…</div>
+    </div>
+  </div>
+  <button id="sidebarToggle" class="sidebar-toggle" data-app-action="toggle-sidebar">◀</button>
+
+  <!-- 主区域 -->
+  <div class="main">
+    <header class="header">
+      <div>
+        <nav id="pageTitle" class="page-title breadcrumb-bar">首页</nav>
+        <div id="contextText" class="context-text"></div>
+      </div>
+      <div id="actionArea"></div>
+    </header>
+    <div id="content" class="content"></div>
+    <div id="pageFooter" class="page-footer" style="display:none"></div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- 模态框 -->
+  <div id="modalMask" class="modal-mask" style="display:none">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">标题</h3>
+        <div id="modalHeaderHint" class="modal-header-hint"></div>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-footer">
+        <button id="modalCancel" class="btn btn-outline" data-app-action="modal-close">取消</button>
+        <button id="modalOk" class="btn">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 独立确认框 -->
+  <div id="confirmMask" class="confirm-mask" style="display:none">
+    <div class="confirm-box">
+      <div class="confirm-box-head">
+        <h3 id="confirmTitle">确认操作</h3>
+      </div>
+      <div class="confirm-box-body">
+        <div id="confirmMessage" class="confirm-dialog-message"></div>
+        <div id="confirmDesc" class="confirm-dialog-desc"></div>
+      </div>
+      <div class="confirm-box-footer">
+        <button id="confirmCancel" class="btn btn-outline">取消</button>
+        <button id="confirmOk" class="btn">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JS 模块化加载 -->
+  <script src="/js/utils.js?v=7.2.0"></script>
+  <script src="/js/app.core.js?v=7.2.0"></script>
+  <script src="/js/app.server.js?v=7.2.0"></script>
+  <script src="/js/app.data.js?v=7.2.0"></script>
+  <script src="/js/app.render.js?v=7.2.0"></script>
+  <script src="/js/app.filters.js?v=7.2.0"></script>
+  <script src="/js/app.modal.js?v=7.2.0"></script>
+  <script src="/js/app.logs.js?v=7.2.0"></script>
+  <script src="/js/projects.js?v=7.2.0"></script>
+  <script src="/js/workspace/01-shared.js?v=7.2.0"></script>
+  <script src="/js/workspace/02-home.js?v=7.2.0"></script>
+  <script src="/js/workspace/10-dropdown-issue.js?v=7.2.0"></script>
+  <script src="/js/workspace/03-strategy.js?v=7.2.0"></script>
+  <script src="/js/workspace/04-stage.js?v=7.2.0"></script>
+  <script src="/js/workspace/05-task-table.js?v=7.2.0"></script>
+  <script src="/js/workspace/06-sample-picker.js?v=7.2.0"></script>
+  <script src="/js/workspace/07-task-config.js?v=7.2.0"></script>
+  <script src="/js/workspace/08-task-actions.js?v=7.2.0"></script>
+  <script src="/js/workspace/09-task-result.js?v=7.2.0"></script>
+  <script src="/js/samples/01-pool.js?v=7.2.0"></script>
+  <script src="/js/samples/02-import-export.js?v=7.2.0"></script>
+  <script src="/js/samples/03-detail-fields.js?v=7.2.0"></script>
+  <script src="/js/samples/04-photos.js?v=7.2.0"></script>
+  <script src="/js/samples/05-problems.js?v=7.2.0"></script>
+  <script src="/js/samples/06-history.js?v=7.2.0"></script>
+  <script src="/js/samples/07-detail.js?v=7.2.0"></script>
+  <script src="/js/import-export-bundle.js?v=7.2.0"></script>
+  <script src="/js/debug/auditConsistency.js?v=7.2.0"></script>
+  <script>app.init();</script>
+</body>
+</html>

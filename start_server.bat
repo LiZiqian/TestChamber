@@ -31,14 +31,14 @@ echo.
 call :print_diagnostics
 call :discover_python
 
-if not exist "server.py" (
-    echo [ERROR] server.py was not found in this folder.
+if not exist "backend\server.py" (
+    echo [ERROR] backend\server.py was not found in this folder.
     pause
     exit /b 1
 )
 
-if not exist "index.html" (
-    echo [ERROR] index.html was not found in this folder.
+if not exist "frontend\index.html" (
+    echo [ERROR] frontend\index.html was not found in this folder.
     pause
     exit /b 1
 )
@@ -58,7 +58,7 @@ echo Using:
 echo %PYTHON_LABEL%
 echo.
 
-%PYTHON_CMD% server.py --host 0.0.0.0 --port %SERVER_PORT%
+%PYTHON_CMD% -m backend.server --host 0.0.0.0 --port %SERVER_PORT%
 
 echo.
 echo Server stopped or failed to start.

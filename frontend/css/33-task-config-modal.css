@@ -1,0 +1,392 @@
+/* ========================================
+   任务配置弹窗 — 计划/样机双 Tab、样机池滚动布局
+   V7 2026-06-01 全面优化：合并补丁、收紧间距、优化视觉层次
+   ======================================== */
+
+/* ---- Modal Sizing ---- */
+.task-config-modal.modal {
+  width: min(960px, 96vw);
+  height: min(920px, 92vh);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.task-config-modal .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  padding: 14px 20px;
+}
+.task-config-modal .modal-footer {
+  flex: 0 0 auto;
+}
+
+/* ---- Title Bar ---- */
+.task-config-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+}
+.task-config-titlebar > span:first-child {
+  font-size: 19px;
+  font-weight: 900;
+  color: var(--text);
+}
+.task-config-title-context {
+  margin-left: auto;
+  max-width: 680px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--primary);
+  font-size: 19px;
+  font-weight: 900;
+}
+
+/* ---- Shell Layout (nav + main) — 扁平化，分割线由 nav 的 border-right 承担 ---- */
+.task-config-shell {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+/* ---- Left Nav — 参考样机详情 .sample-archive-nav ---- */
+.task-config-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-right: 1px solid #e5e7eb;
+  background: #f8fafc;
+  padding: 14px 10px;
+}
+.task-config-nav-card {
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background .12s, color .12s, box-shadow .12s;
+  text-align: center;
+}
+.task-config-nav-card:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+.task-config-nav-card.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(11, 116, 222, .22);
+}
+.task-config-nav-card b {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* ---- Right Main Content — 扁平面板，无边框无圆角 ---- */
+.task-config-main {
+  min-width: 0;
+  height: 100%;
+  max-height: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: 0;
+  background: #fafbfc;
+  padding: 14px;
+}
+
+/* ---- Panels (shared) ---- */
+.task-config-panel { display: none; }
+.task-config-panel.active { display: block; min-height: 0; }
+
+/* ---- Plan Config Tab ---- */
+#tcPanelPlan.active {
+  display: block;
+}
+.task-config-modal #tcPanelPlan .form-group {
+  margin-bottom: 18px;
+}
+.task-config-modal #tcPanelPlan .form-row {
+  gap: 16px;
+}
+.task-config-modal #tcPanelPlan .form-row .form-group {
+  margin-bottom: 0;
+}
+.task-config-modal #tcPanelPlan input[type="date"] {
+  max-width: 100%;
+}
+.task-config-modal #tcPanelPlan select {
+  max-width: 360px;
+}
+
+/* ---- Sample Panel: flex column so inner scroll works ---- */
+#tcPanelSample.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.task-sample-config-group {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.task-sample-config-group > label {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+/* ---- Label Row (global compact: "选择样机 *" + count pill) ---- */
+.task-sample-label-row.task-sample-label-row-compact {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+.task-sample-label-row.task-sample-label-row-compact > label {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: .2px;
+}
+
+/* Global count hint (compact pill) */
+.sample-limit-hint.sample-limit-global {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 22px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.sample-limit-hint.sample-limit-global.warn {
+  border-color: #fbbf24;
+  background: #fffbeb;
+  color: #92400e;
+}
+.sample-limit-hint.sample-limit-global.bad {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+/* 选满状态：红色醒目提示，解释为何 checkbox 被禁用 */
+.sample-limit-hint.sample-limit-global.full {
+  border-color: #f87171;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.sample-limit-hint.sample-limit-global .sample-limit-count {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.sample-limit-hidden {
+  display: none;
+}
+
+/* ---- Scroll Container (唯一主滚动区域) — 扁平无框 ---- */
+.task-config-modal .dispatch-sample-select.task-config-sample-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: block;
+  padding: 0 0 96px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+/* ---- Pool Groups — 扁平化，仅用底部分隔线 ---- */
+.task-config-modal #tcPanelSample .dispatch-sample-group {
+  display: block;
+  flex: 0 0 auto;
+  min-height: auto;
+  margin: 0;
+  overflow: visible;
+  border: none;
+  border-bottom: 1px solid #dde1e7;
+  border-radius: 0;
+  background: transparent;
+}
+.task-config-modal #tcPanelSample .dispatch-sample-head {
+  position: relative;
+  top: auto;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 4px;
+  background: transparent;
+  border-bottom: none;
+  border-radius: 0;
+}
+
+/* Pool title + selected count */
+.dispatch-sample-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.dispatch-sample-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-weight: 800;
+  color: #0f172a;
+  font-size: 13px;
+}
+.dispatch-selected-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.5;
+  white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.dispatch-selected-count.has-selected {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+  color: var(--primary);
+}
+
+/* Toolbar (search + expand) */
+.task-config-modal #tcPanelSample .dispatch-sample-tools {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ---- Pool Body (expand/collapse) ---- */
+.task-config-modal #tcPanelSample .dispatch-sample-body {
+  display: none;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  overflow: hidden;
+  padding: 0;
+}
+.task-config-modal #tcPanelSample .dispatch-sample-body.open {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+  align-content: start;
+  min-height: 0;
+  height: auto;
+  max-height: clamp(500px, 58vh, 680px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 4px 28px;
+  scrollbar-gutter: stable;
+  overscroll-behavior: auto;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-row {
+  min-height: 86px;
+  padding: 10px 14px;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-id {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-stage,
+.task-config-modal #tcPanelSample .dispatch-sample-tested {
+  font-size: 12px;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-status {
+  width: 66px;
+  gap: 6px;
+}
+
+.task-config-modal #tcPanelSample .dispatch-sample-status .badge {
+  min-width: 58px;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+/* Last group: no border, extra bottom breathing room */
+.task-config-modal #tcPanelSample .dispatch-sample-group:last-child {
+  border-bottom: none;
+  margin-bottom: 88px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 900px) {
+  .task-config-shell {
+    grid-template-columns: 1fr;
+  }
+  .task-config-nav {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 10px;
+  }
+  .task-config-nav-card {
+    flex: 1;
+  }
+  .task-config-nav-card.active {
+    border-left: 1px solid transparent;
+    border-bottom: none;
+  }
+  .task-config-main {
+    min-height: 0;
+  }
+}
