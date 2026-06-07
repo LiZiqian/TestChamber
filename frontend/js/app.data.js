@@ -722,7 +722,7 @@ app.registerModule("app.data", {
     return Math.min(500, Math.max(20, n));
   },
 
-  taskFlowPageState(fallbackPageSize = 100) {
+  taskFlowPageState(fallbackPageSize = 25) {
     return {
       page: Math.max(1, Number.parseInt(this.view?.taskFlowPage, 10) || 1),
       pageSize: this.boundedViewPageSize(this.view?.taskFlowPageSize, fallbackPageSize),
@@ -734,7 +734,7 @@ app.registerModule("app.data", {
     return this.patchViewState({ taskFlowPage: Math.max(1, Number.parseInt(page, 10) || 1) });
   },
 
-  setTaskFlowPageSizeState(size, fallback = 100) {
+  setTaskFlowPageSizeState(size, fallback = 25) {
     return this.patchViewState({
       taskFlowPageSize: this.boundedViewPageSize(size, fallback),
       taskFlowPage: 1

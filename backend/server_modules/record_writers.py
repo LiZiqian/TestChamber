@@ -17,6 +17,83 @@ def json_dumps(obj: object) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+def json_obj(text: object, default):
+    try:
+        value = json.loads(text or "")
+    except Exception:
+        return default
+    return value if isinstance(value, type(default)) else default
+
+
+TASK_REFERENCE_FIELDS = ("removedSampleRecords", "sampleFaultRecords", "resultUploads")
+
+
+def task_log_semantic_key(log: dict) -> tuple:
+    lines = log.get("detailLines") if isinstance(log.get("detailLines"), list) else []
+    return (
+        str(log.get("action") or ""),
+        str(log.get("user") or ""),
+        str(log.get("reason") or ""),
+        str(log.get("detail") or ""),
+        "\n".join(str(item or "") for item in lines),
+        str(log.get("fromStatus") or ""),
+        str(log.get("toStatus") or ""),
+    )
+
+
+def merge_task_sample_snapshots(existing: dict, incoming: dict) -> dict:
+    existing_map = existing.get("sampleSnapshots") if isinstance(existing.get("sampleSnapshots"), dict) else {}
+    incoming_map = incoming.get("sampleSnapshots") if isinstance(incoming.get("sampleSnapshots"), dict) else {}
+    merged = copy.deepcopy(existing_map)
+    for sample_id, snapshot in incoming_map.items():
+        sid = str(sample_id or "").strip()
+        if not sid or not isinstance(snapshot, dict):
+            continue
+        prior = merged.get(sid) if isinstance(merged.get(sid), dict) else {}
+        item = {**prior, **copy.deepcopy(snapshot)}
+        if prior.get("destroyedAt") and not snapshot.get("destroyedAt"):
+            item["destroyedAt"] = prior.get("destroyedAt")
+        merged[sid] = item
+    return merged
+
+
+def merge_existing_task_reference_fields(task: dict, incoming: dict, existing: dict) -> dict:
+    if not isinstance(existing, dict):
+        return task
+    if "sampleIds" not in incoming and isinstance(existing.get("sampleIds"), list):
+        task["sampleIds"] = copy.deepcopy(existing.get("sampleIds") or [])
+    snapshots = merge_task_sample_snapshots(existing, task)
+    if snapshots:
+        task["sampleSnapshots"] = snapshots
+    for key in TASK_REFERENCE_FIELDS:
+        if key not in incoming and isinstance(existing.get(key), list):
+            task[key] = copy.deepcopy(existing.get(key) or [])
+    return task
+
+
+def merge_existing_task_log_refs(existing_logs: list[dict], incoming_logs: list[dict]) -> list[dict]:
+    existing_by_id = {
+        str(log.get("id") or ""): log
+        for log in existing_logs
+        if isinstance(log, dict) and str(log.get("id") or "")
+    }
+    existing_by_key: dict[tuple, dict] = {}
+    for log in existing_logs:
+        if isinstance(log, dict):
+            existing_by_key.setdefault(task_log_semantic_key(log), log)
+
+    merged_logs: list[dict] = []
+    for log in incoming_logs or []:
+        if not isinstance(log, dict):
+            continue
+        item = copy.deepcopy(log)
+        prior = existing_by_id.get(str(item.get("id") or "")) or existing_by_key.get(task_log_semantic_key(item))
+        if prior and "sampleRefs" not in item and isinstance(prior.get("sampleRefs"), list):
+            item["sampleRefs"] = copy.deepcopy(prior.get("sampleRefs") or [])
+        merged_logs.append(item)
+    return merged_logs
+
+
 def replace_task_sample_links(
     conn: sqlite3.Connection,
     task_id: str,
@@ -94,14 +171,25 @@ def write_task_logs(conn: sqlite3.Connection, task: dict, project_id: str, stage
 
 
 def upsert_task_record(conn: sqlite3.Connection, task: dict, project_id: str, stage_id: str, *, create_if_missing: bool = False) -> None:
+    incoming_task = copy.deepcopy(task) if isinstance(task, dict) else {}
+    incoming_has_logs = "logs" in incoming_task
     task = status_normalization.normalize_task_payload(task)
     task_id = str(task.get("id") or "")
     existing = conn.execute(
-        "SELECT id FROM project_tasks WHERE id = ? AND deleted_at IS NULL",
+        "SELECT id, data_json FROM project_tasks WHERE id = ? AND deleted_at IS NULL",
         (task_id,),
     ).fetchone()
     if not existing and not create_if_missing:
         raise KeyError("任务不存在")
+    existing_task = json_obj(existing["data_json"], {}) if existing else {}
+    existing_logs = task_queries.load_task_logs_for(conn, [task_id]).get(task_id, []) if existing else []
+    if existing:
+        task = merge_existing_task_reference_fields(task, incoming_task, existing_task)
+        if incoming_has_logs:
+            task["logs"] = merge_existing_task_log_refs(existing_logs, task.get("logs") if isinstance(task.get("logs"), list) else [])
+        elif existing_logs:
+            task["logs"] = copy.deepcopy(existing_logs)
+    task_queries.attach_task_sample_snapshots(conn, [task])
     sample_ids = [str(item) for item in (task.get("sampleIds") or [])]
     task_json = copy.deepcopy(task)
     task_json.pop("logs", None)
@@ -158,7 +246,13 @@ def upsert_task_record(conn: sqlite3.Connection, task: dict, project_id: str, st
                 str(task.get("completedAt") or task.get("endDate") or ""),
             ),
         )
-    write_task_logs(conn, task, project_id, stage_id)
+    if incoming_has_logs or not existing:
+        write_task_logs(conn, task, project_id, stage_id)
+    elif existing_logs:
+        conn.execute(
+            "UPDATE task_logs SET project_id = ?, stage_id = ? WHERE task_id = ?",
+            (project_id, stage_id, task_id),
+        )
     replace_task_sample_links(conn, task_id, project_id, stage_id, task, sample_ids)
 
 

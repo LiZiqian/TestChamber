@@ -41,12 +41,14 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 ### 版本发布规则
 
 - `v7.0.0` 固定指向 2026-06-03 时 GitHub `origin/main` 的既有提交 `66ae30e`。
-- `v7.1.0` 是 7.1 系列性能和导航响应优化的统一 GitHub Release/tag 入口；当前发布显示版本为 `v7.1.4`。
-- 7.1 系列每次 GitHub push 只递增最后一位 patch：`7.1.X` → `7.1.(X+1)`，`7.1` 主线保持不变。
-- 以后更新版本时，同步修改 `backend/server.py` 的 `APP_VERSION` / `SERVER_VERSION`、`frontend/js/app.core.js` 的 `app.version`，并把 `frontend/index.html` 与 `frontend/css/style.css` 的静态资源 cachebuster 改为同一个语义版本号。
+- 当前源码版本以根目录 `VERSION` 为准；当前为 `7.2.4`。
+- `v7.1.0` 是 7.1 系列历史统一 GitHub Release/tag 入口。
+- `v7.2.0` 是当前 7.2 系列统一 GitHub Release/tag 入口；当前发布显示版本应为 `v7.2.4`。
+- 以后只有在用户明确要求修改版本号或发布版本时，才更新版本号；不要因为普通修复、检查或 push 自动递增 patch。
+- 明确执行版本更新时，修改 `VERSION`，并确认后端 `APP_VERSION` / `SERVER_VERSION` 从 `VERSION` 读取、前端 `app.version` 由后端注入的 `testchamber-version` meta 读取、`frontend/index.html` 与 `frontend/css/style.css` 的静态资源 cachebuster 继续使用 `__APP_VERSION__`。
 - 发布前运行：`python -m py_compile backend\server.py`、`python dev\tests\test_server_core.py`、`python dev\tests\test_import_conflicts.py`、`node dev\tests\frontend_pagination_perf.test.cjs`、`node dev\tests\frontend_status_transitions.test.cjs`。
-- 7.1 系列发布流程：提交到 `main`，推送 `origin main`，移动并强推既有 `v7.1.0` tag 到最新提交，再用 `gh release edit v7.1.0 --title "v7.1.X"` 更新同一个 Release 标题；不要为每次 7.1 patch 新建 Release。
-- 7.2 及以后新主线再按新主线策略创建对应 tag / Release。
+- 7.2 系列发布流程：提交到 `main`，推送 `origin main`，GitHub Actions 读取 `VERSION`，移动并强推既有 `v7.2.0` tag 到最新提交，再把同一个 Release 标题更新为 `v{VERSION}`；不要为每次 7.2 patch 新建 Release。
+- 7.3 及以后新主线再按新主线策略创建对应 tag / Release。
 - Release 只发布源码；不要提交或上传 `data/`、`TestChamberV7_data/`、`__pycache__/`、真实数据库、照片或公司测试数据。
 
 ---
@@ -66,8 +68,8 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 要改什么 | 文件:函数 |
 |----------|-----------|
 | 全量 state 拼装 | `backend/server.py:462` wrapper → `backend/server_modules/state_read_service.py:62` `compose_state()` |
-| 全量 state 读取 | `backend/server.py:479` wrapper → `backend/server_modules/state_read_service.py:126` `get_state()` / `backend/server.py:483` wrapper → `backend/server_modules/state_read_service.py:141` `get_state_metadata()` / `backend/server_modules/http_api.py:31` `handle_get()` `/api/state` |
-| 全量 state 保存 | `backend/server.py:713` `save_state()` / `backend/server_modules/state_persistence.py:28` `save_state()` / `backend/server_modules/http_api.py:634` `handle_put()` `/api/state`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 全量 state 读取 | `backend/server.py:479` wrapper → `backend/server_modules/state_read_service.py:126` `get_state()` / `backend/server.py:483` wrapper → `backend/server_modules/state_read_service.py:141` `get_state_metadata()` / `backend/server_modules/http_api.py:45` `handle_get()` `/api/state` |
+| 全量 state 保存 | `backend/server.py:713` `save_state()` / `backend/server_modules/state_persistence.py:28` `save_state()` / `backend/server_modules/http_api.py:651` `handle_put()` `/api/state`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
 | compact state 外置字段保留 | `backend/server.py:487` wrapper → `backend/server_modules/state_externalization.py:46` `hydrate_externalized_sample_fields()`；防止 compact 客户端保存时丢失 DB 外置照片/事件 |
 | SQLite schema / 索引 | `backend/server.py:179` `ensure_schema()`；`backend/server.py:175` alias → `backend/server_modules/database_schema.py:11` `ensure_table_column()`；`backend/server.py:189` wrapper → `backend/server_modules/database_backfills.py:186` `backfill_query_state_columns()`；`backend/server.py:193` wrapper → `backend/server_modules/database_backfills.py:221` `backfill_sample_identity_columns()`；`backend/server.py:377` wrapper → `backend/server_modules/database_backfills.py:240` `backfill_project_task_samples()` |
 | 查询状态列 | `project_tasks.flow_status`、`sample_records.effective_status/has_problem/board_sn/is_reassembled`，用于状态筛选、统计与身份查重避免整表 JSON 解析 |
@@ -78,32 +80,32 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 事件按需加载 | `backend/server.py:316` `load_sample_events()` / `backend/server_modules/sample_library.py:240` + `GET /api/samples/<id>/events` |
 | 样机测试履历分页 API | `backend/server.py:420` alias → `backend/server_modules/sample_history.py:161` `list_sample_history_page()` + `GET /api/samples/<id>/history` |
 | 启动骨架 API | `backend/server.py:458` wrapper → `backend/server_modules/state_read_service.py:29` `compose_bootstrap_state()` + `GET /api/bootstrap` |
-| 项目/样机池按需详情 API | `backend/server.py:359` alias → `backend/server_modules/project_queries.py:84` `load_project_detail()` / `backend/server.py:423` wrapper → `backend/server_modules/sample_queries.py:467` `load_sample_category_detail()` |
+| 项目/样机池按需详情 API | `backend/server.py:359` alias → `backend/server_modules/project_queries.py:87` `load_project_detail()` / `backend/server.py:423` wrapper → `backend/server_modules/sample_queries.py:467` `load_sample_category_detail()` |
 | 分页参数解析 | `backend/server.py:361` alias → `backend/server_modules/task_queries.py:30` `parse_page_params()` |
-| 阶段任务分页 API | `backend/server.py:389` alias → `backend/server_modules/task_queries.py:199` `list_stage_tasks_page()` + `GET /api/stages/<stageId>/tasks` |
+| 阶段任务分页 API | `backend/server.py:389` alias → `backend/server_modules/task_queries.py:295` `list_stage_tasks_page()` + `GET /api/stages/<stageId>/tasks` |
 | 样机池分页 API | `backend/server.py:403` alias → `backend/server_modules/sample_queries.py:296` `list_samples_page()` + `GET /api/sample-categories/<catId>/samples` |
-| 任务样机候选分页 API | `backend/server.py:417` alias → `backend/server_modules/task_queries.py:479` `list_task_sample_candidates_page()` + `GET /api/task-sample-candidates` |
+| 任务样机候选分页 API | `backend/server.py:417` alias → `backend/server_modules/task_queries.py:577` `list_task_sample_candidates_page()` + `GET /api/task-sample-candidates` |
 | 样机/样机池销毁影响范围 API | `backend/server.py:413` alias → `backend/server_modules/sample_constraints.py:45` `list_sample_destroy_impact_scope()` + `GET /api/sample-destroy-impact`，返回受影响项目/样机池 ID，前端按需加载详情，不拉完整 `/api/state` |
 | 样机身份查重 API | `backend/server.py:416` alias → `backend/server_modules/sample_constraints.py:172` `check_sample_identity_conflicts()` + `POST /api/sample-identity-check` |
 | 项目摘要 API | `backend/server.py:416` `list_project_summary()` + `GET /api/projects/summary` |
 | 样机池摘要 API | `backend/server.py:402` alias → `backend/server_modules/sample_queries.py:246` `list_sample_categories_summary()` + `GET /api/sample-categories` |
-| 项目记录增量 upsert/delete | `backend/server.py:767` alias → `backend/server_modules/record_writers.py:272` `update_project_record()` / `backend/server.py:768` alias → `backend/server_modules/record_writers.py:332` `delete_project_record()` |
-| 阶段记录增量 upsert/delete | `backend/server.py:769` alias → `backend/server_modules/record_writers.py:351` `update_stage_record()` / `backend/server.py:770` alias → `backend/server_modules/record_writers.py:410` `delete_stage_record()` |
-| 样机池记录增量 upsert/delete | `backend/server.py:771` alias → `backend/server_modules/record_writers.py:428` `update_sample_category_record()` / `backend/server.py:814` alias → `backend/server_modules/mutation_services.py:461` `delete_sample_category_record()` |
-| 任务增量写入 API | `backend/server.py:785` `commit_task_mutation()` + `backend/server_modules/http_api.py:519` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 项目记录增量 upsert/delete | `backend/server.py:767` alias → `backend/server_modules/record_writers.py:366` `update_project_record()` / `backend/server.py:768` alias → `backend/server_modules/record_writers.py:426` `delete_project_record()` |
+| 阶段记录增量 upsert/delete | `backend/server.py:769` alias → `backend/server_modules/record_writers.py:445` `update_stage_record()` / `backend/server.py:770` alias → `backend/server_modules/record_writers.py:504` `delete_stage_record()` |
+| 样机池记录增量 upsert/delete | `backend/server.py:771` alias → `backend/server_modules/record_writers.py:522` `update_sample_category_record()` / `backend/server.py:814` alias → `backend/server_modules/mutation_services.py:461` `delete_sample_category_record()` |
+| 任务增量写入 API | `backend/server.py:785` `commit_task_mutation()` + `backend/server_modules/http_api.py:536` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
 | 批量任务增量写入 API | `backend/server.py:789` `commit_task_batch_mutation()` + `PATCH /api/stages/<stageId>/tasks/batch` |
-| 任务记录增量 upsert | `backend/server.py:765` alias → `backend/server_modules/record_writers.py:96` `upsert_task_record()` |
-| 任务记录增量删除 | `backend/server.py:766` alias → `backend/server_modules/record_writers.py:165` `delete_task_record()` |
+| 任务记录增量 upsert | `backend/server.py:765` alias → `backend/server_modules/record_writers.py:173` `upsert_task_record()` |
+| 任务记录增量删除 | `backend/server.py:766` alias → `backend/server_modules/record_writers.py:259` `delete_task_record()` |
 | 样机记录增量更新/创建 | `backend/server.py:772` alias → `backend/server_modules/record_writers.py:377` `update_sample_record(create_if_missing)` |
-| 样机事件增量 upsert | `backend/server.py:773` alias → `backend/server_modules/record_writers.py:562` `upsert_sample_events()` |
+| 样机事件增量 upsert | `backend/server.py:773` alias → `backend/server_modules/record_writers.py:656` `upsert_sample_events()` |
 | 任务结束幂等兜底 | `backend/server.py:777` alias → `backend/server_modules/task_mutation_rules.py:86` `existing_finished_task()`；重复 `finish_task_result` 返回 `409 TASK_ALREADY_FINISHED` |
 | 样机新增选择状态兜底 | `backend/server.py:779` alias → `backend/server_modules/task_mutation_rules.py:105` `detect_task_mutation_sample_status_blockers()`；新增样机只有“闲置”可写入任务 |
 | 项目/阶段增量写入 API | `backend/server.py:797` `commit_project_mutation()` / `backend/server.py:801` `commit_stage_mutation()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 样机增量写入 API | `backend/server.py:793` `commit_sample_mutation()` + `backend/server_modules/http_api.py:519` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
-| 样机池增量写入 API | `backend/server.py:808` `commit_sample_category_mutation()` + `backend/server_modules/http_api.py:519` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 样机增量写入 API | `backend/server.py:793` `commit_sample_mutation()` + `backend/server_modules/http_api.py:536` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
+| 样机池增量写入 API | `backend/server.py:808` `commit_sample_category_mutation()` + `backend/server_modules/http_api.py:536` `handle_patch()`；写入使用 SQLite `BEGIN IMMEDIATE`，不持有全局 `DB_LOCK` |
 | 迁移范围过滤 | `backend/server_modules/migration_scope.py` `filter_state_by_selection()` / `build_selection_tree()`；完整包选择性导出/导入与样机档案包共用的项目、任务、样机池、样机裁剪逻辑 |
-| 完整数据包导出 | `backend/server.py:543` wrapper → `backend/server_modules/bundle_preview_service.py:154` `prepare_export_bundle_parts()` / `backend/server.py:555` wrapper → `backend/server_modules/bundle_preview_service.py:124` `build_export_bundle_file(selection)` + `backend/server_modules/http_api.py:27` `GET /api/export-bundle`；支持 query 选择性导出 |
-| 数据包导入预览 | `backend/server.py:559` wrapper → `backend/server_modules/bundle_preview_service.py:335` `analyze_import_bundle()` / `backend/server.py:562` alias → `backend/server_modules/import_diff.py:82` `diff_import_bundle()` + `backend/server_modules/http_api.py:255` `POST /api/import-bundle/preview`；返回 `selectionTree/packageKind/scope` |
+| 完整数据包导出 | `backend/server.py:543` wrapper → `backend/server_modules/bundle_preview_service.py:185` `prepare_export_bundle_parts()` / `backend/server.py:555` wrapper → `backend/server_modules/bundle_preview_service.py:124` `build_export_bundle_file(selection)` + `backend/server_modules/http_api.py:27` `GET /api/export-bundle`；支持 query 选择性导出 |
+| 数据包导入预览 | `backend/server.py:559` wrapper → `backend/server_modules/bundle_preview_service.py:366` `analyze_import_bundle()` / `backend/server.py:562` alias → `backend/server_modules/import_diff.py:82` `diff_import_bundle()` + `backend/server_modules/http_api.py:255` `POST /api/import-bundle/preview`；返回 `selectionTree/packageKind/scope` |
 | 数据包导入提交 | `backend/server.py:651` `commit_import_bundle()` / `backend/server_modules/import_bundle_service.py:97` + `backend/server_modules/http_api.py:266` `POST /api/import-bundle/commit`；提交可带 selection，写入使用 SQLite `BEGIN IMMEDIATE` |
 | 单台样机档案包 | `backend/server.py` `build_sample_archive_file()` / `analyze_sample_archive()` / `commit_sample_archive()` + `GET /api/samples/<id>/archive`、`POST /api/samples/archive/preview`、`POST /api/samples/archive/commit`；只进入样机档案，不重建来源项目 |
 | HTTP runtime 依赖上下文 | `backend/server.py:819` wrapper → `backend/server_modules/http_runtime.py:8` `HTTP_RUNTIME_FIELDS` / `:52` `build_context()`；集中维护 `http_api.py` 所需依赖合同 |
@@ -113,19 +115,19 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 真实 HTTP 并发压测脚本 | `dev/tools/http_concurrency_benchmark.py` 使用临时 SQLite 库启动 `ThreadingHTTPServer`，并发请求 bootstrap、摘要、任务分页、样机分页、销毁影响范围、照片上传/删除、`/api/export-bundle`、导入预览和导入提交；运行期将 `DB_LOCK` 替换为报错锁，导入提交遇到并发 revision 冲突会重试 |
 | 前端启动/按需加载 | `frontend/js/app.server.js:8` `fetchBootstrapState()` / `:474` `fetchProjectDetail()` / `:763` `ensureProjectLoaded()` / `:834` `ensureSampleDestroyImpactScope()`；完整 `/api/state` 前端入口仅保留 `reloadFromServer()` 手动/调试兼容 |
 | 前端分页 API 调用 | `frontend/js/app.server.js:591` `fetchProjectSummary()` / `:427` `fetchStageTasksPage()` / `:439` `fetchSampleCategoriesSummary()` / `:446` `fetchSamplePage()` / `:398` `fetchSampleHistory()` / `:408` `checkSampleIdentityConflicts()` / `:458` `fetchTaskSampleCandidates()` |
-| 前端分页缓存失效 | `frontend/js/app.server.js:1063` `invalidatePagedCaches()`；`:238` `invalidateSampleHistoryCache()` |
-| 前端项目/阶段增量提交 | `frontend/js/app.server.js:1230` `commitProjectMutation()` / `:1072` `commitStageMutation()` |
-| 前端任务增量提交 | `frontend/js/app.server.js:1104` `commitTaskMutation()` / `:895` `taskSampleStatusBlockerMessage()` |
-| 前端样机/样机池增量提交 | `frontend/js/app.server.js:1315` `commitSampleMutation()` / `:1157` `commitSampleCategoryMutation()` |
+| 前端分页缓存失效 | `frontend/js/app.server.js:1247` `invalidatePagedCaches()`；`:238` `invalidateSampleHistoryCache()` |
+| 前端项目/阶段增量提交 | `frontend/js/app.server.js:1417` `commitProjectMutation()` / `:1072` `commitStageMutation()` |
+| 前端任务增量提交 | `frontend/js/app.server.js:1288` `commitTaskMutation()` / `:895` `taskSampleStatusBlockerMessage()` |
+| 前端样机/样机池增量提交 | `frontend/js/app.server.js:1502` `commitSampleMutation()` / `:1157` `commitSampleCategoryMutation()` |
 | 启动/阻塞/临时变更增量入口 | `frontend/js/workspace/08-task-actions.js:55` `startTask()` / `:405` `blockTask()` / `:259` `tempChangeTask()` |
-| 结果录入增量入口 | `frontend/js/workspace/09-task-result.js:675` `saveTaskResult()`；`:617` `restoreTaskResultSaveSnapshot()`；`:624` `refreshTaskAfterAlreadyFinished()` |
+| 结果录入增量入口 | `frontend/js/workspace/09-task-result.js:719` `saveTaskResult()`；`:617` `restoreTaskResultSaveSnapshot()`；`:624` `refreshTaskAfterAlreadyFinished()` |
 | 任务新增/配置/分配增量入口 | `frontend/js/workspace/07-task-config.js:68` `openAddTasksFromPoolModal()` / `:191` `assignPlanTaskSamples()` / `:244` `setPlanTaskSchedule()` / `:443` `saveTaskConfigAll()` |
 | 任务删除增量入口 | `frontend/js/workspace/08-task-actions.js:8` `deleteTask()` |
 | 项目 CRUD 增量入口 | `frontend/js/projects.js:122` `addProject()` / `:174` `editProject()` / `:295` `deleteProject()` |
 | 项目人员/位置增量入口 | `frontend/js/workspace/02-home.js:282` `addProjectLocation()` / `:277` `addProjectMember()` / `:347` `importProjectMembersCsv()` |
-| 阶段 CRUD/排序增量入口 | `frontend/js/workspace/04-stage.js:191` `addStage()` / `:229` `editStage()` / `:260` `deleteStage()` / `:309` `copyStage()` / `frontend/js/workspace/02-home.js:541` `onStageDrop()` |
-| 样机池/样机新增导入增量入口 | `frontend/js/samples/01-pool.js:829` `addSampleCategory()` / `:316` `editSampleCategory()` / `:781` `addSample()` / `frontend/js/samples/02-import-export.js:8` `importSampleBatch()` |
-| 样机详情/销毁增量入口 | `frontend/js/samples/07-detail.js:8` `openSampleDetail()` / `frontend/js/samples/01-pool.js:881` `deleteSampleCategory()` / `:666` `destroySample()` |
+| 阶段 CRUD/排序增量入口 | `frontend/js/workspace/04-stage.js:191` `addStage()` / `:229` `editStage()` / `:260` `deleteStage()` / `:309` `copyStage()` / `frontend/js/workspace/02-home.js:535` `onStageDrop()` |
+| 样机池/样机新增导入增量入口 | `frontend/js/samples/01-pool.js:823` `addSampleCategory()` / `:316` `editSampleCategory()` / `:781` `addSample()` / `frontend/js/samples/02-import-export.js:8` `importSampleBatch()` |
+| 样机详情/销毁增量入口 | `frontend/js/samples/07-detail.js:8` `openSampleDetail()` / `frontend/js/samples/01-pool.js:875` `deleteSampleCategory()` / `:666` `destroySample()` |
 | 异步弹窗确认 | `frontend/js/app.modal.js:26` `showModal()` |
 | 任务表服务端分页入口 | `frontend/js/workspace/05-task-table.js:53` `taskFlowPagerHtml()` / `:84` `taskFlowQueryParams()` / `:102` `loadTaskFlowPage()` / `:135` `workspaceTaskFlowHtml()` |
 | 样机池服务端摘要/分页入口 | `frontend/js/samples/01-pool.js:8` `samplePagerHtml()` / `:28` `setSamplePage()` / `:112` `loadSampleCategorySummary()` / `:133` `loadSamplePage()` / `:174` `prefetchAdjacentSamplePages()` / `:238` `refreshSamplePageRegion()` / `:257` `renderSamples()` |
@@ -165,7 +167,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 3. 阶段新增/编辑/删除/复制/排序、策略页内联阶段名与 SKU 编辑已切到 `commitStageMutation()`。
 4. 样机池新建/编辑、样机新增、样机批量导入已切到 `commitSampleCategoryMutation(createSamples)`。
 5. 任务表正式使用 `/api/stages/<stageId>/tasks` 服务端分页；样机池卡片使用 `/api/sample-categories` 摘要，池内样机使用 `/api/sample-categories/<catId>/samples` 分页。
-6. `frontend/index.html` 静态资源加 cachebuster，当前发布版本统一为 `v=7.1.4`，避免浏览器缓存旧 JS 影响验证。
+6. `frontend/index.html` 静态资源加 cachebuster，当前使用 `__APP_VERSION__` 占位并由后端按 `VERSION` 注入，避免浏览器缓存旧 JS 影响验证。
 7. 已补 `dev/tests/test_server_core.py` 覆盖项目增量、阶段增量、样机池创建与批量样机插入。
 8. 已推进到第五阶段：初始化不再直接拉全量 `/api/state`。
 
@@ -347,10 +349,10 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 5–35 | `app = {...}` | 全局对象(version, data, view, constants, _baseData, _saveInFlight等) |
 | 27–34 | `app.view` | UI状态: module, selectedProjectId, filters, collapsed, sidebarCollapsed |
 | 37–38 | `app.constants` | 样机5状态, 任务5状态, 模块名称枚举 |
-| 102 / 109 | `htmlFragment()` / `replaceHtml()` | 受控 HTML 字符串替换入口；直接 `innerHTML` 只允许集中在这里 |
-| 120 / 126 | `cloneChildNodes()` / `replaceWithClonedNodes()` | 弹窗堆栈 DOM clone 保存/恢复 |
-| 142 / 171 | `bindDelegatedEvents()` / `dispatchAppAction()` | 全局 `data-app-action` 事件委托绑定与分发 |
-| 521 | `init()` | 入口: GET /api/bootstrap → normalize → render → 全局事件绑定 |
+| 104 / 111 | `htmlFragment()` / `replaceHtml()` | 受控 HTML 字符串替换入口；直接 `innerHTML` 只允许集中在这里 |
+| 122 / 128 | `cloneChildNodes()` / `replaceWithClonedNodes()` | 弹窗堆栈 DOM clone 保存/恢复 |
+| 144 / 173 | `bindDelegatedEvents()` / `dispatchAppAction()` | 全局 `data-app-action` 事件委托绑定与分发 |
+| 547 | `init()` | 入口: GET /api/bootstrap → normalize → render → 全局事件绑定 |
 
 ### frontend/js/app.server.js (1065 行) — 服务器通信
 
@@ -369,14 +371,14 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 579 | `checkSampleIdentityConflicts()` | 调用 `/api/sample-identity-check` 服务端身份查重 |
 | 309–335 | `fetchProjectSummary()/fetchStageTasksPage()/fetchSampleCategoriesSummary()/fetchSamplePage()` | 摘要/分页读取 API |
 | 348–580 | `fetchProjectDetail()/fetchSampleCategoryDetail()/merge*/ensure*Loaded()` | 项目/样机池按需详情加载与本地合并 |
-| 1063 | `invalidatePagedCaches()` | 任务表/样机池分页缓存失效 |
-| 1094 | `taskSampleStatusBlockerMessage()` | 样机状态不可选错误提示 |
-| 1104 | `commitTaskMutation()` | 任务增量写入：任务/阶段/样机/样机事件；识别 `TASK_ALREADY_FINISHED`，并失效样机履历缓存 |
-| 1230 | `commitProjectMutation()` | 项目增量写入/删除 |
-| 1271 | `commitStageMutation()` | 阶段增量写入/删除/排序 |
-| 1315 | `commitSampleMutation()` | 单台样机增量写入/删除，失效样机履历缓存 |
-| 1356 | `commitSampleCategoryMutation()` | 样机池增量写入/销毁/批量新增样机 |
-| 1450 | `ensureSampleHistoryLoaded()` | 样机履历分页加载与面板刷新 |
+| 1247 | `invalidatePagedCaches()` | 任务表/样机池分页缓存失效 |
+| 1278 | `taskSampleStatusBlockerMessage()` | 样机状态不可选错误提示 |
+| 1288 | `commitTaskMutation()` | 任务增量写入：任务/阶段/样机/样机事件；识别 `TASK_ALREADY_FINISHED`，并失效样机履历缓存 |
+| 1417 | `commitProjectMutation()` | 项目增量写入/删除 |
+| 1458 | `commitStageMutation()` | 阶段增量写入/删除/排序 |
+| 1502 | `commitSampleMutation()` | 单台样机增量写入/删除，失效样机履历缓存 |
+| 1543 | `commitSampleCategoryMutation()` | 样机池增量写入/销毁/批量新增样机 |
+| 1637 | `ensureSampleHistoryLoaded()` | 样机履历分页加载与面板刷新 |
 
 ### frontend/js/app.data.js (811 行) — 数据工具与状态访问器
 
@@ -431,13 +433,13 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 行号 | 函数 | 职责 |
 |------|------|------|
 | 26 | `showModal()` | **主弹窗**: onOk返回true=保持打开, 返回false/undefined=关闭 |
-| 91 | `showConfirm()` | 独立确认框(支持异步确认回调) |
-| 138 | `showAlert()` | 纯提示框(隐藏取消) |
-| 155 | `closeModal()` | 关闭弹窗(modal stack弹出恢复) |
-| 182 | `clearFieldValidationMarks()` | 清除所有.is-invalid+.field-error |
-| 189 / 196 / 203 | `fieldErrorNode()` / `appendFieldError()` / `insertFieldErrorAfter()` | 表单错误 DOM 节点创建与安全插入 |
+| 104 | `showConfirm()` | 独立确认框(支持异步确认回调) |
+| 153 | `showAlert()` | 纯提示框(隐藏取消) |
+| 170 | `closeModal()` | 关闭弹窗(modal stack弹出恢复) |
+| 198 | `clearFieldValidationMarks()` | 清除所有.is-invalid+.field-error |
+| 205 / 212 / 219 | `fieldErrorNode()` / `appendFieldError()` / `insertFieldErrorAfter()` | 表单错误 DOM 节点创建与安全插入 |
 | 202 | `markFieldInvalid(el,msg)` | 标红+追加.field-error+自动滚动 |
-| 223 | `showDangerConfirm()` | 危险操作确认(需输入DELETE关键词，支持异步确认回调) |
+| 239 | `showDangerConfirm()` | 危险操作确认(需输入DELETE关键词，支持异步确认回调) |
 
 ### frontend/js/app.filters.js (56 行)
 
@@ -451,10 +453,10 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 
 | 行号 | 函数 | 职责 |
 |------|------|------|
-| 30 | `addTaskLog()` | 任务日志写入 |
+| 42 | `addTaskLog()` | 任务日志写入 |
 | 95 | `taskLogContentHtml()` | 日志内容HTML(含detailLines) |
-| 187 | `linkSampleRefsInLogText()` | SN/IMEI→可点击链接 |
-| 258 | `showTaskLogs()` | 任务日志弹窗 |
+| 301 | `linkSampleRefsInLogText()` | SN/IMEI→可点击链接 |
+| 376 | `showTaskLogs()` | 任务日志弹窗 |
 
 ### frontend/js/projects.js (391 行) — 项目管理
 
@@ -517,9 +519,9 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 52 | `renderStageStrategyPage()` | 策略页渲染(阶段编辑+BOM+策略表) |
 | 72–119 | `workspaceBomHtml/addBomRow/updateBom/deleteBomRow` | BOM上料清单(增量 API) |
 | 122–198 | `workspaceStrategyHtml/addStrategyRow/onStrategyInput` | 测试策略表(增量 API) |
-| 285 | `scheduleStrategySync()` | 800ms节流策略同步 |
-| 326 | `autoSyncProgress()` | **策略→进度自动同步**(离开策略页时触发，增量 API) |
-| 369 | `importTestCaseXlsx()` | 用例集导入(项目增量 API) |
+| 319 | `scheduleStrategySync()` | 800ms节流策略同步 |
+| 365 | `autoSyncProgress()` | **策略→进度自动同步**(离开策略页时触发，增量 API) |
+| 408 | `importTestCaseXlsx()` | 用例集导入(项目增量 API) |
 
 ### frontend/js/workspace/04-stage.js (364 行) — 阶段与SKU编辑
 
@@ -541,29 +543,29 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 53 | `taskFlowPagerHtml()` | 任务分页条，含 loading/disabled 状态 |
 | 83 | `taskFlowQueryParams()` | 从筛选器生成服务端分页查询参数 |
 | 98 | `taskFlowCacheKey()` | 任务分页缓存 key |
-| 175 | `loadTaskFlowPage()` | 拉取 `/api/stages/<stageId>/tasks` 并合并本地任务 |
-| 196 | `workspaceTaskFlowHtml()` | **任务管理工作台**:服务端分页统计+筛选栏+表格+新增按钮 |
-| 365 | `taskDeleteImpactHtml()` | 任务删除影响分析 |
-| 429 | `taskFlowActionsHtml()` | **操作按钮**:按状态显示不同按钮组合 |
-| 503 | `showTaskSamples()` | 任务样机清单弹窗 |
-| 584 | `sampleTestedItemNames()` | 样机已测项目列表 |
+| 199 | `loadTaskFlowPage()` | 拉取 `/api/stages/<stageId>/tasks` 并合并本地任务 |
+| 220 | `workspaceTaskFlowHtml()` | **任务管理工作台**:服务端分页统计+筛选栏+表格+新增按钮 |
+| 390 | `taskDeleteImpactHtml()` | 任务删除影响分析 |
+| 454 | `taskFlowActionsHtml()` | **操作按钮**:按状态显示不同按钮组合 |
+| 528 | `showTaskSamples()` | 任务样机清单弹窗 |
+| 612 | `sampleTestedItemNames()` | 样机已测项目列表 |
 
 ### frontend/js/workspace/06-sample-picker.js (485 行) — 样机选择器
 
 | 行号 | 函数 | 职责 |
 |------|------|------|
 | 7 | `getSelectedTaskSampleIds()` | 读取勾选样机ID |
-| 58 | `buildTaskSamplePickerHtml()` | **样机选择器HTML骨架**：不枚举 `allSamples()`，只创建分页候选容器和已选状态 |
-| 65 | `initTaskSamplePicker()` | 弹窗打开后加载第一页候选样机 |
-| 85 | `loadTaskSamplePickerPage()` | 调用 `/api/task-sample-candidates`，服务端分页/搜索/状态筛选并合并已返回样机 |
-| 246 | `taskSamplePickerSampleRowHtml()` | 候选/已选样机行渲染，使用后端 `selectable/disabledReason` |
-| 309 | `validateTaskSampleSelection()` | 样机数量校验 |
-| 317 | `setTaskSampleLimitHintContent()` | 样机数量提示 DOM 更新 helper |
-| 327 | `updateTaskSampleLimitUI()` | 计数胶囊(warn/bad/full状态) |
-| 376 | `onTaskSampleCheckboxChange()` | 勾选状态写入分页选择器 state，跨页保留已选样机 |
-| 409 | `onTaskSampleRowClick()` | 整卡点击切换勾选，链接/表单控件不触发 |
-| 454 | `filterDispatchGroup()` | 旧分组搜索兼容函数 |
-| 472 | `isTaskChangePayloadChanged()` | 变更检测(计划+样机) |
+| 63 | `buildTaskSamplePickerHtml()` | **样机选择器HTML骨架**：不枚举 `allSamples()`，只创建分页候选容器和已选状态 |
+| 70 | `initTaskSamplePicker()` | 弹窗打开后加载第一页候选样机 |
+| 90 | `loadTaskSamplePickerPage()` | 调用 `/api/task-sample-candidates`，服务端分页/搜索/状态筛选并合并已返回样机 |
+| 359 | `taskSamplePickerSampleRowHtml()` | 候选/已选样机行渲染，使用后端 `selectable/disabledReason` |
+| 427 | `validateTaskSampleSelection()` | 样机数量校验 |
+| 453 | `setTaskSampleLimitHintContent()` | 样机数量提示 DOM 更新 helper |
+| 463 | `updateTaskSampleLimitUI()` | 计数胶囊(warn/bad/full状态) |
+| 509 | `onTaskSampleCheckboxChange()` | 勾选状态写入分页选择器 state，跨页保留已选样机 |
+| 551 | `onTaskSampleRowClick()` | 整卡点击切换勾选，链接/表单控件不触发 |
+| 598 | `filterDispatchGroup()` | 旧分组搜索兼容函数 |
+| 621 | `isTaskChangePayloadChanged()` | 变更检测(计划+样机) |
 
 ### frontend/js/workspace/07-task-config.js (577 行) — 任务配置弹窗
 
@@ -573,15 +575,15 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 31 | `createTaskFromProgress()` | 从progress创建任务 |
 | 68 | `openAddTasksFromPoolModal()` | 从测试池批量新增任务(增量 API) |
 | 191 | `assignPlanTaskSamples()` | 待下发任务样机分配/重分配(增量 API) |
-| 244 | `setPlanTaskSchedule()` | 待下发任务计划时间/执行人配置(增量 API) |
-| 320 | `taskConfigTitlebarNode()` | 任务配置弹窗标题 DOM helper |
-| 335 | `openTaskConfigPanel()` | **新版双Tab配置弹窗入口** |
-| 378 | `taskConfigPanelHtml()` | 弹窗外壳(导航+面板) |
-| 401 | `taskPlanConfigPanelHtml()` | 计划配置Tab |
-| 426 | `taskSampleConfigPanelHtml()` | 样机配置Tab |
-| 443 | `saveTaskConfigAll()` | **统一保存**:plan+sample校验+增量写入 |
-| 544 | `hasUnsavedTaskConfigChanges()` | 未保存检测(取消按钮用) |
-| 564 | `switchTaskConfigTab()` | Tab切换 |
+| 245 | `setPlanTaskSchedule()` | 待下发任务计划时间/执行人配置(增量 API) |
+| 321 | `taskConfigTitlebarNode()` | 任务配置弹窗标题 DOM helper |
+| 336 | `openTaskConfigPanel()` | **新版双Tab配置弹窗入口** |
+| 379 | `taskConfigPanelHtml()` | 弹窗外壳(导航+面板) |
+| 402 | `taskPlanConfigPanelHtml()` | 计划配置Tab |
+| 427 | `taskSampleConfigPanelHtml()` | 样机配置Tab |
+| 444 | `saveTaskConfigAll()` | **统一保存**:plan+sample校验+增量写入 |
+| 545 | `hasUnsavedTaskConfigChanges()` | 未保存检测(取消按钮用) |
+| 565 | `switchTaskConfigTab()` | Tab切换 |
 
 ### frontend/js/workspace/08-task-actions.js (434 行) — 任务操作
 
@@ -592,27 +594,27 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 106 | `taskFailureProblemsBySample()` | 任务范围内样机问题收集 |
 | 151 | `taskFailureStats()` | 失效统计(active/removed×fail/pass) |
 | 211 | `taskIssueSummaryHtml()` | **测试结果列HTML**:失效比例+问题清单 |
-| 259 | `tempChangeTask()` | **临时变更**:执行人/计划/样机变更+差异日志 |
-| 401 | `blockTask()` | 阻塞任务:校验→确认→改状态→日志 |
+| 260 | `tempChangeTask()` | **临时变更**:执行人/计划/样机变更+差异日志 |
+| 423 | `blockTask()` | 阻塞任务:校验→确认→改状态→日志 |
 
 ### frontend/js/workspace/09-task-result.js (840 行) — 结果录入
 
 | 行号 | 函数 | 职责 |
 |------|------|------|
-| 31 | `onTaskResultDestinationChange()` | 去向切换(取走分析→取走人必填) |
-| 85 | `recordTaskRemovedSamples()` | 记录退出样机 |
-| 108 | `taskResultSampleEntries()` | 合并active+removed样机 |
-| 161 / 252 | `taskResultProblemEmptyNode()` / `taskResultPhotoChipNode()` | 问题空态与结果图片 chip DOM helper |
-| 179 | `taskResultSampleRowsHtml()` | 每台样机结果行(去向/位置/取走人/挂账人/问题) |
-| 285 | `uploadTaskResultPhotos()` | 结果图片上传(multipart→服务器→刷新) |
-| 348 | `collectTaskResultForm()` | **表单收集**:遍历所有.task-result-sample-row |
-| 385 | `validateTaskResultPayload()` | 结果验证 |
-| 436 | `taskResultAutoReason()` | 自动生成结果摘要(≤500字符) |
-| 522 | `applyTaskResult()` | **应用结果**:改状态/写日志/追加resultUploads |
-| 649 | `restoreTaskResultSaveSnapshot()` | 结束任务保存失败时回滚本地乐观更新 |
-| 656 | `refreshTaskAfterAlreadyFinished()` | 服务端提示任务已结束时按需刷新当前项目详情 |
-| 675 | `saveTaskResult()` | **保存/结束入口**:draft vs finish分支；结束任务含 in-flight 防重 |
-| 745 | `uploadResult()` | **结果录入弹窗**:任务级结果+每台样机去向；结束按钮 async 等待并禁用 |
+| 69 | `onTaskResultDestinationChange()` | 去向切换(取走分析→取走人必填) |
+| 123 | `recordTaskRemovedSamples()` | 记录退出样机 |
+| 147 | `taskResultSampleEntries()` | 合并active+removed样机 |
+| 200 / 295 | `taskResultProblemEmptyNode()` / `taskResultPhotoChipNode()` | 问题空态与结果图片 chip DOM helper |
+| 218 | `taskResultSampleRowsHtml()` | 每台样机结果行(去向/位置/取走人/挂账人/问题) |
+| 328 | `uploadTaskResultPhotos()` | 结果图片上传(multipart→服务器→刷新) |
+| 391 | `collectTaskResultForm()` | **表单收集**:遍历所有.task-result-sample-row |
+| 428 | `validateTaskResultPayload()` | 结果验证 |
+| 480 | `taskResultAutoReason()` | 自动生成结果摘要(≤500字符) |
+| 566 | `applyTaskResult()` | **应用结果**:改状态/写日志/追加resultUploads |
+| 693 | `restoreTaskResultSaveSnapshot()` | 结束任务保存失败时回滚本地乐观更新 |
+| 700 | `refreshTaskAfterAlreadyFinished()` | 服务端提示任务已结束时按需刷新当前项目详情 |
+| 719 | `saveTaskResult()` | **保存/结束入口**:draft vs finish分支；结束任务含 in-flight 防重 |
+| 790 | `uploadResult()` | **结果录入弹窗**:任务级结果+每台样机去向；结束按钮 async 等待并禁用 |
 
 ### frontend/js/samples/ — 样机档案池（已拆分）
 
@@ -654,14 +656,14 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 样机占用冲突C1(后端) | `backend/server.py:696` alias → `backend/server_modules/import_commit.py:348` `detect_sample_occupancy_conflicts()` |
 | 样机占用冲突C1(前端) | `frontend/js/app.server.js:85-98` |
 | 弹窗onOk行为 | `frontend/js/app.modal.js:26` `showModal()` (返回true=保持打开) |
-| 内联校验标红 | `frontend/js/app.modal.js:213` `markFieldInvalid()` / `:185` `appendFieldError()` / `:192` `insertFieldErrorAfter()` |
-| DELETE确认弹窗 | `frontend/js/app.modal.js:223` `showDangerConfirm()` |
+| 内联校验标红 | `frontend/js/app.modal.js:229` `markFieldInvalid()` / `:185` `appendFieldError()` / `:192` `insertFieldErrorAfter()` |
+| DELETE确认弹窗 | `frontend/js/app.modal.js:239` `showDangerConfirm()` |
 | Toast提示 | `frontend/js/utils.js:24` |
 | HTML转义 | `frontend/js/utils.js:7` `esc()` |
 | 人员格式校验 | `frontend/js/utils.js:202` `parsePersonField()` |
 | 人员下拉生成 | `frontend/js/workspace/01-shared.js:158` `projectMemberSelectHtml()` |
 | 样机释放 | `frontend/js/workspace/01-shared.js:185` `releaseTaskSamples()` |
-| 样机新增校验 | `frontend/js/samples/01-pool.js:1313` `addSample()` + `POST /api/sample-identity-check` |
+| 样机新增校验 | `frontend/js/samples/01-pool.js:1309` `addSample()` + `POST /api/sample-identity-check` |
 | 样机去重系统 | `frontend/js/samples/02-import-export.js:8` `importSampleBatch()` / `:252` `_checkServerIdentityDuplicate()` / 后端 `backend/server.py:416` alias → `backend/server_modules/sample_constraints.py:172` `check_sample_identity_conflicts()` |
 | 样机详情弹窗 | `frontend/js/samples/07-detail.js:8` `openSampleDetail()` |
 | 样机照片上传(前端) | `frontend/js/samples/04-photos.js:228` / 后端 `backend/server.py:739` `commit_sample_asset_mutation()` |
@@ -674,29 +676,29 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/ -UseBasicParsing | Select-Object S
 | 阶段复制 | `frontend/js/workspace/04-stage.js:309` `copyStage()` |
 | BOM上料清单 | `frontend/js/workspace/03-strategy.js:54-104` |
 | 测试策略表 | `frontend/js/workspace/03-strategy.js:107-166` |
-| 策略→进度同步 | `frontend/js/workspace/03-strategy.js:326` `autoSyncProgress()` |
+| 策略→进度同步 | `frontend/js/workspace/03-strategy.js:365` `autoSyncProgress()` |
 | 用例下拉搜索 | `frontend/js/workspace/10-dropdown-issue.js:8-163` |
-| 任务表格渲染 | `frontend/js/workspace/05-task-table.js:196` `workspaceTaskFlowHtml()` |
+| 任务表格渲染 | `frontend/js/workspace/05-task-table.js:220` `workspaceTaskFlowHtml()` |
 | 任务筛选器 | `frontend/js/app.filters.js:8-56` |
-| 任务操作按钮 | `frontend/js/workspace/05-task-table.js:429` `taskFlowActionsHtml()` |
+| 任务操作按钮 | `frontend/js/workspace/05-task-table.js:454` `taskFlowActionsHtml()` |
 | 任务配置弹窗(新版) | `frontend/js/workspace/07-task-config.js:320-564` |
 | 任务配置CSS | `frontend/css/33-task-config-modal.css` |
-| 样机选择器UI | `frontend/js/workspace/06-sample-picker.js:58` `buildTaskSamplePickerHtml()` / `:85` `loadTaskSamplePickerPage()` |
-| 样机选择整卡点击 | `frontend/js/workspace/06-sample-picker.js:409` `onTaskSampleRowClick()` |
+| 样机选择器UI | `frontend/js/workspace/06-sample-picker.js:63` `buildTaskSamplePickerHtml()` / `:85` `loadTaskSamplePickerPage()` |
+| 样机选择整卡点击 | `frontend/js/workspace/06-sample-picker.js:551` `onTaskSampleRowClick()` |
 | 样机新增状态兜底 | 前端 `frontend/js/workspace/06-sample-picker.js:247` 使用后端可选性字段；后端 `backend/server.py:779` alias → `backend/server_modules/task_mutation_rules.py:105` `detect_task_mutation_sample_status_blockers()` |
 | 样机选择器CSS | `frontend/css/34-sample-picker.css` |
 | 任务启动 | `frontend/js/workspace/08-task-actions.js:55` `startTask()` |
-| 任务阻塞 | `frontend/js/workspace/08-task-actions.js:401` `blockTask()` |
-| 任务临时变更 | `frontend/js/workspace/08-task-actions.js:259` `tempChangeTask()` |
+| 任务阻塞 | `frontend/js/workspace/08-task-actions.js:423` `blockTask()` |
+| 任务临时变更 | `frontend/js/workspace/08-task-actions.js:260` `tempChangeTask()` |
 | 任务删除 | `frontend/js/workspace/08-task-actions.js:8` `deleteTask()` |
 | 测试结果列 | `frontend/js/workspace/08-task-actions.js:211` `taskIssueSummaryHtml()` |
-| 结果录入弹窗 | `frontend/js/workspace/09-task-result.js:745` `uploadResult()` |
-| 结果表单收集 | `frontend/js/workspace/09-task-result.js:348` `collectTaskResultForm()` |
-| 结果应用 | `frontend/js/workspace/09-task-result.js:522` `applyTaskResult()` |
-| 结束任务防重复 | 前端 `frontend/js/workspace/09-task-result.js:675` `saveTaskResult()`；后端 `backend/server.py:777` alias → `backend/server_modules/task_mutation_rules.py:86` `existing_finished_task()` |
+| 结果录入弹窗 | `frontend/js/workspace/09-task-result.js:790` `uploadResult()` |
+| 结果表单收集 | `frontend/js/workspace/09-task-result.js:391` `collectTaskResultForm()` |
+| 结果应用 | `frontend/js/workspace/09-task-result.js:566` `applyTaskResult()` |
+| 结束任务防重复 | 前端 `frontend/js/workspace/09-task-result.js:719` `saveTaskResult()`；后端 `backend/server.py:777` alias → `backend/server_modules/task_mutation_rules.py:86` `existing_finished_task()` |
 | 结果图片上传 | `frontend/js/workspace/09-task-result.js:285` |
 | 问题单录入 | `frontend/js/workspace/10-dropdown-issue.js:221` |
-| 任务日志展示 | `frontend/js/app.logs.js:258` `showTaskLogs()` |
+| 任务日志展示 | `frontend/js/app.logs.js:376` `showTaskLogs()` |
 | 导航栏渲染 | `frontend/js/app.render.js:105` `renderNav()` |
 | 侧栏折叠 | `frontend/js/app.render.js:268` `toggleSidebar()` |
 | 首页 | `frontend/js/app.render.js:62` `renderHome()` |
@@ -949,7 +951,7 @@ UI 如需显示计划项状态，通过 `frontend/js/workspace/01-shared.js` 的
 
 1. ~~**workspace.js 过大** (3594行)~~ ✅ 已解决 — 已拆分为 `frontend/js/workspace/01-shared.js` 至 `10-dropdown-issue.js` 共 10 个模块。
 2. ~~**samples.js 中 openSampleReadonly 与 app.render.js 重复定义**~~ ✅ 已解决 — 代码扫描确认仅 `frontend/js/samples/06-history.js:180` 保留 `openSampleReadonly()`。
-3. ~~**`saveTaskPlanConfig()` / `saveTaskSampleConfig()` 死代码**~~ ✅ 已解决 — 旧版单独保存函数已删除，当前由 `frontend/js/workspace/07-task-config.js:443` `saveTaskConfigAll()` 统一保存。
+3. ~~**`saveTaskPlanConfig()` / `saveTaskSampleConfig()` 死代码**~~ ✅ 已解决 — 旧版单独保存函数已删除，当前由 `frontend/js/workspace/07-task-config.js:444` `saveTaskConfigAll()` 统一保存。
 4. ~~**完全没有自动化测试入口**~~ ✅ 已缓解 — 已新增 `dev/tests/test_server_core.py` 覆盖后端三向合并/样机占用冲突，新增 `dev/tests/frontend_status_transitions.test.cjs` 覆盖前端状态流转工具和样机状态入口。
 5. ~~**照片无缩略图链路**~~ ✅ 已解决 — 前端上传时生成 JPEG 缩略图，服务端保存 `photo` + `photo_thumb` 资产，列表/履历优先显示 `thumbUrl`，预览仍打开原图。
 6. ~~**samples.js 最大模块**~~ ✅ 已解决 — `frontend/js/samples.js` 仅保留兼容占位，实际拆分到 `frontend/js/samples/01-*.js` 至 `07-detail.js`。

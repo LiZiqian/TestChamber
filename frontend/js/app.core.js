@@ -29,7 +29,7 @@ const app = {
       stageStrategyFilters: { includeKeyword: "", excludeKeyword: "" },
       taskFlowFilters: {},
       taskFlowPage: 1,
-      taskFlowPageSize: 100,
+      taskFlowPageSize: 25,
       sidebarCollapsed: false
     }
   },
@@ -285,7 +285,13 @@ const app = {
         this.clearTaskFlowFilters();
         break;
       case "task-show-samples":
-        this.showTaskSamples(projectId, stageId, taskId);
+        {
+          const pending = this.showTaskSamples(projectId, stageId, taskId);
+          if (pending?.catch) pending.catch(e => {
+            console.error("任务样机清单打开失败：", e);
+            alert("任务样机清单打开失败：" + (e.message || e));
+          });
+        }
         break;
       case "task-issue-record":
         this.openTaskIssueRecordModal(projectId, stageId, taskId);
@@ -298,7 +304,13 @@ const app = {
         break;
       case "task-show-logs":
         this.closeTaskOpMenus();
-        this.showTaskLogs(projectId, stageId, taskId);
+        {
+          const pending = this.showTaskLogs(projectId, stageId, taskId);
+          if (pending?.catch) pending.catch(e => {
+            console.error("任务日志打开失败：", e);
+            alert("任务日志打开失败：" + (e.message || e));
+          });
+        }
         break;
       case "task-delete":
         this.closeTaskOpMenus();
@@ -383,7 +395,13 @@ const app = {
         this.addProjectLocation();
         break;
       case "sample-readonly":
-        this.openSampleReadonly(id);
+        {
+          const pending = this.openSampleReadonly(id);
+          if (pending?.catch) pending.catch(e => {
+            console.error("样机档案打开失败：", e);
+            alert("样机档案打开失败：" + (e.message || e));
+          });
+        }
         break;
       case "sample-archive-tab":
         this.switchSampleArchiveTab(target.dataset.tab || value || "info");
@@ -422,6 +440,12 @@ const app = {
       case "task-result-destination":
         this.onTaskResultDestinationChange(target);
         break;
+      case "task-result-finish-type":
+        this.syncTaskResultFinishType(target);
+        break;
+      case "task-result-value":
+        this.onTaskResultValueChange(target);
+        break;
       case "task-result-photo-preview":
         this.previewSamplePhoto(id, target.dataset.photoId || "");
         break;
@@ -445,7 +469,7 @@ const app = {
         this.applyTaskSamplePickerSearch(id);
         break;
       case "task-sample-picker-row":
-        this.onTaskSampleRowClick(event, id, progressId, target.dataset.hintId || "");
+        this.onTaskSampleRowClick(event, id, progressId, target.dataset.hintId || "", target);
         break;
       case "task-sample-picker-checkbox":
         this.onTaskSampleCheckboxChange(progressId, id, target.dataset.hintId || "", target);

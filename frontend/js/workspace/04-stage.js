@@ -13,11 +13,11 @@ app.registerModule("workspace.stage", {
         <input id="inlineStageName" value="${Utils.esc(stage.name || "")}" data-app-action="inline-stage-name" data-app-events="input focusout">
       </div>
       <div class="inline-sku-editor">
-        <label>方案（SKU）设置<span class="req-star">*</span></label>
+        <label>方案设置<span class="req-star">*</span></label>
         <div id="inlineSkuList">
           ${skuNames.map((name, idx) => this.inlineSkuRowHtml(name, idx)).join("")}
         </div>
-        <button type="button" class="btn btn-sm btn-outline" data-app-action="inline-sku-add">+ 增加方案名称(SKU)</button>
+        <button type="button" class="btn btn-sm btn-outline" data-app-action="inline-sku-add">+ 增加方案</button>
       </div>`;
   },
   inlineSkuRowHtml(name = "", idx = 0) {
@@ -145,7 +145,7 @@ app.registerModule("workspace.stage", {
       </div>
     `).join("");
     return `<div class="sku-editor"><div id="skuList">${rows}</div>
-      <button type="button" class="btn btn-sm btn-outline" data-app-action="sku-input-add">+ 增加方案名称(SKU)</button></div>`;
+      <button type="button" class="btn btn-sm btn-outline" data-app-action="sku-input-add">+ 增加方案</button></div>`;
   },
   skuRowNode(value = "", idx = 1) {
     const row = document.createElement("div");
@@ -158,7 +158,7 @@ app.registerModule("workspace.stage", {
     const input = document.createElement("input");
     input.className = "sku-name-input";
     input.value = value || "";
-    input.placeholder = "输入方案名，如：主方案、A1、B7";
+    input.placeholder = "如 主方案 / A1 / B7";
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -190,8 +190,8 @@ app.registerModule("workspace.stage", {
 
   addStage() {
     this.showModal("新建阶段", `
-      <div class="form-group"><label class="req modal-field-title">阶段名称</label><input id="stageName" placeholder="输入阶段名称，如：V1、V3-1、VN1、VN2"></div>
-      <div class="form-group"><label class="req modal-field-title">方案（SKU）设置</label>${this.skuEditorHtml(["", ""], { placeholder: "输入方案名，如：主方案、A1、B7" })}</div>
+      <div class="form-group"><label class="req modal-field-title">阶段名称</label><input id="stageName" placeholder="如 V3-1 / VN1"></div>
+      <div class="form-group"><label class="req modal-field-title">方案名称</label>${this.skuEditorHtml(["", ""], { placeholder: "如 主方案 / A1 / B7" })}</div>
     `, async () => {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
@@ -231,7 +231,7 @@ app.registerModule("workspace.stage", {
     if (!s) return;
     this.showModal("编辑阶段与 SKU", `
       <div class="form-group"><label class="req modal-field-title">阶段名称</label><input id="stageName" value="${Utils.esc(s.name)}"></div>
-      <div class="form-group"><label class="req modal-field-title">方案（SKU）设置</label>${this.skuEditorHtml(s.skuNames?.length ? s.skuNames : ["SKU1"], { placeholder: "输入方案名" })}</div>
+      <div class="form-group"><label class="req modal-field-title">方案名称</label>${this.skuEditorHtml(s.skuNames?.length ? s.skuNames : ["SKU1"], { placeholder: "如 主方案 / A1 / B7" })}</div>
     `, async () => {
       this.clearFieldValidationMarks();
       const p = this.currentProject();
@@ -313,7 +313,7 @@ app.registerModule("workspace.stage", {
     this.showModal("复制阶段", `
       <div class="form-group">
         <label class="req modal-field-title">新阶段名称</label>
-        <input id="copyStageName" placeholder="可自定义阶段名称，如：V2-1，V3 等">
+        <input id="copyStageName" placeholder="如 V3 / VN1">
       </div>
     `, async () => {
       this.clearFieldValidationMarks();

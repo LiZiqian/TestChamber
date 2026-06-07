@@ -77,6 +77,10 @@
 /* —— 临时变更：顶部控件高度统一 —— */
 .task-op-row .btn { min-width: 46px }
 
+.task-block-modal.modal {
+  width: min(520px, 92vw);
+}
+
 /* —— 任务行操作按钮组在窄屏自动换行 —— */
 @media (max-width: 1280px) {
   .task-op-row { flex-wrap: wrap }

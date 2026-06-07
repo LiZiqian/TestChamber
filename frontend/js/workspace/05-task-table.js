@@ -57,16 +57,16 @@ app.registerModule("workspace.taskTable", {
       <button type="button" class="btn btn-sm btn-outline" ${disabled || loading ? "disabled" : `data-app-action="task-flow-page" data-value="${target}"`}>${label}</button>`;
     return `
       <div class="list-pager task-flow-pager ${loading ? "is-loading" : ""}">
-        <span class="path">显示 ${start}-${end} / ${total} 条</span>
         <div class="list-pager-controls">
           ${pageBtn("上一页", page - 1, page <= 1)}
           <span class="path">第 ${page} / ${totalPages} 页</span>
           ${pageBtn("下一页", page + 1, page >= totalPages)}
           <select data-app-action="task-flow-page-size" data-app-events="change">
-            ${[50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
+            ${[25, 50, 100, 200, 500].map(size => `<option value="${size}" ${pageSize === size ? "selected" : ""}>每页 ${size}</option>`).join("")}
           </select>
           ${loading ? `<span class="path list-pager-loading">加载中...</span>` : ""}
         </div>
+        <span class="path task-flow-pager-range">显示 ${start}-${end} / ${total} 条</span>
       </div>`;
   },
 
@@ -76,12 +76,12 @@ app.registerModule("workspace.taskTable", {
   },
 
   setTaskFlowPageSize(size) {
-    this.setTaskFlowPageSizeState(size, 100);
+    this.setTaskFlowPageSizeState(size, 25);
     this.renderPreserveScroll();
   },
 
   taskFlowQueryParams(stage) {
-    const state = this.taskFlowPageState(100);
+    const state = this.taskFlowPageState(25);
     const f = state.filters || {};
     const params = {
       page: state.page,
@@ -129,7 +129,31 @@ app.registerModule("workspace.taskTable", {
       if (row?.task?.id) this.syncHydratedTaskBaseline?.(project?.id, stage.id, row.task);
     });
     this._taskFlowPageCache = { key, stageId: stage.id, ...result, rows };
+    this.hydrateTaskFlowReferenceSamples(project, stage, rows, key);
     return this._taskFlowPageCache;
+  },
+
+  hydrateTaskFlowReferenceSamples(project, stage, rows = [], key = "") {
+    if (typeof this.ensureTaskReferenceSamplesLoaded !== "function") return null;
+    const pending = (rows || [])
+      .map(row => row?.task)
+      .filter(Boolean)
+      .map(task => this.ensureTaskReferenceSamplesLoaded(task))
+      .filter(item => item?.then);
+    if (!pending.length) return null;
+    const refreshKey = key;
+    return Promise.allSettled(pending).then(() => {
+      (rows || []).forEach(row => {
+        if (row?.task?.id) this.syncHydratedTaskBaseline?.(project?.id, stage?.id, row.task);
+      });
+      if (
+        refreshKey
+        && this._taskFlowPageCache?.key === refreshKey
+        && this.isCurrentProjectWorkspaceStage?.(stage?.id)
+      ) {
+        this.refreshTaskFlowRegion(project, stage);
+      }
+    });
   },
 
   refreshTaskFlowRegion(project, stage) {
@@ -201,7 +225,7 @@ app.registerModule("workspace.taskTable", {
   },
 
   workspaceTaskFlowContentHtml(project, stage) {
-    const f = this.taskFlowPageState(100).filters || {};
+    const f = this.taskFlowPageState(25).filters || {};
     const params = this.taskFlowQueryParams(stage);
     const cacheKey = this.taskFlowCacheKey(stage, params);
     const cached = this._taskFlowPageCache?.key === cacheKey ? this._taskFlowPageCache : null;
@@ -247,7 +271,7 @@ app.registerModule("workspace.taskTable", {
       <div class="section-head">
         <div class="task-workbench-title">
           ${this.sectionToggleTriangle('taskFlow')}
-          <h2 style="margin:0">任务管理工作台 <span>阶段${Utils.esc(stage.name || "-")}</span></h2>
+          <h2 style="margin:0">任务管理工作台 <span>阶段 - ${Utils.esc(stage.name || "-")}</span></h2>
         </div>
         <div></div>
       </div>
@@ -262,31 +286,31 @@ app.registerModule("workspace.taskTable", {
         </div>
         <div class="task-filter-bar">
           <div class="task-filter-item filter-sku">
-            <label>方案(SKU)</label>
+            <label>方案筛选</label>
             <select data-app-action="task-flow-filter" data-app-events="change" data-field="sku">${skuOptions}</select>
           </div>
           <div class="task-filter-item filter-keyword">
-            <label>类别搜索</label>
+            <label>测试类别搜索</label>
             <input type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="categoryKeyword">
           </div>
           <div class="task-filter-item filter-keyword">
-            <label>用例搜索</label>
+            <label>测试用例搜索</label>
             <input type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="caseKeyword">
           </div>
           <div class="task-filter-item filter-person">
-            <label>执行人</label>
+            <label>执行人筛选</label>
             <select data-app-action="task-flow-filter" data-app-events="change" data-field="ownerName">${optHtml(ownerNames.length ? ownerNames : infos.map(i => i.ownerName), f.ownerName)}</select>
           </div>
           <div class="task-filter-item filter-status">
-            <label>状态</label>
+            <label>状态筛选</label>
             <select data-app-action="task-flow-filter" data-app-events="change" data-field="flowStatus">${optHtml(["待下发", "进行中", "阻塞中", "异常终止", "正常完成"], f.flowStatus)}</select>
           </div>
           <div class="task-filter-item filter-short">
-            <label>DTS单号</label>
+            <label>DTS单号搜索</label>
             <input type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="dtsKeyword">
           </div>
           <div class="task-filter-item filter-result">
-            <label>测试结果关键词</label>
+            <label>测试结果搜索</label>
             <input type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="resultKeyword">
           </div>
           <div class="task-filter-actions">
@@ -296,7 +320,7 @@ app.registerModule("workspace.taskTable", {
         ${pagerHtml}
         <div class="table-wrap task-flow-table"><table>
           <thead>
-<tr><th style="font-weight:700">序号</th><th style="font-weight:700">方案(SKU)</th><th style="font-weight:700">类别/用例</th><th style="font-weight:700">执行人</th><th style="font-weight:700">启动/完成时间</th><th style="font-weight:700">样机</th><th style="font-weight:700">测试结果</th><th style="font-weight:700">问题单</th><th style="font-weight:700">状态</th><th style="font-weight:700">操作</th></tr>
+<tr><th style="font-weight:700">序号</th><th style="font-weight:700">方案</th><th style="font-weight:700">类别/用例</th><th style="font-weight:700">执行人</th><th style="font-weight:700">启动/完成时间</th><th style="font-weight:700">样机</th><th style="font-weight:700">测试结果</th><th style="font-weight:700">问题单</th><th style="font-weight:700">状态</th><th style="font-weight:700">操作</th></tr>
           </thead>
           <tbody>${loadingRow || rows.map((row, rowIndex) => {
       const t = row.task;
@@ -304,6 +328,7 @@ app.registerModule("workspace.taskTable", {
       const taskId = t?.id || "";
       const sequence = (page - 1) * pageSize + rowIndex + 1;
       const i = this.taskInfoForRow(stage, row);
+      const skuDisplay = `${stage.name || "-"}-${i.sku || "-"}`;
       const pending = i.flowStatus === "待下发";
       const running = i.flowStatus === "进行中";
       const blocked = i.flowStatus === "阻塞中";
@@ -326,7 +351,7 @@ app.registerModule("workspace.taskTable", {
       return `
               <tr>
                 <td class="task-seq-cell">${sequence}</td>
-                <td class="task-sku-cell">${Utils.esc(i.sku)}</td>
+                <td class="task-sku-cell">${Utils.esc(skuDisplay)}</td>
                 <td class="compact-cell">${catHtml}</td>
                 <td>${execHtml}</td>
                 <td class="task-time-cell">${timeHtml}</td>
@@ -500,10 +525,12 @@ app.registerModule("workspace.taskTable", {
     return "待确认";
   },
 
-  showTaskSamples(projectId, stageId, taskId) {
+  async showTaskSamples(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!t) return;
     const entries = this.taskResultSampleEntries(t);
+    const loadingSamples = this.ensureTaskReferenceSamplesLoaded?.(t);
+    if (loadingSamples?.then) await loadingSamples;
     const activeCount = entries.filter(x => x.state !== "removed").length;
     const removedCount = entries.length - activeCount;
     const taskProblems = this.taskFailureProblemsBySample(p, s, t);
@@ -550,7 +577,8 @@ app.registerModule("workspace.taskTable", {
         ? `<div class="task-sample-removed-detail"><span>退出：${Utils.esc(entry.removedAt || "-")}</span>${entry.reason ? `<span> · ${Utils.esc(entry.reason)}</span>` : ""}</div>`
         : "";
       // 身份标识（可点击 / 已销毁不可点）
-      const identityEl = found
+      const isDestroyedSnapshot = !found && !!snapshot?.destroyedAt;
+      const identityEl = id && !isDestroyedSnapshot
         ? `<span class="task-sample-row-id" data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情">${identity}</span>`
         : `<span class="task-sample-row-id disabled" title="样机档案已销毁">${identity}</span>`;
       return `<div class="task-sample-row ${entry.state === "removed" ? "is-removed" : ""}">

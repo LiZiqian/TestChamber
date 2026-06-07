@@ -14,7 +14,7 @@
 TestChamber 把“项目 -> 阶段 -> 测试任务 -> 样机 -> 结果 -> 履历”这条链路收进一个可以在 Windows 内网机器上直接运行的轻量系统。它不依赖外部云服务，不需要安装数据库服务器，也不需要 npm / pip 依赖；下载源码、启动 Python 服务、打开浏览器即可开始使用。
 
 > [!NOTE]
-> - 当前版本：见根目录 `VERSION` 与 GitHub Releases
+> - 当前版本：`7.2.4`，以根目录 `VERSION` 为准
 > - 默认端口：`9398`（可自定义）
 > - 默认数据目录：项目内 `data/`
 > - 推荐运行环境：Windows + Python 3.9+ + Chrome / Edge
@@ -75,110 +75,49 @@ TestChamber 特别适合这些场景：
 
 系统流程：
 
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="820" viewBox="0 0 1120 820" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="title desc">
-  <title id="title">TestChamber V7 system workflow</title>
-  <desc id="desc">Project workflow and sample workflow converge into task execution, result entry, history, and data migration.</desc>
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#cbd5e1" />
-    </marker>
-    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.12" />
-    </filter>
-  </defs>
-  <style>
-    .canvas { fill: transparent; }
-    .group-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #94a3b8; }
-    .card-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #0f172a; }
-    .card-detail { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #64748b; }
-    .arrow { fill: none; stroke: #cbd5e1; stroke-width: 2; marker-end: url(#arrow); }
-    .group { rx: 8; }
-    .node { rx: 6; }
-  </style>
+```mermaid
+flowchart LR
+  subgraph P["项目链路"]
+    P1["项目管理<br/>阶段 / 方案 / 人员"]
+    P2["测试任务工作表<br/>任务生成 / 筛选 / 跟踪"]
+    P1 --> P2
+  end
 
-  <rect class="canvas" width="1120" height="820" />
+  subgraph S["样机链路"]
+    S1["样机档案库<br/>样机池 / 样机卡片"]
+    S2["样机详情<br/>身份信息 / 状态 / 照片 / 履历"]
+    S1 --> S2
+  end
 
-  <rect class="group" x="70" y="34" width="420" height="276" fill="#f8fbff" fill-opacity="0.04" stroke="#60a5fa" stroke-opacity="0.35" stroke-width="1.5" />
-  <text class="group-title" x="280" y="62" text-anchor="middle">项目链路</text>
-  <rect class="node" x="118" y="86" width="324" height="86" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.5" />
-  <text class="card-title" x="280" y="123" text-anchor="middle">项目管理</text>
-  <text class="card-detail" x="280" y="148" text-anchor="middle">阶段 / 方案 / 人员</text>
-  <path class="arrow" d="M280 172 L280 198" />
-  <rect class="node" x="118" y="198" width="324" height="86" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.5" />
-  <text class="card-title" x="280" y="235" text-anchor="middle">测试任务工作表</text>
-  <text class="card-detail" x="280" y="260" text-anchor="middle">任务生成 / 筛选 / 跟踪</text>
+  subgraph E["执行闭环"]
+    E1["任务执行<br/>执行人 / 样机 / 启动 / 阻塞"]
+    E2["结果录入<br/>结论 / DTS / 问题 / 照片 / 去向"]
+    E3["履历与迁移<br/>样机履历 / 数据包导出导入"]
+    E1 --> E2 --> E3
+  end
 
-  <rect class="group" x="630" y="34" width="420" height="276" fill="#f7fef9" fill-opacity="0.04" stroke="#86efac" stroke-opacity="0.35" stroke-width="1.5" />
-  <text class="group-title" x="840" y="62" text-anchor="middle">样机链路</text>
-  <rect class="node" x="678" y="86" width="324" height="86" fill="#f0fdf4" stroke="#86efac" stroke-width="2.5" />
-  <text class="card-title" x="840" y="123" text-anchor="middle">样机档案库</text>
-  <text class="card-detail" x="840" y="148" text-anchor="middle">样机池 A / B</text>
-  <path class="arrow" d="M840 172 L840 198" />
-  <rect class="node" x="678" y="198" width="324" height="86" fill="#f0fdf4" stroke="#86efac" stroke-width="2.5" />
-  <text class="card-title" x="840" y="235" text-anchor="middle">样机卡片</text>
-  <text class="card-detail" x="840" y="260" text-anchor="middle">详情 / 履历 / 图片 / CT 数据</text>
-
-  <rect class="group" x="270" y="418" width="580" height="372" fill="#fffdf5" fill-opacity="0.04" stroke="#fbbf24" stroke-opacity="0.35" stroke-width="1.5" />
-  <text class="group-title" x="560" y="450" text-anchor="middle">执行闭环</text>
-  <rect class="node" x="350" y="476" width="420" height="78" fill="#fffbeb" stroke="#fbbf24" stroke-width="2.5" />
-  <text class="card-title" x="560" y="509" text-anchor="middle">任务执行</text>
-  <text class="card-detail" x="560" y="533" text-anchor="middle">执行人 / 样机 / 启动 / 阻塞</text>
-  <path class="arrow" d="M560 554 L560 582" />
-  <rect class="node" x="350" y="582" width="420" height="78" fill="#fff7ed" stroke="#fb923c" stroke-width="2.5" />
-  <text class="card-title" x="560" y="615" text-anchor="middle">结果录入</text>
-  <text class="card-detail" x="560" y="639" text-anchor="middle">结论 / 故障照片 / 分析照片 / 样机去向</text>
-  <path class="arrow" d="M560 660 L560 688" />
-  <rect class="node" x="350" y="688" width="420" height="78" fill="#f8fafc" stroke="#94a3b8" stroke-width="2.5" />
-  <text class="card-title" x="560" y="721" text-anchor="middle">履历与迁移</text>
-  <text class="card-detail" x="560" y="745" text-anchor="middle">样机履历 / 数据包迁移</text>
-
-  <path class="arrow" d="M280 284 C280 360, 430 398, 505 476" />
-  <path class="arrow" d="M840 284 C840 360, 690 398, 615 476" />
-</svg>
+  P2 --> E1
+  S2 --> E1
+```
 
 技术结构：
 
-<svg xmlns="http://www.w3.org/2000/svg" width="920" height="220" viewBox="0 0 920 220" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="title desc">
-  <title id="title">TestChamber V7 technical architecture</title>
-  <desc id="desc">The browser single page application talks to the Python server, which stores data in local SQLite, photo assets, and export bundles.</desc>
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#cbd5e1" />
-    </marker>
-    <filter id="cardShadow" x="-10%" y="-15%" width="120%" height="130%">
-      <feDropShadow dx="0" dy="7" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.14" />
-    </filter>
-  </defs>
-  <style>
-    .canvas { fill: transparent; }
-    .card { rx: 8; filter: url(#cardShadow); }
-    .card-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #0f172a; }
-    .card-detail { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #64748b; }
-    .arrow { fill: none; stroke: #cbd5e1; stroke-width: 2.5; marker-end: url(#arrow); }
-    .label { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; fill: #94a3b8; letter-spacing: 0.5px; }
-  </style>
+```mermaid
+flowchart LR
+  A["浏览器 SPA<br/>frontend/ Vanilla JS + CSS"] --> B["Python HTTP 服务<br/>backend/server.py"]
+  B --> C["SQLite WAL<br/>data/testchamber.sqlite"]
+  B --> D["样机资产<br/>data/samples/"]
+  B --> E["导入导出暂存<br/>data/import-previews/ 与 data/exports/"]
+```
 
-  <rect class="canvas" width="920" height="220" />
+关键部件：
 
-  <text class="label" x="112" y="45" text-anchor="middle">CLIENT</text>
-  <rect class="card" x="42" y="64" width="224" height="104" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.5" />
-  <text class="card-title" x="154" y="106" text-anchor="middle">浏览器 SPA</text>
-  <text class="card-detail" x="154" y="134" text-anchor="middle">Vanilla JS + CSS</text>
-
-  <path class="arrow" d="M278 116 L354 116" />
-
-  <text class="label" x="460" y="45" text-anchor="middle">SERVER</text>
-  <rect class="card" x="348" y="64" width="224" height="104" fill="#fffbeb" stroke="#fbbf24" stroke-width="2.5" />
-  <text class="card-title" x="460" y="106" text-anchor="middle">Python 服务</text>
-  <text class="card-detail" x="460" y="134" text-anchor="middle">backend/server.py / HTTP API</text>
-
-  <path class="arrow" d="M584 116 L660 116" />
-
-  <text class="label" x="808" y="45" text-anchor="middle">STORAGE</text>
-  <rect class="card" x="654" y="64" width="264" height="104" fill="#f0fdf4" stroke="#86efac" stroke-width="2.5" />
-  <text class="card-title" x="786" y="106" text-anchor="middle">本地数据</text>
-  <text class="card-detail" x="786" y="134" text-anchor="middle">SQLite / 照片 / 数据包</text>
-</svg>
+| 部件 | 位置 | 作用 |
+|------|------|------|
+| 前端 SPA | `frontend/` | 项目、任务、样机池、结果录入和导入导出页面 |
+| 后端服务 | `backend/` | stdlib HTTP API、SQLite 写入、分页查询和数据包处理 |
+| 运行数据 | `data/` | SQLite、样机照片、导出文件和导入预览暂存 |
+| 版本来源 | `VERSION` | 后端读取后注入 `__APP_VERSION__`，前端和 cachebuster 使用同一版本 |
 
 ## 快速部署
 
@@ -817,6 +756,8 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/api/health -UseBasicParsing
 3. 确认没有提交运行数据。
 4. 提交并更新当前主线对应的 tag / Release；`7.2.X` 复用 `v7.2.0`。
 
+版本号只在明确执行版本更新或发布版本时修改；普通修复、检查或 push 不自动递增 patch。
+
 ### 不应提交到仓库
 
 - `data/`
@@ -838,6 +779,6 @@ Invoke-WebRequest -Uri http://127.0.0.1:9398/api/health -UseBasicParsing
 
 ### Release 提醒
 
-`7.1` 系列复用同一个 GitHub Release/tag 入口 `v7.1.0`；`7.2` 系列复用同一个 GitHub Release/tag 入口 `v7.2.0`，Release 标题更新为当前 `VERSION`，例如 `v7.2.1`。
+`7.1` 系列保留历史 GitHub Release/tag 入口 `v7.1.0`；当前 `7.2` 系列复用同一个 GitHub Release/tag 入口 `v7.2.0`，Release 标题更新为当前 `VERSION`，例如当前源码版本 `v7.2.4`。
 
 如果某个 tag 或 release 已经创建，旧 release 源码包会保留当时的文件快照。即使后续从 `main` 删除了某个文件，旧 release 包也不会自动变化。需要让旧版本源码包也变干净时，应重新打 tag 或重新发布 release。

@@ -10,7 +10,9 @@
 /* ---- Task Flow ---- */
 .task-flow-summary {
   display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 7px; margin: 8px 0 10px;
+  gap: 7px; margin: 8px 0 0;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--gray);
 }
 .task-flow-stat {
   background: rgba(255, 255, 255, .72); border: 1px solid var(--border);
@@ -38,31 +40,25 @@
 .task-flow-stat.stat-done b,
 .task-flow-stat.stat-done span { color: var(--status-task-done-text) }
 .task-filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 9px 12px;
-  margin: 8px 0 12px;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(150px, 1.25fr) minmax(150px, 1.25fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(140px, 1.1fr) minmax(160px, 1.45fr) 96px;
+  align-items: end;
+  gap: 10px 12px;
+  margin: 12px 0 14px;
 }
 .task-filter-item {
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 7px;
-  flex: 0 1 150px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-width: 0;
-  max-width: 230px;
+  max-width: none;
+  width: 100%;
 }
 .task-filter-bar > .task-filter-item { min-width: 0 }
-.task-filter-item.filter-sku { flex-basis: 160px; max-width: 170px }
-.task-filter-item.filter-keyword { flex-basis: 190px; max-width: 205px }
-.task-filter-item.filter-person { flex-basis: 175px; max-width: 190px }
-.task-filter-item.filter-status { flex-basis: 165px; max-width: 180px }
-.task-filter-item.filter-short { flex-basis: 170px; max-width: 185px }
-.task-filter-item.filter-result { flex-basis: 220px; max-width: 235px }
 .task-filter-item label {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--primary);
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
@@ -74,8 +70,7 @@
   min-width: 0;
   font-size: 12px;
   padding: 5px 9px;
-  flex: 1 1 auto;
-  width: auto;
+  width: 100%;
   box-sizing: border-box;
   border-radius: 8px;
 }
@@ -85,33 +80,52 @@
 .task-filter-actions {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  align-self: flex-end;
+  min-width: 0;
+  width: 100%;
   padding-bottom: 0;
 }
 .task-filter-actions .btn {
   height: 34px;
   padding: 5px 12px;
   white-space: nowrap;
+  width: 96px;
+  color: var(--primary);
 }
 @media (max-width: 1280px) {
-  .task-filter-bar { gap: 8px 10px }
-  .task-filter-item.filter-sku { flex-basis: 148px; max-width: 158px }
-  .task-filter-item.filter-keyword { flex-basis: 174px; max-width: 188px }
-  .task-filter-item.filter-person { flex-basis: 164px; max-width: 178px }
-  .task-filter-item.filter-status { flex-basis: 154px; max-width: 168px }
-  .task-filter-item.filter-short { flex-basis: 160px; max-width: 174px }
-  .task-filter-item.filter-result { flex-basis: 200px; max-width: 218px }
+  .task-filter-bar {
+    grid-template-columns: repeat(4, minmax(145px, 1fr));
+    gap: 10px;
+  }
 }
 @media (max-width: 760px) {
-  .task-filter-item,
-  .task-filter-item.filter-sku,
-  .task-filter-item.filter-keyword,
-  .task-filter-item.filter-person,
-  .task-filter-item.filter-status,
-  .task-filter-item.filter-short,
-  .task-filter-item.filter-result {
-    flex: 1 1 150px;
-    max-width: none;
+  .task-filter-bar {
+    grid-template-columns: repeat(2, minmax(145px, 1fr));
+  }
+}
+@media (max-width: 420px) {
+  .task-filter-bar {
+    grid-template-columns: minmax(180px, 1fr);
+  }
+}
+.task-flow-pager {
+  justify-content: flex-start;
+  gap: 28px;
+  margin: 10px 0 12px;
+}
+.task-flow-pager .list-pager-controls {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.task-flow-pager-range {
+  white-space: nowrap;
+}
+.task-flow-pager select {
+  min-width: 116px;
+}
+@media (max-width: 760px) {
+  .task-flow-pager .list-pager-controls {
+    flex-wrap: wrap;
   }
 }
 .task-flow-table { overflow-x: auto; overflow-y: visible }
@@ -132,9 +146,9 @@
 .task-flow-table th:nth-child(9) { width: 80px; text-align: center }
 .task-flow-table td:nth-child(9) { text-align: center }
 
-/* 序号列：紧凑蓝色加粗，最多按三位数空间设计 */
+/* 序号列：紧凑加粗，最多按三位数空间设计 */
 .task-flow-table .task-seq-cell {
-  color: var(--primary);
+  color: #111827;
   font-weight: 800;
   text-align: center;
   font-size: 13px;

@@ -216,6 +216,76 @@ app.registerModule("workspace.shared", {
     return sample?.sampleNo || sample?.imei || sample?.sn || sample?.boardSn || sampleId;
   },
 
+  sampleSnapshotForTask(sampleId, seed = {}) {
+    const sid = String(sampleId || seed.sampleId || seed.id || "").trim();
+    if (!sid) return null;
+    const found = this.findSample(sid);
+    const sample = found?.sample || {};
+    const code = found?.sample
+      ? this.sampleDisplayCode(sample)
+      : (seed.code || seed.sampleNo || seed.sample_no || seed.sn || seed.imei || seed.boardSn || sid);
+    return {
+      id: sid,
+      categoryId: found?.category?.id || sample.categoryId || seed.categoryId || "",
+      categoryName: found?.category?.name || seed.categoryName || "",
+      code,
+      sampleNo: sample.sampleNo || seed.sampleNo || seed.code || code || sid,
+      sn: sample.sn || seed.sn || "",
+      imei: sample.imei || seed.imei || "",
+      boardSn: sample.boardSn || seed.boardSn || "",
+      capturedAt: seed.capturedAt || Utils.now(),
+      destroyedAt: seed.destroyedAt || ""
+    };
+  },
+
+  ensureTaskSampleSnapshots(task, sampleIds = null, options = {}) {
+    if (!task) return {};
+    if (!task.sampleSnapshots || typeof task.sampleSnapshots !== "object" || Array.isArray(task.sampleSnapshots)) {
+      task.sampleSnapshots = {};
+    }
+    const ids = [];
+    const seen = new Set();
+    const add = value => {
+      const sid = String(value || "").trim();
+      if (sid && !seen.has(sid)) {
+        seen.add(sid);
+        ids.push(sid);
+      }
+    };
+    const seedById = new Map();
+    const rememberSeed = item => {
+      if (!item || typeof item !== "object") return;
+      const sid = String(item.sampleId || item.sid || item.id || "").trim();
+      if (!sid) return;
+      seedById.set(sid, { ...(seedById.get(sid) || {}), ...item });
+      add(sid);
+    };
+    if (Array.isArray(sampleIds)) sampleIds.forEach(add);
+    (task.sampleIds || []).forEach(add);
+    (task.removedSampleRecords || []).forEach(rememberSeed);
+    (task.sampleFaultRecords || []).forEach(rememberSeed);
+    (task.resultDraft?.samples || []).forEach(rememberSeed);
+    (task.resultUploads || []).forEach(upload => (upload?.samples || []).forEach(rememberSeed));
+
+    ids.forEach(sid => {
+      const existing = task.sampleSnapshots[sid] || {};
+      const snapshot = this.sampleSnapshotForTask(sid, {
+        ...seedById.get(sid),
+        capturedAt: options.capturedAt || existing.capturedAt,
+        destroyedAt: options.destroyedAt || existing.destroyedAt
+      });
+      if (!snapshot && !existing) return;
+      task.sampleSnapshots[sid] = { ...existing, ...(snapshot || {}) };
+      if (existing.destroyedAt && !options.destroyedAt) task.sampleSnapshots[sid].destroyedAt = existing.destroyedAt;
+    });
+    return task.sampleSnapshots;
+  },
+
+  attachSampleSnapshotToTasks(tasks = [], sampleIds = null, options = {}) {
+    const list = Array.isArray(tasks) ? tasks : [tasks];
+    list.forEach(task => this.ensureTaskSampleSnapshots(task, sampleIds, options));
+  },
+
   taskSampleArchiveName(sampleId, snapshot = null) {
     const found = this.findSample(sampleId);
     const sample = found?.sample || null;

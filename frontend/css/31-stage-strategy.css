@@ -113,21 +113,64 @@
   }
 }
 
-/* ---- 测试策略配置表格：自适应高度 + 表头冻结 ---- */
-.strategy-table {
-  max-height: clamp(280px, 60vh, 900px);
-  overflow: auto;
+/* ---- Split tables: frozen area + independent horizontal scroll area ---- */
+.split-table {
+  display: grid;
+  align-items: start;
+  overflow-x: hidden;
   position: relative;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
 }
-.strategy-table thead th {
+.split-frozen {
+  min-width: 0;
+  overflow: hidden;
+  background: #fff;
+  z-index: 2;
+}
+.split-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.split-table table {
+  border: 0;
+  margin: 0;
+}
+.split-table thead th {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 5;
   background: #f3f6fa;
   box-shadow: 0 2px 4px rgba(0,0,0,.06);
+  text-align: center;
+}
+.split-table tbody tr {
+  height: 58px;
 }
 
+/* ---- 测试策略配置表格 ---- */
+.strategy-table {
+  grid-template-columns: 688px minmax(0, 1fr);
+  max-height: clamp(280px, 60vh, 900px);
+  overflow-y: auto;
+}
+.strategy-config-table th,
+.strategy-config-table td {
+  border-right: 1px solid var(--border);
+}
+.strategy-frozen-table th:last-child,
+.strategy-frozen-table td:last-child {
+  border-right: 1px solid var(--border);
+  box-shadow: 2px 0 0 rgba(226, 232, 240, .95);
+}
+.strategy-scroll-table th:last-child,
+.strategy-scroll-table td:last-child {
+  border-right: 0;
+}
+.strategy-scroll-table td {
+  text-align: center;
+  vertical-align: middle;
+}
 .strategy-table input.invalid { border-color: #dc2626; background: #fef2f2 }
 .strategy-table input[type="checkbox"] { transform: scale(1.5); transform-origin: center; margin: 0 4px }
 
@@ -139,12 +182,11 @@
   line-height: 1.6;
 }
 
-/* ---- BOM 上料清单表格：宽度自适应，避免全屏横向滚动 ---- */
+/* ---- BOM 上料清单表格 ---- */
 .bom-table {
+  grid-template-columns: 224px minmax(0, 1fr);
   max-height: clamp(240px, 42vh, 520px);
-  overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-gutter: stable;
 }
 .bom-config-table {
   table-layout: fixed;
@@ -155,27 +197,45 @@
 .bom-config-table td {
   padding: 8px 6px;
   vertical-align: middle;
+  border-right: 1px solid var(--border);
 }
 .bom-config-table thead th {
   position: sticky;
   top: 0;
   z-index: 5;
   background: #f3f6fa;
+  text-align: center;
 }
 .bom-config-table .col-row-no {
   width: 44px;
 }
 .bom-config-table .col-bom-material {
-  width: clamp(180px, 22%, 260px);
+  width: 180px;
 }
 .bom-config-table .col-bom-sku {
-  width: auto;
+  width: 180px;
 }
 .bom-config-table .col-action {
-  width: 64px;
+  width: 72px;
 }
 .bom-config-table .row-no {
   text-align: center;
+}
+.bom-frozen-table thead th {
+  background: var(--primary);
+  color: #fff !important;
+}
+.bom-frozen-table th:last-child,
+.bom-frozen-table td:last-child {
+  border-right: 1px solid var(--border);
+  box-shadow: 2px 0 0 rgba(226, 232, 240, .95);
+}
+.bom-scroll-table th:last-child,
+.bom-scroll-table td:last-child {
+  border-right: 0;
+}
+.bom-scroll-table td {
+  vertical-align: middle;
 }
 .bom-config-table input {
   height: 34px;
@@ -198,6 +258,12 @@
   font-size: 16px;
   line-height: 1;
 }
+.bom-scroll-table td:last-child,
+.strategy-scroll-table td:last-child {
+  text-align: center;
+  vertical-align: middle;
+}
+
 .stage-row-delete-btn:hover {
   color: #b91c1c;
 }

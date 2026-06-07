@@ -27,7 +27,7 @@ app.registerModule("workspace.samplePicker", {
     return `${this.taskSamplePickerDomId(inputName)}_${suffix}`;
   },
 
-  resetTaskSamplePickerState(inputName, { selectedIds = [], progressSelectId = "", hintId = "", excludeTaskId = "" } = {}) {
+  resetTaskSamplePickerState(inputName, { selectedIds = [], progressSelectId = "", hintId = "", excludeTaskId = "", progressId = "", requiredSampleCount = null } = {}) {
     if (!this._taskSamplePickerStates) this._taskSamplePickerStates = {};
     const uniqueSelected = [...new Set((selectedIds || []).map(id => String(id || "").trim()).filter(Boolean))];
     this._taskSamplePickerStates[inputName] = {
@@ -35,6 +35,8 @@ app.registerModule("workspace.samplePicker", {
       progressSelectId,
       hintId,
       excludeTaskId,
+      progressId,
+      requiredSampleCount,
       selectedIds: new Set(uniqueSelected),
       page: 1,
       pageSize: 50,
@@ -44,6 +46,9 @@ app.registerModule("workspace.samplePicker", {
       excludeKeyword: "",
       categories: [],
       lastResult: null,
+      sampleCache: new Map(),
+      selectedSampleCache: new Map(),
+      loadSeq: 0,
       loading: true,
       error: "",
       initialized: false,
@@ -55,8 +60,8 @@ app.registerModule("workspace.samplePicker", {
     return this._taskSamplePickerStates?.[inputName] || null;
   },
 
-  buildTaskSamplePickerHtml(selectedIds = [], inputName = "samplePick", progressSelectId = "", hintId = "", excludeTaskId = "") {
-    const state = this.resetTaskSamplePickerState(inputName, { selectedIds, progressSelectId, hintId, excludeTaskId });
+  buildTaskSamplePickerHtml(selectedIds = [], inputName = "samplePick", progressSelectId = "", hintId = "", excludeTaskId = "", options = {}) {
+    const state = this.resetTaskSamplePickerState(inputName, { selectedIds, progressSelectId, hintId, excludeTaskId, ...options });
     return `<div id="${this.taskSamplePickerDomId(inputName)}" class="task-sample-picker" data-task-sample-picker="${Utils.esc(inputName)}">
       ${this.taskSamplePickerContentHtml(state)}
     </div>`;
@@ -86,27 +91,79 @@ app.registerModule("workspace.samplePicker", {
     const state = this.taskSamplePickerState(inputName);
     if (!state) return false;
     if (overrides.page) state.page = Math.max(1, Number(overrides.page) || 1);
+    const loadSeq = (state.loadSeq || 0) + 1;
+    state.loadSeq = loadSeq;
     state.loading = true;
     state.error = "";
     this.renderTaskSamplePicker(inputName);
     try {
       const result = await this.fetchTaskSampleCandidates(this.taskSamplePickerFetchParams(state, overrides));
+      if (state.loadSeq !== loadSeq) return false;
       state.loading = false;
       state.error = "";
       state.page = result.page || state.page || 1;
       state.pageSize = result.pageSize || state.pageSize || 50;
       state.categories = result.categories || [];
       state.lastResult = result;
+      this.cacheTaskSamplePickerResult(state, result);
       this.mergeTaskSampleCandidateResult(result);
       this.renderTaskSamplePicker(inputName);
       return true;
     } catch (e) {
+      if (state.loadSeq !== loadSeq) return false;
       console.error("任务样机候选加载失败：", e);
       state.loading = false;
       state.error = e.message || String(e);
       this.renderTaskSamplePicker(inputName);
       return false;
     }
+  },
+
+  cacheTaskSamplePickerResult(state, result = {}) {
+    if (!state) return;
+    if (!(state.sampleCache instanceof Map)) state.sampleCache = new Map();
+    if (!(state.selectedSampleCache instanceof Map)) state.selectedSampleCache = new Map();
+    const remember = (sample, selected = false) => {
+      const id = String(sample?.id || "");
+      if (!id) return;
+      const cached = state.sampleCache.get(id) || {};
+      const merged = { ...cached, ...sample };
+      state.sampleCache.set(id, merged);
+      if (selected || state.selectedIds?.has?.(id)) {
+        const selectedCached = state.selectedSampleCache.get(id) || {};
+        state.selectedSampleCache.set(id, { ...selectedCached, ...merged });
+      }
+    };
+    (result.items || []).forEach(sample => remember(sample, false));
+    (result.selectedItems || []).forEach(sample => remember(sample, true));
+    (result.selectedMissingIds || []).forEach(id => {
+      const sid = String(id || "");
+      if (sid && !state.sampleCache.has(sid)) {
+        const fallback = { id: sid, _missing: true, status: "" };
+        state.sampleCache.set(sid, fallback);
+        state.selectedSampleCache.set(sid, fallback);
+      }
+    });
+  },
+
+  taskSamplePickerCandidateItems(state, result = {}) {
+    const selectedIds = state?.selectedIds instanceof Set ? state.selectedIds : new Set();
+    return (result.items || []).filter(sample => {
+      const id = String(sample?.id || "");
+      return id && !selectedIds.has(id);
+    });
+  },
+
+  taskSamplePickerCategoryLabel(state, result = {}) {
+    const categoryId = String(state?.categoryId || "");
+    if (!categoryId) return "全部样机池";
+    const categories = [
+      ...(state?.categories || []),
+      ...(result?.categories || []),
+      ...(typeof this.sampleCategoryRecords === "function" ? this.sampleCategoryRecords() : []),
+    ];
+    const category = categories.find(item => String(item?.id || "") === categoryId);
+    return String(category?.name || categoryId || "未知样机池").trim() || "未知样机池";
   },
 
   mergeTaskSampleCandidateResult(result = {}) {
@@ -151,16 +208,59 @@ app.registerModule("workspace.samplePicker", {
     });
   },
 
-  renderTaskSamplePicker(inputName) {
+  captureTaskSamplePickerScroll(el) {
+    if (!el) return null;
+    const snapshot = {
+      ancestors: [],
+      bodies: {},
+    };
+    let parent = el.parentElement;
+    while (parent && parent !== document.body && parent !== document.documentElement) {
+      const style = window.getComputedStyle?.(parent);
+      const overflowY = style?.overflowY || "";
+      if ((overflowY === "auto" || overflowY === "scroll") && parent.scrollHeight > parent.clientHeight) {
+        snapshot.ancestors.push({ el: parent, scrollTop: parent.scrollTop });
+      }
+      parent = parent.parentElement;
+    }
+    const selectedBody = el.querySelector(".task-sample-selected-group .dispatch-sample-body");
+    const candidateBody = el.querySelector(".task-sample-candidate-group .dispatch-sample-body");
+    if (selectedBody) snapshot.bodies.selected = selectedBody.scrollTop;
+    if (candidateBody) snapshot.bodies.candidate = candidateBody.scrollTop;
+    return snapshot;
+  },
+
+  restoreTaskSamplePickerScroll(el, snapshot) {
+    if (!el || !snapshot) return;
+    const apply = () => {
+      (snapshot.ancestors || []).forEach(item => {
+        if (item?.el) item.el.scrollTop = item.scrollTop || 0;
+      });
+      const bodyMap = {
+        selected: el.querySelector(".task-sample-selected-group .dispatch-sample-body"),
+        candidate: el.querySelector(".task-sample-candidate-group .dispatch-sample-body"),
+      };
+      Object.entries(snapshot.bodies || {}).forEach(([key, scrollTop]) => {
+        if (bodyMap[key]) bodyMap[key].scrollTop = scrollTop || 0;
+      });
+    };
+    apply();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
+    else if (typeof setTimeout === "function") setTimeout(apply, 0);
+  },
+
+  renderTaskSamplePicker(inputName, { preserveScroll = false } = {}) {
     const state = this.taskSamplePickerState(inputName);
     const el = document.getElementById?.(this.taskSamplePickerDomId(inputName));
     if (!state || !el) return;
+    const scrollSnapshot = preserveScroll ? this.captureTaskSamplePickerScroll(el) : null;
     this.replaceHtml(el, this.taskSamplePickerContentHtml(state));
     if (state.progressSelectId && state.hintId) {
       this.updateTaskSampleLimitUI(state.progressSelectId, inputName, state.hintId);
     } else {
       this.updateDispatchSamplePoolCounts(inputName);
     }
+    if (scrollSnapshot) this.restoreTaskSamplePickerScroll(el, scrollSnapshot);
   },
 
   taskSamplePickerContentHtml(state) {
@@ -185,11 +285,14 @@ app.registerModule("workspace.samplePicker", {
     const categoryId = this.taskSamplePickerControlId(state.inputName, "category");
     const statusId = this.taskSamplePickerControlId(state.inputName, "status");
     const selectedItems = this.taskSamplePickerSelectedItems(state);
+    const candidateItems = this.taskSamplePickerCandidateItems(state, result);
+    const candidateCategoryLabel = this.taskSamplePickerCategoryLabel(state, result);
+    const candidateTitle = `候选样机 - ${candidateCategoryLabel}`;
     const candidateHtml = state.loading
       ? `<div class="empty">正在加载候选样机...</div>`
       : state.error
         ? `<div class="empty">候选样机加载失败：${Utils.esc(state.error)} <button type="button" class="btn btn-sm btn-outline" data-app-action="task-sample-picker-page" data-id="${Utils.esc(state.inputName)}" data-value="${page}">重试</button></div>`
-        : (result.items || []).map(sample => this.taskSamplePickerSampleRowHtml(sample, state)).join("") || `<div class="empty">没有匹配的候选样机。</div>`;
+        : candidateItems.map(sample => this.taskSamplePickerSampleRowHtml(sample, state)).join("") || `<div class="empty">没有匹配的候选样机。</div>`;
     return `
       <div class="task-sample-picker-toolbar">
         <select id="${categoryId}" data-app-action="task-sample-picker-filter" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-field="categoryId">${categoryOptions}</select>
@@ -213,7 +316,7 @@ app.registerModule("workspace.samplePicker", {
       <div class="dispatch-sample-group task-sample-candidate-group" data-sample-input-name="${Utils.esc(state.inputName)}">
         <div class="dispatch-sample-head">
           <div class="dispatch-sample-title-wrap">
-            <div class="dispatch-sample-title">候选样机</div>
+            <div class="dispatch-sample-title task-sample-candidate-title" title="${Utils.esc(candidateTitle)}">候选样机 - <span class="task-sample-candidate-scope">${Utils.esc(candidateCategoryLabel)}</span></div>
             <span class="dispatch-selected-count" data-total="${total}">${page}/${totalPages}</span>
           </div>
           <div class="dispatch-sample-tools">
@@ -230,6 +333,16 @@ app.registerModule("workspace.samplePicker", {
   taskSamplePickerSelectedItems(state) {
     const result = state.lastResult || {};
     const byId = new Map();
+    if (state.sampleCache instanceof Map) {
+      state.sampleCache.forEach((sample, id) => {
+        if (id && sample) byId.set(String(id), sample);
+      });
+    }
+    if (state.selectedSampleCache instanceof Map) {
+      state.selectedSampleCache.forEach((sample, id) => {
+        if (id && sample) byId.set(String(id), sample);
+      });
+    }
     [...(result.selectedItems || []), ...(result.items || [])].forEach(sample => {
       const id = String(sample?.id || "");
       if (id) byId.set(id, sample);
@@ -240,21 +353,26 @@ app.registerModule("workspace.samplePicker", {
         if (id && !byId.has(id)) byId.set(id, { ...sample, categoryName: category.name || "" });
       });
     });
-    return [...state.selectedIds].map(id => byId.get(id)).filter(Boolean);
+    return [...state.selectedIds].map(id => byId.get(id) || { id, _missing: true, status: "" });
   },
 
   taskSamplePickerSampleRowHtml(sample, state, { selected = false } = {}) {
     const sid = String(sample?.id || "");
     const isSelected = selected || state.selectedIds.has(sid) || sample?.alreadySelected === true;
-    const status = this.normalizeSampleStatusValue(sample?.effectiveStatus || sample?.status);
-    const selectable = isSelected || sample?.selectable !== false;
-    const disabledReason = selectable ? "" : (sample?.disabledReason || "");
+    const status = sample?._missing ? "资料缺失" : this.normalizeSampleStatusValue(sample?.effectiveStatus || sample?.status);
+    const required = this.taskSamplePickerRequiredSampleCount(state.progressSelectId, state.inputName);
+    const blockedByLimit = !isSelected && required !== null && state.selectedIds.size >= required;
+    const selectable = isSelected || (!blockedByLimit && sample?.selectable !== false);
+    const disabledReason = blockedByLimit
+      ? `样机已选满：需 ${required} 台。`
+      : selectable ? "" : (sample?.disabledReason || "");
+    const missingReason = sample?._missing ? "样机资料未加载或已不存在，请取消后重新选择。" : "";
     const identity = this.taskSamplePickerIdentityText(sample);
     const stageName = String(sample?.sourceStageName || "").trim();
     const skuName = String(sample?.sourceSkuName || "").trim();
-    const stageSku = stageName && skuName ? `${Utils.esc(stageName)} · ${Utils.esc(skuName)}`
-      : stageName ? `${Utils.esc(stageName)} · 未配置`
-      : skuName ? `未配置 · ${Utils.esc(skuName)}`
+    const stageSku = stageName && skuName ? `${Utils.esc(stageName)}-${Utils.esc(skuName)}`
+      : stageName ? Utils.esc(stageName)
+      : skuName ? Utils.esc(skuName)
       : "未配置";
     const testedItems = typeof this.sampleTestedItemNames === "function" ? this.sampleTestedItemNames(sid) : [];
     const testedText = testedItems.length === 0
@@ -263,15 +381,15 @@ app.registerModule("workspace.samplePicker", {
         ? Utils.esc(testedItems.join("、"))
         : `${Utils.esc(testedItems.slice(0, 3).join("、"))} 等 ${testedItems.length} 项`;
     return `
-      <div class="dispatch-sample-row ${selectable ? "" : "is-disabled"}" data-app-action="task-sample-picker-row" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}" title="${Utils.esc(disabledReason)}">
+      <div class="dispatch-sample-row ${selectable ? "" : "is-disabled"} ${sample?._missing ? "task-sample-missing-row" : ""}" data-app-action="task-sample-picker-row" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}" title="${Utils.esc(disabledReason || missingReason)}">
         <div class="dispatch-sample-info">
           <div class="dispatch-sample-title-line">
             <span class="dispatch-sample-id" data-app-action="sample-readonly" data-id="${Utils.esc(sid)}" data-stop-propagation="1">${Utils.esc(identity)}</span>
             <label class="dispatch-sample-check"><input type="checkbox" name="${state.inputName}" value="${Utils.esc(sid)}" data-sample-pick="${state.inputName}" ${isSelected ? "checked" : ""} ${selectable ? "" : "disabled"} ${selectable ? `data-app-action="task-sample-picker-checkbox" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}"` : ""}></label>
           </div>
-          <span class="dispatch-sample-stage">${Utils.esc(sample?.categoryName || "")}${sample?.categoryName ? " · " : ""}阶段/方案：${stageSku}</span>
+          <span class="dispatch-sample-stage">${stageSku}</span>
           <span class="dispatch-sample-tested">已测：${testedText}</span>
-          ${disabledReason ? `<span class="dispatch-sample-tested task-sample-disabled-reason">${Utils.esc(disabledReason)}</span>` : ""}
+          ${disabledReason || missingReason ? `<span class="dispatch-sample-tested task-sample-disabled-reason">${Utils.esc(disabledReason || missingReason)}</span>` : ""}
         </div>
         <div class="dispatch-sample-status"><span class="badge ${this.sampleHasProblem(sample) ? 's-有故障' : 's-无故障'}">${this.sampleHasProblem(sample) ? '有故障' : '无故障'}</span><span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span></div>
       </div>`;
@@ -314,6 +432,24 @@ app.registerModule("workspace.samplePicker", {
     return { ok: true, required, count: sampleIds.length, msg: "" };
   },
 
+  taskSamplePickerLimitProgress(progressSelectId, inputName) {
+    const state = this.taskSamplePickerState(inputName);
+    const stage = this.currentStage();
+    const required = Utils.parsePositiveInt(state?.requiredSampleCount);
+    const progressId = String((progressSelectId ? document.getElementById?.(progressSelectId)?.value : "") || state?.progressId || "").trim();
+    let progress = (stage?.progress || []).find(item => String(item?.id || "") === progressId) || null;
+    if (!progress && required !== null) {
+      progress = { id: progressId, sampleSize: required };
+    }
+    return { stage, progress, required };
+  },
+
+  taskSamplePickerRequiredSampleCount(progressSelectId, inputName) {
+    const { stage, progress, required } = this.taskSamplePickerLimitProgress(progressSelectId, inputName);
+    if (required !== null) return required;
+    return this.getProgressRequiredSampleCount(stage, progress);
+  },
+
   setTaskSampleLimitHintContent(hint, text, countText) {
     if (!hint) return;
     hint.textContent = "";
@@ -326,13 +462,10 @@ app.registerModule("workspace.samplePicker", {
 
   updateTaskSampleLimitUI(progressSelectId, inputName, hintId) {
     this.updateDispatchSamplePoolCounts(inputName);
-    const s = this.currentStage();
-    const select = document.getElementById?.(progressSelectId);
     const hint = document.getElementById?.(hintId);
-    if (!s || !select || !hint) return;
-    const progress = s.progress.find(x => x.id === select.value);
+    if (!hint) return;
     const sampleIds = this.getSelectedTaskSampleIds(inputName);
-    const required = this.getProgressRequiredSampleCount(s, progress);
+    const required = this.taskSamplePickerRequiredSampleCount(progressSelectId, inputName);
     const isGlobalCompact = hint.classList.contains('sample-limit-global');
     hint.classList.remove('warn', 'bad', 'full');
     if (required === null) {
@@ -376,20 +509,29 @@ app.registerModule("workspace.samplePicker", {
   onTaskSampleCheckboxChange(progressSelectId, inputName, hintId, checkboxEl) {
     const state = this.taskSamplePickerState(inputName);
     if (state && checkboxEl?.value) {
-      if (checkboxEl.checked) state.selectedIds.add(String(checkboxEl.value));
-      else state.selectedIds.delete(String(checkboxEl.value));
+      const sid = String(checkboxEl.value);
+      if (checkboxEl.checked) {
+        state.selectedIds.add(sid);
+        if (!(state.selectedSampleCache instanceof Map)) state.selectedSampleCache = new Map();
+        const sample = this.taskSamplePickerSelectedItems({ ...state, selectedIds: new Set([sid]) })[0] || { id: sid, _missing: true, status: "" };
+        state.selectedSampleCache.set(sid, sample);
+      } else {
+        state.selectedIds.delete(sid);
+        if (state.selectedSampleCache instanceof Map) state.selectedSampleCache.delete(sid);
+      }
     }
-    const s = this.currentStage();
-    const progress = s?.progress?.find(x => x.id === document.getElementById?.(progressSelectId)?.value);
-    const required = this.getProgressRequiredSampleCount(s, progress);
+    const required = this.taskSamplePickerRequiredSampleCount(progressSelectId, inputName);
     let sampleIds = this.getSelectedTaskSampleIds(inputName);
     if (required !== null && sampleIds.length > required && checkboxEl?.checked) {
       checkboxEl.checked = false;
-      if (state && checkboxEl.value) state.selectedIds.delete(String(checkboxEl.value));
+      if (state && checkboxEl.value) {
+        state.selectedIds.delete(String(checkboxEl.value));
+        if (state.selectedSampleCache instanceof Map) state.selectedSampleCache.delete(String(checkboxEl.value));
+      }
       sampleIds = this.getSelectedTaskSampleIds(inputName);
     }
     if (state) {
-      this.renderTaskSamplePicker(inputName);
+      this.renderTaskSamplePicker(inputName, { preserveScroll: true });
       return;
     }
     const allCheckboxes = [...(document.querySelectorAll?.(`input[name='${inputName}']`) || [])];
@@ -406,10 +548,12 @@ app.registerModule("workspace.samplePicker", {
     this.updateTaskSampleLimitUI(progressSelectId, inputName, hintId);
   },
 
-  onTaskSampleRowClick(event, inputName, progressSelectId = "", hintId = "") {
+  onTaskSampleRowClick(event, inputName, progressSelectId = "", hintId = "", rowEl = null) {
     const target = event?.target;
     if (target?.closest?.("input, label, button, select, textarea, .dispatch-sample-id")) return;
-    const row = event?.currentTarget || target?.closest?.(".dispatch-sample-row");
+    const row = rowEl?.classList?.contains?.("dispatch-sample-row")
+      ? rowEl
+      : target?.closest?.(".dispatch-sample-row");
     const checkbox = row?.querySelector?.(`input[type="checkbox"][name="${inputName}"]`);
     if (!checkbox || checkbox.disabled) return;
     checkbox.checked = !checkbox.checked;
@@ -469,15 +613,23 @@ app.registerModule("workspace.samplePicker", {
     if (counter) counter.innerText = (kw || ex) ? `${visible} 台` : "";
   },
 
-  isTaskChangePayloadChanged(t, after) {
+  taskSampleIdListKey(sampleIds = []) {
+    const list = Array.isArray(sampleIds) ? sampleIds : [];
+    return [...new Set(list.map(id => String(id || "").trim()).filter(Boolean))].sort().join(",");
+  },
+
+  isTaskChangePayloadChanged(t, after = {}) {
     if (!t) return false;
     const norm = (v) => String(v || "").trim();
-    if (norm(t.owner) !== norm(after.owner)) return true;
-    if (norm(t.planStartDate || t.planDate || "") !== norm(after.planStartDate || "")) return true;
-    if (norm(t.planEndDate || t.endDate || "") !== norm(after.planEndDate || "")) return true;
-    const beforeIds = (t.sampleIds || []).slice().sort().join(",");
-    const afterIds = (after.sampleIds || []).slice().sort().join(",");
-    if (beforeIds !== afterIds) return true;
+    const hasOwn = (key) => Object.prototype.hasOwnProperty.call(after, key);
+    if (hasOwn("owner") && norm(t.owner) !== norm(after.owner)) return true;
+    if (hasOwn("planStartDate") && norm(t.planStartDate || t.planDate || "") !== norm(after.planStartDate || "")) return true;
+    if (hasOwn("planEndDate") && norm(t.planEndDate || t.endDate || "") !== norm(after.planEndDate || "")) return true;
+    if (hasOwn("sampleIds")) {
+      const beforeIds = this.taskSampleIdListKey(t.sampleIds || []);
+      const afterIds = this.taskSampleIdListKey(after.sampleIds || []);
+      if (beforeIds !== afterIds) return true;
+    }
     return false;
   },
 

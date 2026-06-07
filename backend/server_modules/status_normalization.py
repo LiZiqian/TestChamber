@@ -311,6 +311,9 @@ def normalize_task_payload(task: Any) -> Any:
     item["completed"] = flow in {"正常完成", "异常终止"}
     if item["completed"]:
         item["completionType"] = flow
+    if flow == "异常终止":
+        item["latestResult"] = "不通过"
+        item["result"] = "不通过"
     for key in ("latestResult", "result"):
         if key in item:
             normalized = normalize_task_result_value(item.get(key))
@@ -327,6 +330,9 @@ def normalize_task_payload(task: Any) -> Any:
     for upload in item.get("resultUploads") or []:
         if not isinstance(upload, dict):
             continue
+        if upload.get("finishTask") and normalize_task_flow_status(upload.get("finishType")) == "异常终止":
+            upload["finishType"] = "异常终止"
+            upload["result"] = "不通过"
         normalized = normalize_task_result_value(upload.get("result"))
         if normalized:
             upload["result"] = normalized

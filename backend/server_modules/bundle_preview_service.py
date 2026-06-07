@@ -89,6 +89,37 @@ def _find_sample(state: dict, sample_id: str) -> tuple[dict | None, dict | None]
     return None, None
 
 
+def _filename_segment(value: object, fallback: str = "-") -> str:
+    text = str(value or "").strip() or fallback
+    for char in '<>:"/\\|?*\r\n\t':
+        text = text.replace(char, "-")
+    text = "-".join(part for part in text.split() if part)
+    text = text.strip(" .-_") or fallback
+    return text[:80]
+
+
+def _sample_archive_display_code(sample: dict) -> str:
+    sn = str(sample.get("sn") or "").strip()
+    imei = str(sample.get("imei") or "").strip()
+    board_sn = str(sample.get("boardSn") or "").strip()
+    sample_no = str(sample.get("sampleNo") or "").strip()
+    if sn:
+        return f"SN-{sn[-8:]}"
+    if imei:
+        return f"IMEI-{imei[-8:]}"
+    if board_sn:
+        return f"主板SN-{board_sn[-8:]}"
+    return sample_no or "未录入身份"
+
+
+def _sample_archive_filename(category: dict | None, sample: dict, sample_id: str, exported_at: str) -> str:
+    category_name = _filename_segment((category or {}).get("name"), "未命名样机池")
+    display_code = _filename_segment(_sample_archive_display_code(sample), "未录入身份")
+    stable_id = _filename_segment(sample.get("id") or sample_id, "sample-id")
+    ts = exported_at.replace("-", "").replace(":", "")[:15]
+    return f"{category_name}-{display_code}-{stable_id}-{ts}.zip"
+
+
 def _sample_archive_history(ctx: BundlePreviewContext, sample_id: str) -> list[dict]:
     history: list[dict] = []
     with ctx.connect_db() as conn:
@@ -289,7 +320,7 @@ def build_sample_archive_file(ctx: BundlePreviewContext, sample_id: str) -> tupl
     try:
         with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
             write_export_bundle_zip(ctx, zf, export_data, package, payloads)
-        archive_name = f"sample_archive_{sample_id}_{ctx.now_iso().replace('-', '').replace(':', '')[:15]}.zip"
+        archive_name = _sample_archive_filename(category, sample, sample_id, exported_at)
         return tmp_path, archive_name
     except Exception:
         tmp_path.unlink(missing_ok=True)

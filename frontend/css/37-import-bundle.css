@@ -146,6 +146,123 @@
   color: #c00;
 }
 
+.sample-archive-batch-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.sample-archive-batch-row {
+  display: grid;
+  grid-template-columns: 28px 28px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+}
+
+.sample-archive-batch-row-valid,
+.sample-archive-batch-row-imported {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.sample-archive-batch-row-invalid,
+.sample-archive-batch-row-failed {
+  border-color: #fecaca;
+  background: #fff1f2;
+}
+
+.sample-archive-batch-row-checking,
+.sample-archive-batch-row-importing {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.sample-archive-batch-check {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 24px;
+}
+
+.sample-archive-batch-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.sample-archive-batch-status {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #64748b;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.sample-archive-batch-row-valid .sample-archive-batch-status,
+.sample-archive-batch-row-imported .sample-archive-batch-status {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.sample-archive-batch-row-invalid .sample-archive-batch-status,
+.sample-archive-batch-row-failed .sample-archive-batch-status {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.sample-archive-batch-row-checking .sample-archive-batch-status,
+.sample-archive-batch-row-importing .sample-archive-batch-status {
+  background: #dbeafe;
+  color: var(--primary);
+}
+
+.sample-archive-batch-main {
+  min-width: 0;
+}
+
+.sample-archive-batch-row b {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sample-archive-batch-detail {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sample-archive-batch-row-valid .sample-archive-batch-detail,
+.sample-archive-batch-row-imported .sample-archive-batch-detail {
+  color: #15803d;
+}
+
+.sample-archive-batch-row-invalid .sample-archive-batch-detail,
+.sample-archive-batch-row-failed .sample-archive-batch-detail {
+  color: #b91c1c;
+}
+
+.sample-archive-batch-size {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
 .import-no-conflicts {
   color: #4caf50;
   font-size: 13px;

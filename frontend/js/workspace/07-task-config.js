@@ -206,12 +206,13 @@ app.registerModule("workspace.taskConfig", {
       const operator = t?.owner || "管理员";
       const sampleIds = this.getSelectedTaskSampleIds("assignSamplePick");
       const check = this.validateTaskSampleSelection(progress, sampleIds, "样机分配");
-      if (t && !this.isTaskChangePayloadChanged(t, { owner: t.owner, planStartDate: t.planStartDate || t.planDate || "", planEndDate: t.planEndDate || "", sampleIds })) {
+      if (!check.ok) { alert(check.msg); return true; }
+      const oldSampleIds = [...(t?.sampleIds || [])];
+      const sampleChanged = !t || this.taskSampleIdListKey(oldSampleIds) !== this.taskSampleIdListKey(sampleIds);
+      if (t && !sampleChanged) {
         Utils.toast("未检测到变更");
         return false;
       }
-      if (!check.ok) { alert(check.msg); return true; }
-      const oldSampleIds = [...(t?.sampleIds || [])];
       const wasNew = !t;
       t = t || this.ensurePlanTask(s, progress);
       const removed = oldSampleIds.filter(id => !sampleIds.includes(id));
@@ -249,7 +250,7 @@ app.registerModule("workspace.taskConfig", {
     if (!p || !s || !progress) return;
     if (t && this.taskFlowStatus(t) !== "待下发") { alert("只有未下发任务可以修改计划时间。"); return; }
     const planStartDate = t?.planStartDate || t?.planDate || "";
-    const planEndDate = t?.planEndDate || "";
+    const planEndDate = t?.planEndDate || t?.endDate || "";
     // P1.4：项目还没人员时，直接给个红色提示和快速新增入口
     const activeMembers = this.projectActiveMembers(p);
     const memberMissingHint = activeMembers.length
@@ -401,7 +402,7 @@ app.registerModule("workspace.taskConfig", {
   taskPlanConfigPanelHtml(project, stage, progress, task) {
     const t = task;
     const planStartDate = t?.planStartDate || t?.planDate || "";
-    const planEndDate = t?.planEndDate || "";
+    const planEndDate = t?.planEndDate || t?.endDate || "";
     const activeMembers = this.projectActiveMembers(project);
     const memberMissingHint = activeMembers.length
       ? ""
@@ -491,9 +492,9 @@ app.registerModule("workspace.taskConfig", {
     // 检测各维度变更
     const planChanged = (t.owner || "") !== owner
       || (t.planStartDate || t.planDate || "") !== start
-      || (t.planEndDate || "") !== end;
+      || (t.planEndDate || t.endDate || "") !== end;
     const oldSampleIds = [...(t.sampleIds || [])];
-    const sampleChanged = oldSampleIds.slice().sort().join(",") !== sampleIds.slice().sort().join(",");
+    const sampleChanged = this.taskSampleIdListKey(oldSampleIds) !== this.taskSampleIdListKey(sampleIds);
     // 施加 plan 变更
     if (planChanged) {
       t.owner = owner;

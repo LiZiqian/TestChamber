@@ -32,6 +32,9 @@ app.registerModule("app.modal", {
       this._modalStack.push({
         title: document.getElementById("modalTitle").innerText,
         bodyNodes: this.cloneChildNodes(modalBody),
+        footerExtraNodes: Array.from(document.querySelectorAll(".modal-footer > .modal-extra-action"))
+          .map(node => node?.cloneNode ? node.cloneNode(true) : null)
+          .filter(Boolean),
         onOk: this._currentModalOnOk,
         okText: document.getElementById("modalOk").innerText,
         okClass: document.getElementById("modalOk").className,
@@ -56,8 +59,17 @@ app.registerModule("app.modal", {
     if (options.bodyNodes) this.replaceWithClonedNodes(modalBody, options.bodyNodes);
     else this.replaceHtml(modalBody, bodyHtml);
     document.querySelectorAll(".modal-extra-action").forEach(btn => btn.remove());
+    document.querySelectorAll(".modal-footer > #sampleArchiveExportBtn").forEach(btn => btn.remove());
+    const footer = document.querySelector(".modal-footer");
+    if (footer && options.footerExtraNodes) {
+      const footerExtraNodes = (options.footerExtraNodes || [])
+        .map(node => node?.cloneNode ? node.cloneNode(true) : node)
+        .filter(Boolean);
+      footer.prepend(...footerExtraNodes);
+    }
     const cancel = this.resetEventTarget(document.getElementById("modalCancel"));
     if (cancel) {
+      cancel.disabled = false;
       cancel.style.display = options.hideCancel ? "none" : "";
       cancel.innerText = options.cancelText || "取消";
       cancel.className = "btn btn-outline";
@@ -65,6 +77,7 @@ app.registerModule("app.modal", {
     }
     const ok = this.resetEventTarget(document.getElementById("modalOk"));
     if (!ok) { console.error("modalOk not found in DOM"); return; }
+    ok.disabled = false;
     ok.className = options.okClass || "btn";
     ok.innerText = okText;
     ok.addEventListener("click", async () => {
@@ -114,6 +127,8 @@ app.registerModule("app.modal", {
     const boundCancel = this.resetEventTarget(cancel);
     const boundOk = this.resetEventTarget(ok);
     if (!boundCancel || !boundOk) return;
+    boundCancel.disabled = false;
+    boundOk.disabled = false;
     boundCancel.style.display = cancel.style.display;
     boundCancel.innerText = options.cancelText || "取消";
     boundCancel.addEventListener("click", () => this.closeConfirm());
@@ -163,7 +178,8 @@ app.registerModule("app.modal", {
         cancelText: prev.cancelText,
         headerHint: prev.headerHint || "",
         className: prev.className || "",
-        bodyNodes: prev.bodyNodes || []
+        bodyNodes: prev.bodyNodes || [],
+        footerExtraNodes: prev.footerExtraNodes || []
       });
       return;
     }

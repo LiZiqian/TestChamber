@@ -52,6 +52,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.task-result-sample-code b[data-app-action="sample-readonly"] {
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .task-result-sample-code span {
   color: var(--muted);
   font-size: 12px;

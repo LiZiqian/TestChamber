@@ -43,11 +43,15 @@ def load_task_rows_for_mutation(conn: sqlite3.Connection, task_ids, *, row_limit
         ids,
     ).fetchall()
     logs_by_task = task_queries.load_task_logs_for(conn, ids)
-    by_id: dict[str, dict] = {}
+    tasks: list[dict] = []
     for row in rows:
         task = task_queries.task_from_db_row(row)
         task["logs"] = logs_by_task.get(str(row["id"] or ""), [])
-        by_id[str(row["id"] or "")] = task
+        tasks.append(task)
+    task_queries.attach_task_sample_snapshots(conn, tasks)
+    by_id: dict[str, dict] = {}
+    for task in tasks:
+        by_id[str(task.get("id") or "")] = task
     return [by_id[item] for item in ids if item in by_id], truncated
 
 

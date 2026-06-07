@@ -24,14 +24,15 @@
 .sample-card.status-analysis:before,
 .sample-card.status-unknown:before { background: var(--status-sample-unknown-bar) }
 
-/* 垃圾桶 — 永远右下角红色 */
+/* 垃圾桶基础样式 */
 .sample-card-destroy-btn {
   position: absolute;
   bottom: 8px; right: 10px;
   background: none; border: none;
   font-size: 18px; font-weight: 900;
   color: #dc2626; cursor: pointer;
-  opacity: 0.75; transition: opacity .15s;
+  opacity: 0.75;
+  transition: opacity .15s;
   padding: 2px; line-height: 1;
 }
 .sample-card-destroy-btn:hover { opacity: 1 }
@@ -74,6 +75,13 @@
   top: 24px;
   bottom: auto;
   z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+}
+.sample-category-grid > .sample-card:hover .sample-card-destroy-btn,
+.sample-category-grid > .sample-card:focus-within .sample-card-destroy-btn {
+  opacity: 1;
+  pointer-events: auto;
 }
 .sample-pool-card-header {
   display: flex;
@@ -161,7 +169,7 @@
 }
 .sample-pool-card-total b {
   color: #0f172a;
-  font-size: 44px;
+  font-size: 30px;
   font-weight: 900;
   line-height: .9;
 }
@@ -177,6 +185,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  align-self: end;
   gap: 4px;
   min-width: 0;
 }
@@ -189,7 +198,7 @@
   box-sizing: border-box;
   max-width: 100%;
   padding: 2px 7px;
-  border: 1px solid currentColor;
+  border: 1px solid transparent;
   border-radius: 6px;
   font-size: 13px;
   font-weight: 800;
@@ -202,15 +211,12 @@
   text-align: right;
 }
 .sample-pool-quality-chip.ok {
-  background: var(--status-sample-quality-ok-bg);
   color: var(--status-sample-quality-ok-text);
 }
 .sample-pool-quality-chip.fault {
-  background: var(--status-sample-quality-fault-bg);
   color: var(--status-sample-quality-fault-text);
 }
 .sample-pool-quality-chip.reassembly {
-  background: var(--status-sample-reassembly-reassembled-bg);
   color: var(--status-sample-reassembly-reassembled-text);
 }
 .sample-pool-status-list {
@@ -218,6 +224,7 @@
   grid-row: 2;
   display: grid;
   gap: 4px;
+  align-self: end;
   justify-self: start;
   width: max-content;
   max-width: 100%;
@@ -271,14 +278,15 @@
 
 /* ---- Individual Sample Cards (inside a pool) ---- */
 .sample-pool-grid {
-  grid-template-columns: repeat(auto-fill, 240px);
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   align-items: stretch;
-  justify-content: start;
-  gap: 12px;
+  justify-items: stretch;
+  justify-content: stretch;
+  gap: 11px;
 }
 @media (max-width: 1100px) {
   .sample-pool-grid {
-    grid-template-columns: repeat(auto-fill, 240px);
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   }
 }
 .sample-pool-grid > .sample-card {
@@ -457,7 +465,13 @@
   justify-content: center;
   color: #ef4444;
   font-size: 14px;
-  opacity: .78;
+  opacity: 0;
+  pointer-events: none;
+}
+.sample-pool-grid > .sample-card:hover .sample-card-destroy-btn,
+.sample-pool-grid > .sample-card:focus-within .sample-card-destroy-btn {
+  opacity: 1;
+  pointer-events: auto;
 }
 @media (max-width: 520px) {
   .sample-pool-grid {
@@ -547,12 +561,20 @@
 /* .add-card sizing overrides per context are handled inline or via grid */
 .sample-pool-toolbar {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: 10px 14px;
-  padding: 14px 16px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 12px 16px;
+  padding: 14px 16px 16px;
+  --sample-search-fr: 2.35fr;
+  --sample-filter-status-fr: 1.08fr;
+  --sample-filter-result-fr: 1fr;
+  --sample-filter-reassembly-fr: .98fr;
+  --sample-filter-owner-fr: 1.02fr;
+  --sample-filter-borrower-fr: 1.02fr;
 }
 .sample-pool-toolbar-title {
+  grid-column: 1;
+  grid-row: 1;
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
@@ -570,54 +592,95 @@
   white-space: nowrap;
 }
 .sample-pool-toolbar-filters {
-  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns:
+    minmax(240px, var(--sample-search-fr))
+    minmax(132px, var(--sample-filter-status-fr))
+    minmax(132px, var(--sample-filter-result-fr))
+    minmax(132px, var(--sample-filter-reassembly-fr))
+    minmax(132px, var(--sample-filter-owner-fr))
+    minmax(132px, var(--sample-filter-borrower-fr))
+    68px
+    max-content;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 10px 12px;
   min-width: 0;
+  border-top: 1px solid #d1d5db;
+  padding-top: 12px;
 }
 .sample-pool-toolbar-filters input,
 .sample-pool-toolbar-filters select {
-  height: 34px;
-  padding: 6px 9px;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 5px 9px;
   font-size: 12px;
 }
 .sample-pool-search {
-  flex: 1 1 220px;
-  min-width: 180px;
-  max-width: 280px;
+  min-width: 0;
 }
-.sample-pool-filter-status { flex: 0 0 150px }
-.sample-pool-filter-result { flex: 0 0 130px }
-.sample-pool-filter-reassembly { flex: 0 0 130px }
-.sample-pool-filter-person { flex: 0 0 145px }
+.sample-pool-filter-status,
+.sample-pool-filter-result,
+.sample-pool-filter-reassembly,
+.sample-pool-filter-person {
+  min-width: 0;
+}
 .sample-pool-clear-btn {
-  height: 34px;
+  width: 68px;
+  height: 32px;
+  padding: 5px 8px;
   white-space: nowrap;
+  justify-self: stretch;
 }
 .sample-pool-count {
   white-space: nowrap;
+  justify-self: start;
 }
 .sample-pool-toolbar-actions {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  align-self: center;
+  gap: 7px;
   flex-wrap: nowrap;
 }
 .sample-pool-main-btn {
-  height: 34px;
-  padding: 7px 12px;
-  font-size: 13px;
+  height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
 }
+.sample-add-archive-import-btn {
+  min-width: 128px;
+  height: 38px;
+  justify-content: center;
+  font-weight: 800;
+}
 @media (max-width: 1280px) {
   .sample-pool-toolbar {
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: 1fr;
   }
   .sample-pool-toolbar-actions {
-    grid-column: 2;
+    grid-column: 1;
+    grid-row: 2;
     justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .sample-pool-toolbar-filters {
+    grid-row: 3;
+    grid-template-columns:
+      minmax(220px, 1.7fr)
+      minmax(132px, 1fr)
+      minmax(132px, 1fr)
+      minmax(132px, 1fr)
+      68px;
+  }
+  .sample-pool-count {
+    grid-column: 1 / -1;
   }
 }
 @media (max-width: 900px) {
@@ -625,9 +688,17 @@
     grid-template-columns: 1fr;
   }
   .sample-pool-toolbar-actions {
-    grid-column: auto;
+    grid-column: 1;
+    grid-row: 2;
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+  .sample-pool-toolbar-filters {
+    grid-row: 3;
+    grid-template-columns: 1fr;
+  }
+  .sample-pool-clear-btn {
+    justify-self: start;
   }
 }
 .detail-return-btn {
@@ -732,6 +803,18 @@
   color: #fff;
   font-weight: 800;
   box-shadow: 0 4px 12px rgba(11, 116, 222, .22);
+}
+.sample-archive-nav .sample-archive-export-nav {
+  margin-top: auto;
+  border-color: #bfdbfe;
+  background: #fff;
+  color: var(--primary);
+  text-align: center;
+}
+.sample-archive-nav .sample-archive-export-nav:hover {
+  border-color: var(--primary);
+  background: #eff6ff;
+  color: var(--primary);
 }
 #sampleArchiveFooterHint {
   color: #94a3b8;

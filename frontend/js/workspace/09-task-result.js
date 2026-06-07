@@ -28,6 +28,44 @@ app.registerModule("workspace.taskResult", {
     ).join("");
   },
 
+  normalizeTaskResultFinishPayload(payload = {}) {
+    const finishType = payload.finishType === "异常终止" ? "异常终止" : "正常完成";
+    const result = finishType === "异常终止"
+      ? "不通过"
+      : this.normalizeTaskResultValue(payload.result || "");
+    return { ...payload, result, finishType };
+  },
+
+  syncTaskResultFinishType(selectEl = null) {
+    const finishTypeEl = selectEl || document.getElementById("taskFinishType");
+    const resultEl = document.getElementById("taskResultValue");
+    if (!finishTypeEl || !resultEl) return;
+    const previousResult = resultEl.value;
+    if (finishTypeEl.value === "异常终止") {
+      if (resultEl.value !== "不通过") {
+        resultEl.value = "不通过";
+        if (selectEl && previousResult) Utils.toast("未完成计划、异常结束时，结果已自动设为不通过。");
+      }
+      resultEl.dataset.forcedByFinishType = "1";
+      resultEl.title = "未完成计划、异常结束时，结果固定为不通过";
+    } else {
+      delete resultEl.dataset.forcedByFinishType;
+      resultEl.title = "";
+    }
+    this.clearTaskResultValidationMarks?.();
+    this.updateSelectPlaceholderState?.(resultEl.closest(".task-result-modal") || document.getElementById("modalBody"));
+  },
+
+  onTaskResultValueChange(selectEl) {
+    const finishType = document.getElementById("taskFinishType")?.value || "";
+    if (finishType === "异常终止" && selectEl?.value !== "不通过") {
+      selectEl.value = "不通过";
+      Utils.toast("未完成计划、异常结束时，结果固定为不通过。");
+    }
+    this.clearTaskResultValidationMarks?.();
+    this.updateSelectPlaceholderState?.(selectEl?.closest?.(".task-result-modal") || document.getElementById("modalBody"));
+  },
+
   onTaskResultDestinationChange(selectEl) {
     const row = selectEl.closest(".task-result-sample-row");
     if (!row) return;
@@ -84,6 +122,7 @@ app.registerModule("workspace.taskResult", {
 
   recordTaskRemovedSamples(task, sampleIds = [], ctx = {}) {
     if (!task || !sampleIds.length) return;
+    this.ensureTaskSampleSnapshots?.(task, sampleIds, { capturedAt: ctx.removedAt || Utils.now(), destroyedAt: ctx.destroyedAt || "" });
     const records = this.ensureTaskRemovedSampleRecords(task);
     const removedAt = ctx.removedAt || Utils.now();
     sampleIds.forEach(sampleId => {
@@ -195,13 +234,17 @@ app.registerModule("workspace.taskResult", {
       const removedInfo = entry.state === "removed"
         ? `<span class="task-result-sample-state removed">退出测试</span><span>退出时间：${Utils.esc(entry.removedAt || "-")}</span>${entry.reason ? `<span>退出原因：${Utils.esc(entry.reason)}</span>` : ""}`
         : `<span class="task-result-sample-state active">当前测试样机</span>`;
+      const archiveName = this.taskSampleArchiveName(id, snapshot);
+      const sampleCodeHtml = id && !snapshot?.destroyedAt
+        ? `<b data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情">${Utils.esc(archiveName)}</b>`
+        : `<b>${Utils.esc(archiveName)}</b>`;
       // 项目位置列表（供去向位置 datalist 使用）
       const p = this.currentProject();
       const locationOptions = (p?.locations || []).map(loc => `<option value="${Utils.esc(loc)}">`).join("");
       return `<div class="task-result-sample-row ${entry.state === "removed" ? "is-removed" : ""}" data-sid="${Utils.esc(id)}" data-sample-state="${Utils.esc(entry.state)}">
         <div class="task-result-sample-index">${idx + 1}</div>
         <div class="task-result-sample-code">
-          <b>${Utils.esc(this.taskSampleArchiveName(id, snapshot))}</b>
+          ${sampleCodeHtml}
           ${removedInfo}
         </div>
         <div class="task-result-route-grid">
@@ -379,10 +422,11 @@ app.registerModule("workspace.taskResult", {
       }));
       return { sid, state, fault, destination, destLocation, accountOwner, receiver, problem, problemRecords, photos };
     });
-    return { result, user, resultDate, finishType, samples };
+    return this.normalizeTaskResultFinishPayload({ result, user, resultDate, finishType, samples });
   },
 
   validateTaskResultPayload(payload, finishTask = false) {
+    payload = this.normalizeTaskResultFinishPayload(payload);
     if (!payload.result) return "请选择通过 / 不通过。";
     if (!payload.user) return "请选择操作人。请先在项目人员配置中新增人员。";
     if (finishTask && payload.finishType === "异常终止" && payload.result !== "不通过") {
@@ -704,6 +748,7 @@ app.registerModule("workspace.taskResult", {
     const error = this.validateTaskResultPayload(payload, finishTask);
     if (error) {
       this.markTaskResultValidation(payload, finishTask);
+      Utils.toast(error);
       return true;
     }
     const finishKey = String(taskId || "");
@@ -742,10 +787,13 @@ app.registerModule("workspace.taskResult", {
 
 
   // 上传结果（完成前后均可）
-  uploadResult(projectId, stageId, taskId) {
+  async uploadResult(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!t) return;
     if (this.taskFlowStatus(t) === "待下发") { alert("任务尚未启动。"); return; }
+    const entries = this.taskResultSampleEntries(t);
+    const loadingSamples = this.ensureTaskReferenceSamplesLoaded?.(t);
+    if (loadingSamples?.then) await loadingSamples;
     const addOnly = this.isTaskCompleted(t);
     const draft = addOnly ? null : (t.resultDraft || {});
     const resultValue = this.normalizeTaskResultValue(draft?.result || "");
@@ -769,12 +817,12 @@ app.registerModule("workspace.taskResult", {
             </div>
           </div>
           <div class="task-result-form-grid">
-            <div class="form-group"><label class="req">结果</label><select id="taskResultValue"><option value="">请选择通过 / 不通过</option>${resultOptions}</select></div>
+            <div class="form-group"><label class="req">结果</label><select id="taskResultValue" data-app-action="task-result-value" data-app-events="change"><option value="">请选择通过 / 不通过</option>${resultOptions}</select></div>
             <div class="form-group"><label class="req">操作人</label>${this.projectMemberSelectHtml("taskResultUser", draft?.user || "", "请选择操作人")}</div>
             ${addOnly
               ? `<div class="form-group"><label>结果日期</label><input type="date" id="taskResultDate" value="${Utils.today()}"><input type="hidden" id="taskFinishType" value="正常完成"></div>`
               : `<div class="form-group"><label>结果日期</label><input type="date" id="taskResultDate" value="${Utils.esc(resultDate)}"></div>
-                <div class="form-group"><label>结束任务方式</label><select id="taskFinishType" class="hint-select"><option value="正常完成" ${finishType === "正常完成" ? "selected" : ""}>完成计划，正常结束</option><option value="异常终止" ${finishType === "异常终止" ? "selected" : ""}>未完成计划，异常结束</option></select></div>`}
+                <div class="form-group"><label>结束任务方式</label><select id="taskFinishType" class="hint-select" data-app-action="task-result-finish-type" data-app-events="change"><option value="正常完成" ${finishType === "正常完成" ? "selected" : ""}>完成计划，正常结束</option><option value="异常终止" ${finishType === "异常终止" ? "selected" : ""}>未完成计划，异常结束</option></select></div>`}
           </div>
         </section>
         <section class="task-result-scroll-panel">
@@ -794,6 +842,7 @@ app.registerModule("workspace.taskResult", {
         : `任务：${t.testItem || "-"}；可多次上传。本次新增失效会追加到样机档案的问题表中，临时变更退出过的样机也会保留在这里录入。`
     });
     document.querySelectorAll(".task-result-sample-row").forEach(row => this.renderTaskResultPhotoList(row));
+    this.syncTaskResultFinishType();
 
     // 记录弹窗打开时的基线快照，用于保存时判断是否有变更
     this._taskResultBaselineTaskId = taskId;

@@ -2,25 +2,25 @@
    数字治理平台 V7 样式表 — 总入口，@import 所有模块
    ======================================== */
 
-@import '00-vars.css';
+@import '00-vars.css?v=__APP_VERSION__';
 @import '03-status-colors.css?v=__APP_VERSION__';
 @import '01-layout.css?v=__APP_VERSION__';
-@import '02-components.css';
+@import '02-components.css?v=__APP_VERSION__';
 @import '20-samples.css?v=__APP_VERSION__';
-@import '21-sample-photos.css';
+@import '21-sample-photos.css?v=__APP_VERSION__';
 @import '22-sample-archive.css?v=__APP_VERSION__';
-@import '30-workspace-home.css';
-@import '30-workspace-members.css';
+@import '30-workspace-home.css?v=__APP_VERSION__';
+@import '30-workspace-members.css?v=__APP_VERSION__';
 @import '30-workspace-sections.css?v=__APP_VERSION__';
 @import '31-stage-strategy.css?v=__APP_VERSION__';
 @import '32-task-flow.css?v=__APP_VERSION__';
-@import '32-task-issue-record.css';
+@import '32-task-issue-record.css?v=__APP_VERSION__';
 @import '32-task-flow-actions.css?v=__APP_VERSION__';
 @import '33-task-config-modal.css?v=__APP_VERSION__';
 @import '34-sample-picker.css?v=__APP_VERSION__';
-@import '35-task-result.css';
-@import '35-task-result-modal.css';
+@import '35-task-result.css?v=__APP_VERSION__';
+@import '35-task-result-modal.css?v=__APP_VERSION__';
 @import '35-task-sample-list.css?v=__APP_VERSION__';
-@import '36-task-log.css';
-@import '37-import-bundle.css';
-@import '90-responsive.css';
+@import '36-task-log.css?v=__APP_VERSION__';
+@import '37-import-bundle.css?v=__APP_VERSION__';
+@import '90-responsive.css?v=__APP_VERSION__';

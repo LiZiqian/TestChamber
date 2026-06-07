@@ -6,10 +6,16 @@ import re
 import shutil
 import traceback
 import uuid
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
 VERSION_TEMPLATE_TOKEN = "__APP_VERSION__"
+
+
+def _content_disposition_attachment(filename: str) -> str:
+    raw = str(filename or "download.zip").replace("\r", "").replace("\n", "")
+    fallback = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._") or "download.zip"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(raw, safe='')}"
 
 
 def _send_versioned_text(handler, ctx, target, content_type: str, *, cache: str) -> None:
@@ -58,7 +64,7 @@ def handle_get(handler, ctx) -> None:
             size = tmp_path.stat().st_size
             handler.send_response(200)
             handler.send_header("Content-Type", "application/zip")
-            handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            handler.send_header("Content-Disposition", _content_disposition_attachment(filename))
             handler.send_header("Content-Length", str(size))
             handler.send_header("Cache-Control", "no-cache")
             handler.end_headers()
@@ -80,7 +86,7 @@ def handle_get(handler, ctx) -> None:
             size = tmp_path.stat().st_size
             handler.send_response(200)
             handler.send_header("Content-Type", "application/zip")
-            handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            handler.send_header("Content-Disposition", _content_disposition_attachment(filename))
             handler.send_header("Content-Length", str(size))
             handler.send_header("Cache-Control", "no-cache")
             handler.end_headers()

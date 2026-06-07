@@ -29,6 +29,7 @@ app.registerModule("samples.detail", {
           <button type="button" data-sample-archive-tab="photos" data-app-action="sample-archive-tab" data-tab="photos">图片数据</button>
           <button type="button" data-sample-archive-tab="ct" data-app-action="sample-archive-tab" data-tab="ct">CT三维数据</button>
           <button type="button" data-sample-archive-tab="other" data-app-action="sample-archive-tab" data-tab="other">其他</button>
+          <button type="button" class="sample-archive-export-nav" id="sampleArchiveExportBtn" data-app-action="sample-archive-export" data-id="${Utils.esc(sampleId)}">导出样机档案</button>
         </aside>
         <div class="sample-archive-content">
           <section class="sample-archive-panel active" data-sample-archive-panel="info">
@@ -164,7 +165,7 @@ app.registerModule("samples.detail", {
       }
       Utils.toast("样机详情已保存");
       return false;
-    }, readonly ? "关闭" : "确认", { hideCancel: readonly, headerHint: readonly ? "只读查看，不能编辑" : "" });
+    }, readonly ? (options.readonlyOkText || "关闭") : "确认", { hideCancel: readonly, headerHint: readonly ? "只读查看，不能编辑" : "" });
     // 在 footer 最左边注入 tab 说明文字
     const footer = document.querySelector(".modal-footer");
     if (footer && !document.getElementById("sampleArchiveFooterHint")) {
@@ -173,17 +174,6 @@ app.registerModule("samples.detail", {
       hint.id = "sampleArchiveFooterHint";
       hint.textContent = "查看与编辑样机的基本档案，包括身份标识、当前状态、存放位置、人员归属及初检问题记录。";
       footer.insertBefore(hint, footer.firstChild);
-    }
-    if (footer && !document.getElementById("sampleArchiveExportBtn")) {
-      const exportBtn = document.createElement("button");
-      exportBtn.type = "button";
-      exportBtn.className = "btn btn-outline";
-      exportBtn.id = "sampleArchiveExportBtn";
-      exportBtn.dataset.appAction = "sample-archive-export";
-      exportBtn.dataset.id = sampleId;
-      exportBtn.textContent = "导出样机档案";
-      const okBtn = document.getElementById("modalOk");
-      footer.insertBefore(exportBtn, okBtn || footer.lastChild);
     }
     document.querySelector(".modal")?.classList.add("sample-archive-modal");
     if (!hadLocalUnsavedChanges) this.markDataSynced?.();

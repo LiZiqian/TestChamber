@@ -70,13 +70,16 @@ def load_project_library(conn: sqlite3.Connection) -> list[dict]:
         """
     ).fetchall()
     logs_by_task = task_queries.load_task_logs_for(conn, [str(row["id"]) for row in task_rows])
+    loaded_tasks: list[dict] = []
     for row in task_rows:
         stage = stage_map.get(row["stage_id"])
         if not stage:
             continue
         task = task_queries.task_from_db_row(row)
         task["logs"] = logs_by_task.get(row["id"], [])
+        loaded_tasks.append(task)
         stage.setdefault("tasks", []).append(task)
+    task_queries.attach_task_sample_snapshots(conn, loaded_tasks)
 
     return projects
 
@@ -177,13 +180,16 @@ def load_project_detail(conn: sqlite3.Connection, project_id: str, *, include_ta
         (project_id,),
     ).fetchall()
     logs_by_task = task_queries.load_task_logs_for(conn, [str(row["id"]) for row in task_rows])
+    loaded_tasks: list[dict] = []
     for row in task_rows:
         stage = stage_map.get(row["stage_id"])
         if not stage:
             continue
         task = task_queries.task_from_db_row(row)
         task["logs"] = logs_by_task.get(row["id"], [])
+        loaded_tasks.append(task)
         stage.setdefault("tasks", []).append(task)
+    task_queries.attach_task_sample_snapshots(conn, loaded_tasks)
     return project
 
 

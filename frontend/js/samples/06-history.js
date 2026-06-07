@@ -146,7 +146,7 @@ app.registerModule("samples.history", {
           </div>
           ${problems.length ? `<div class="sample-history-problems">问题：${problems.map(x => Utils.esc(x)).join("；")}</div>` : ""}
           ${this.sampleHistoryPhotosHtml(sampleId, resultPhotos)}
-          ${orderedLogs.length ? `<div class="sample-history-logs">${orderedLogs.map((log, logIdx) => this.logHtml(log, orderedLogs.length - logIdx, "日志 #")).join("")}</div>` : `<div class="path">暂无该任务下的样机状态记录。</div>`}
+          ${orderedLogs.length ? `<div class="sample-history-logs">${orderedLogs.map((log, logIdx) => this.logHtml(log, orderedLogs.length - logIdx, "日志 #", task)).join("")}</div>` : `<div class="path">暂无该任务下的样机状态记录。</div>`}
         </div>
       </div>`;
     }).join("")}</div>${this.sampleHistoryPagerHtml(sampleId, cache)}`;
@@ -185,28 +185,57 @@ app.registerModule("samples.history", {
     return null;
   },
 
-  openSampleReadonly(sampleId) {
-    const found = this.findSample(sampleId);
-    if (found) {
-      this.openSampleDetail(sampleId, { readonly: true });
-      return;
-    }
-    const hit = this.findSampleSnapshot(sampleId);
-    if (!hit) { alert("该样机档案不存在，可能已被销毁且没有保留快照。"); return; }
-    const snap = hit.snapshot;
-    this.showModal("样机档案快照：" + (snap.code || sampleId), `
+  readonlySampleSnapshotHtml(sampleId, snap = {}) {
+    const destroyed = !!snap.destroyedAt;
+    const emptyText = destroyed
+      ? "该样机档案已销毁，这里仅显示任务日志保留的只读快照。"
+      : "未能在样机池中找到当前档案，这里仅显示任务日志保留的只读快照。";
+    return `
       <div class="sample-archive-summary">
-        <div><span>档案编号</span><b>${Utils.esc(snap.code || sampleId)}</b></div>
+        <div><span>档案编号</span><b>${Utils.esc(snap.code || snap.sampleNo || sampleId)}</b></div>
         <div><span>所属样机池</span><b>${Utils.esc(snap.categoryName || "-")}</b></div>
-        <div><span>快照时间</span><b>${Utils.esc(snap.destroyedAt || "-")}</b></div>
+        <div><span>快照时间</span><b>${Utils.esc(snap.destroyedAt || snap.capturedAt || "-")}</b></div>
       </div>
       <div class="sample-archive-summary">
         <div><span>SN</span><b>${Utils.esc(snap.sn || "-")}</b></div>
         <div><span>IMEI</span><b>${Utils.esc(snap.imei || "-")}</b></div>
         <div><span>主板SN</span><b>${Utils.esc(snap.boardSn || "-")}</b></div>
       </div>
-      <div class="empty">该样机档案已销毁，这里仅显示任务日志保留的只读快照。</div>
-    `, () => false, "关闭", { hideCancel: true, className: "sample-archive-modal", headerHint: "只读快照，不能编辑" });
+      <div class="empty">${emptyText}</div>
+    `;
+  },
+
+  async openTaskSampleReadonly(sampleId, { task = null, snapshot = null, readonlyOkText = "" } = {}) {
+    const parentTitle = String((typeof document !== "undefined" && document.getElementById?.("modalTitle")?.innerText) || "");
+    const okText = readonlyOkText || (parentTitle.startsWith("任务日志") ? "返回日志" : "关闭");
+    const snap = snapshot || task?.sampleSnapshots?.[sampleId] || this.findSampleSnapshot(sampleId)?.snapshot || null;
+    const lookupValues = typeof this.sampleLookupIdentityValues === "function"
+      ? this.sampleLookupIdentityValues(sampleId, snap)
+      : [sampleId];
+    let found = this.findSampleByLookupValues?.(lookupValues) || this.findSample(sampleId);
+    if (!found && typeof this.ensureSampleLoaded === "function") {
+      found = await this.ensureSampleLoaded(sampleId, { snapshot: snap });
+    }
+    if (found) {
+      this.openSampleDetail(found.sample.id, { readonly: true, readonlyOkText: okText });
+      return;
+    }
+    if (this._lastSampleLookupError) {
+      alert("样机档案加载失败：" + (this._lastSampleLookupError.message || this._lastSampleLookupError));
+      return;
+    }
+    if (!snap) { alert("该样机档案不存在，且没有保留任务快照。"); return; }
+    this.showModal(
+      "样机档案快照：" + (snap.code || snap.sampleNo || sampleId),
+      this.readonlySampleSnapshotHtml(sampleId, snap),
+      () => false,
+      okText,
+      { hideCancel: true, className: "sample-archive-modal", headerHint: "只读快照，不能编辑" }
+    );
+  },
+
+  async openSampleReadonly(sampleId) {
+    return this.openTaskSampleReadonly(sampleId);
   },
 
 });

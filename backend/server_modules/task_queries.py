@@ -175,6 +175,102 @@ def task_from_db_row(row: sqlite3.Row) -> dict:
     return task
 
 
+def task_sample_reference_ids(task: dict) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        sid = str(value or "").strip()
+        if sid and sid not in seen:
+            seen.add(sid)
+            ids.append(sid)
+
+    for sample_id in task.get("sampleIds") or []:
+        add(sample_id)
+    for record in task.get("removedSampleRecords") or []:
+        if isinstance(record, dict):
+            add(record.get("sampleId") or record.get("sid"))
+    for record in task.get("sampleFaultRecords") or []:
+        if isinstance(record, dict):
+            add(record.get("sampleId") or record.get("sid"))
+    for draft_item in (task.get("resultDraft") or {}).get("samples") or []:
+        if isinstance(draft_item, dict):
+            add(draft_item.get("sampleId") or draft_item.get("sid"))
+    for upload in task.get("resultUploads") or []:
+        if not isinstance(upload, dict):
+            continue
+        for item in upload.get("samples") or []:
+            if isinstance(item, dict):
+                add(item.get("sampleId") or item.get("sid"))
+    for log in task.get("logs") or []:
+        if not isinstance(log, dict):
+            continue
+        for ref in log.get("sampleRefs") or []:
+            if isinstance(ref, dict):
+                add(ref.get("sampleId") or ref.get("sid"))
+    return ids
+
+
+def attach_task_sample_snapshots(conn: sqlite3.Connection, tasks: list[dict]) -> list[dict]:
+    sample_ids: list[str] = []
+    seen: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        for sample_id in task_sample_reference_ids(task):
+            if sample_id not in seen:
+                seen.add(sample_id)
+                sample_ids.append(sample_id)
+    if not sample_ids:
+        return tasks
+
+    placeholders = ",".join("?" for _ in sample_ids)
+    rows = conn.execute(
+        f"""
+        SELECT sr.id, sr.category_id, sr.sample_no, sr.sn, sr.imei, sr.board_sn,
+               sr.data_json, sr.updated_at, sc.name AS category_name
+        FROM sample_records sr
+        LEFT JOIN sample_categories sc ON sc.id = sr.category_id
+        WHERE sr.id IN ({placeholders}) AND sr.deleted_at IS NULL
+        """,
+        sample_ids,
+    ).fetchall()
+    snapshots: dict[str, dict] = {}
+    for row in rows:
+        data = json_obj(row["data_json"], {}) or {}
+        sample_no = row["sample_no"] or data.get("sampleNo") or data.get("code") or row["id"]
+        snapshots[str(row["id"])] = {
+            "id": row["id"],
+            "categoryId": row["category_id"] or data.get("categoryId") or "",
+            "categoryName": row["category_name"] or data.get("_categoryName") or data.get("categoryName") or "",
+            "code": data.get("code") or sample_no,
+            "sampleNo": sample_no,
+            "sn": row["sn"] or data.get("sn") or "",
+            "imei": row["imei"] or data.get("imei") or "",
+            "boardSn": row["board_sn"] or data.get("boardSn") or "",
+            "updatedAt": row["updated_at"] or data.get("updatedAt") or "",
+        }
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        current = task.get("sampleSnapshots")
+        if not isinstance(current, dict):
+            current = {}
+            task["sampleSnapshots"] = current
+        for sample_id in task_sample_reference_ids(task):
+            existing = current.get(sample_id) if isinstance(current.get(sample_id), dict) else {}
+            fresh = snapshots.get(sample_id)
+            if fresh:
+                merged = {**existing, **fresh}
+                if existing.get("destroyedAt"):
+                    merged["destroyedAt"] = existing.get("destroyedAt")
+                current[sample_id] = merged
+            elif existing:
+                current[sample_id] = existing
+    return tasks
+
+
 def load_task_logs_for(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, list[dict]]:
     if not task_ids:
         return {}
@@ -277,6 +373,7 @@ def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[s
         for row in page_rows:
             task = row.get("task") or {}
             task["logs"] = logs_by_task.get(str(task.get("id")), [])
+        attach_task_sample_snapshots(conn, [row["task"] for row in page_rows if row.get("task")])
 
         return {
             "page": page,
@@ -354,6 +451,7 @@ def list_stage_tasks_page(conn: sqlite3.Connection, stage_id: str, query: dict[s
     for row in page_rows:
         task = row.get("task") or {}
         task["logs"] = logs_by_task.get(str(task.get("id")), [])
+    attach_task_sample_snapshots(conn, [row["task"] for row in page_rows if row.get("task")])
 
     return {
         **meta,
@@ -554,6 +652,8 @@ def list_task_sample_candidates_page(conn: sqlite3.Connection, query: dict[str, 
         ).fetchall()
         selected_by_id = {str(row["id"] or ""): task_sample_candidate_from_row(row) for row in selected_rows}
         selected_items = [selected_by_id[sid] for sid in selected_ids if sid in selected_by_id]
+    selected_found_ids = {str(item.get("id") or "") for item in selected_items}
+    selected_missing_ids = [sid for sid in selected_ids if sid not in selected_found_ids]
 
     all_candidate_ids = [str(item.get("id") or "") for item in [*items, *selected_items]]
     occupancy = open_task_occupancy_for_sample_ids(conn, all_candidate_ids, exclude_task_id=task_id)
@@ -567,6 +667,7 @@ def list_task_sample_candidates_page(conn: sqlite3.Connection, query: dict[str, 
         "totalPages": total_pages,
         "items": items,
         "selectedItems": selected_items,
+        "selectedMissingIds": selected_missing_ids,
         "selectedCount": len(selected_ids),
         "categories": categories,
         "filters": {

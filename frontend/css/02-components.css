@@ -423,6 +423,91 @@ tr:hover td { background: #fcfcfd }
   min-width: 0;
 }
 
+/* Match edit-project modal layout to the create-project form without touching JS. */
+.modal-body:has(> .form-group > #pName):has(> .form-group > #pCode):has(> .form-group > #pOwner) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  row-gap: 20px;
+}
+.modal-body:has(> .form-group > #pName):has(> .form-group > #pCode):has(> .form-group > #pOwner) > .form-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+.modal-body:has(> .form-group > #pName):has(> .form-group > #pCode):has(> .form-group > #pOwner) > .form-group:has(> #pOwner) {
+  grid-column: 1 / -1;
+}
+.modal-body:has(> .form-group > #pName):has(> .form-group > #pCode):has(> .form-group > #pOwner) > .form-group > input {
+  width: 100%;
+  max-width: 100%;
+}
+@media (max-width: 900px) {
+  .modal-body:has(> .form-group > #pName):has(> .form-group > #pCode):has(> .form-group > #pOwner) {
+    grid-template-columns: 1fr;
+  }
+  .modal-body:has(> .form-group > #pName):has(> .form-group > #pCode):has(> .form-group > #pOwner) > .form-group:has(> #pOwner) {
+    grid-column: auto;
+  }
+}
+
+/* Keep the stage create/edit modal spacing vertical and even. */
+.modal:has(#stageName):has(#skuList) {
+  width: min(450px, 94vw);
+}
+.modal:has(#copyStageName) {
+  width: min(350px, 94vw);
+}
+
+.modal-body:has(> .form-group > #stageName):has(#skuList) {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) > .form-group {
+  margin-bottom: 0;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) > .form-group > .modal-field-title {
+  display: flex;
+  width: fit-content;
+  margin-bottom: 12px;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) > .form-group > #stageName {
+  display: block;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) .sku-editor {
+  padding: 16px;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) #skuList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) .sku-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 42px;
+  width: 100%;
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+}
+
+.modal-body:has(> .form-group > #stageName):has(#skuList) .sku-row .icon-btn {
+  grid-column: 3;
+  justify-self: end;
+  width: 42px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+  text-align: center;
+}
+.modal-body:has(> .form-group > #stageName):has(#skuList) .sku-row .idx {
+  font-size: 13px;
+  font-weight: 800;
+}
+
 /* —— 在卡片中独立放置的搜索框，限制宽度避免横铺 —— */
 .card > input[placeholder*="搜索"]:not([style*="max-width"]):not([style*="width"]) {
   max-width: 320px;

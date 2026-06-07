@@ -540,13 +540,7 @@ app.registerModule("samples.pool", {
     batch.dataset.appAction = "sample-batch-import";
     batch.dataset.id = cat.id || "";
     batch.textContent = "批量新增";
-    const archiveImport = document.createElement("button");
-    archiveImport.type = "button";
-    archiveImport.className = "btn btn-outline sample-pool-main-btn";
-    archiveImport.dataset.appAction = "sample-archive-import";
-    archiveImport.dataset.id = cat.id || "";
-    archiveImport.textContent = "导入样机档案";
-    actions.append(template, archiveImport, batch);
+    actions.append(template, batch);
     toolbar.append(actions);
     return toolbar;
   },
@@ -1006,6 +1000,7 @@ app.registerModule("samples.pool", {
       const task = item.task;
       const oldFlow = item.flow;
       const originalSampleIds = [...(task.sampleIds || [])];
+      this.ensureTaskSampleSnapshots?.(task, originalSampleIds, { capturedAt: now, destroyedAt: now });
       const destroyedNames = item.matchedNames.join("、") || "样机";
       const reason = `${destroyedNames} 样机档案被销毁，任务无法继续。`;
       originalSampleIds.filter(id => !destroyedIds.has(id)).forEach(id => {
@@ -1042,6 +1037,7 @@ app.registerModule("samples.pool", {
     (impact.pending || []).forEach(item => {
       const task = item.task;
       const before = [...(task.sampleIds || [])];
+      this.ensureTaskSampleSnapshots?.(task, before, { capturedAt: now, destroyedAt: now });
       task.sampleIds = before.filter(id => !destroyedIds.has(id));
       this.addTaskLog(task, "样机池档案销毁", {
         user: "管理员",
@@ -1135,7 +1131,7 @@ app.registerModule("samples.pool", {
         }
       });
       // 记录退出样机
-      this.recordTaskRemovedSamples(task, [sampleId], { user: "管理员", reason, removedAt: now });
+      this.recordTaskRemovedSamples(task, [sampleId], { user: "管理员", reason, removedAt: now, destroyedAt: now });
       task.sampleIds = [];
       this.transitionTaskStatus(item.stage, task, "异常终止", {
         completedAt: now,
@@ -1157,7 +1153,7 @@ app.registerModule("samples.pool", {
       const task = item.task;
       const before = [...(task.sampleIds || [])];
       const reason = `${destroyedName} 样机档案被销毁，已从未启动任务中移除。`;
-      this.recordTaskRemovedSamples(task, [sampleId], { user: "管理员", reason, removedAt: now });
+      this.recordTaskRemovedSamples(task, [sampleId], { user: "管理员", reason, removedAt: now, destroyedAt: now });
       task.sampleIds = before.filter(id => id !== sampleId);
       this.addTaskLog(task, "样机档案销毁", {
         user: "管理员",
@@ -1415,6 +1411,17 @@ app.registerModule("samples.pool", {
       Utils.toast("已新增 1 台样机。");
       return false;
     });
+    const footer = document.querySelector(".modal-footer");
+    if (footer && !document.getElementById("sampleArchiveImportFromAddBtn")) {
+      const importBtn = document.createElement("button");
+      importBtn.type = "button";
+      importBtn.id = "sampleArchiveImportFromAddBtn";
+      importBtn.className = "btn btn-outline modal-extra-action sample-add-archive-import-btn";
+      importBtn.dataset.appAction = "sample-archive-import";
+      importBtn.dataset.id = catId || "";
+      importBtn.textContent = "导入样机档案";
+      footer.insertBefore(importBtn, footer.firstChild);
+    }
   },
 
   addSamples(catId) {

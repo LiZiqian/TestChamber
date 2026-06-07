@@ -240,6 +240,10 @@ def list_sample_history_page(conn: sqlite3.Connection, sample_id: str, query: di
             item["projectName"] = str(row["project_name"] or item.get("projectName") or "")
             item["stageName"] = str(row["stage_name"] or item.get("stageName") or "")
             item["testItem"] = str(task.get("testItem") or item.get("testItem") or "-")
+        task_queries.attach_task_sample_snapshots(
+            conn,
+            [item["task"] for item in rows_by_key.values() if isinstance(item.get("task"), dict)],
+        )
 
     photos_by_id = {str(photo.get("id") or ""): photo for photo in load_sample_photos(conn, sample_id)}
     history_rows = [sample_history_row_for(sample_id, item, photos_by_id) for item in rows_by_key.values()]

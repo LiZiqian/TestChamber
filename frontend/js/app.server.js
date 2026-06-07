@@ -642,6 +642,190 @@ app.registerModule("app.server", {
     return json;
   },
 
+  sampleLookupRefKeys(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return [];
+    const keys = new Set();
+    const add = text => {
+      const item = String(text || "").trim();
+      if (!item) return;
+      const lower = item.toLowerCase();
+      keys.add(lower);
+      keys.add(lower.replace(/\s+/g, ""));
+      keys.add(lower.replace(/[\s#：:._-]+/g, ""));
+    };
+    add(raw);
+    if (typeof this.normalizeLogSampleRefCode === "function") add(this.normalizeLogSampleRefCode(raw));
+    add(raw.replace(/^(?:SN|IMEI|主板SN)\s*[#：:]\s*/i, ""));
+    const hashIdx = raw.indexOf("#");
+    if (hashIdx >= 0) add(raw.slice(hashIdx + 1));
+    return [...keys].filter(Boolean);
+  },
+
+  sampleLookupIdentityValues(sampleId = "", snapshot = null) {
+    const values = [];
+    const add = value => {
+      const text = String(value || "").trim();
+      if (text && !values.includes(text)) values.push(text);
+    };
+    add(sampleId);
+    add(snapshot?.id);
+    add(snapshot?.code);
+    add(snapshot?.sampleNo);
+    add(snapshot?.sample_no);
+    add(snapshot?.sn);
+    add(snapshot?.imei);
+    add(snapshot?.boardSn);
+    add(snapshot?.board_sn);
+    return values;
+  },
+
+  sampleMatchesLookupValues(sample = {}, values = []) {
+    const sampleValues = [
+      sample?.id,
+      sample?.sampleNo,
+      sample?.sample_no,
+      sample?.code,
+      sample?.sn,
+      sample?.imei,
+      sample?.boardSn,
+      sample?.board_sn,
+      typeof this.sampleDisplayCode === "function" ? this.sampleDisplayCode(sample) : "",
+    ];
+    const sampleKeys = new Set(sampleValues.flatMap(value => this.sampleLookupRefKeys(value)));
+    return values.some(value => this.sampleLookupRefKeys(value).some(key => sampleKeys.has(key)));
+  },
+
+  findSampleByLookupValues(values = []) {
+    const list = Array.isArray(values) ? values : [values];
+    const directId = list.map(value => String(value || "").trim()).filter(Boolean);
+    for (const id of directId) {
+      const found = this.findSample?.(id);
+      if (found) return found;
+    }
+    const categories = this.sampleCategoryRecords?.() || this.data?.sampleLibrary?.categories || [];
+    for (const category of categories) {
+      for (const sample of (category.samples || [])) {
+        if (this.sampleMatchesLookupValues(sample, list)) return { category, sample };
+      }
+    }
+    return null;
+  },
+
+  mergeSampleLookupResult(result = {}) {
+    const categories = this.sampleCategoryRecords?.() || this.data?.sampleLibrary?.categories || [];
+    const summaryById = new Map((result.categories || []).map(category => [String(category.id || ""), category]));
+    const existingById = new Map(categories.map(category => [String(category.id || ""), category]));
+    (result.categories || []).forEach(summary => {
+      const id = String(summary?.id || "");
+      if (!id) return;
+      const existing = existingById.get(id);
+      if (existing) {
+        Object.assign(existing, summary);
+        if (!Array.isArray(existing.samples)) existing.samples = [];
+      } else {
+        const created = { ...summary, samples: [], samplesLoaded: false, _summaryOnly: true };
+        categories.push(created);
+        existingById.set(id, created);
+      }
+      this.syncHydratedCategoryBaseline?.(existingById.get(id), { includeSamples: false });
+    });
+    [...(result.items || []), ...(result.selectedItems || [])].forEach(sample => {
+      const sampleId = String(sample?.id || "");
+      const categoryId = String(sample?.categoryId || "");
+      if (!sampleId || !categoryId) return;
+      let category = existingById.get(categoryId);
+      if (!category) {
+        const summary = summaryById.get(categoryId) || {};
+        category = {
+          id: categoryId,
+          name: sample.categoryName || summary.name || "未分类",
+          sampleCount: summary.sampleCount || 0,
+          samples: [],
+          samplesLoaded: false,
+          _summaryOnly: true,
+        };
+        categories.push(category);
+        existingById.set(categoryId, category);
+      }
+      if (!Array.isArray(category.samples)) category.samples = [];
+      const idx = category.samples.findIndex(item => String(item.id || "") === sampleId);
+      const merged = idx >= 0 ? { ...category.samples[idx], ...sample } : sample;
+      if (idx >= 0) category.samples[idx] = merged;
+      else category.samples.push(merged);
+      this.syncHydratedSampleBaseline?.(categoryId, merged);
+    });
+    return result;
+  },
+
+  async ensureSampleLoaded(sampleId, { render = false, snapshot = null } = {}) {
+    const id = String(sampleId || "");
+    if (!id) return null;
+    const lookupValues = this.sampleLookupIdentityValues(id, snapshot);
+    const current = this.findSampleByLookupValues?.(lookupValues) || this.findSample?.(id);
+    if (current) return current;
+    this._lastSampleLookupError = null;
+    this._lastSampleLookupMissingIds = [];
+    if (!this._sampleLookupPromises) this._sampleLookupPromises = {};
+    const lookupKey = JSON.stringify(lookupValues);
+    if (!this._sampleLookupPromises[lookupKey]) {
+      this.updateServerStatus?.("加载样机");
+      const hadLocalUnsavedChanges = this.hasLocalUnsavedChanges?.() === true;
+      this._sampleLookupPromises[lookupKey] = (async () => {
+        try {
+          const selectedResult = await this.fetchTaskSampleCandidates({ selectedIds: [id], page: 1, pageSize: 20 });
+          this.mergeSampleLookupResult(selectedResult);
+          this._lastSampleLookupMissingIds = selectedResult.selectedMissingIds || [];
+          let found = this.findSampleByLookupValues?.(lookupValues) || this.findSample?.(id) || null;
+          if (!found) {
+            const searchValues = lookupValues.filter(value => !String(value || "").startsWith("sample_"));
+            for (const value of searchValues) {
+              const keyword = String(value || "").trim();
+              if (!keyword) continue;
+              const result = await this.fetchTaskSampleCandidates({ keyword, page: 1, pageSize: 20 });
+              this.mergeSampleLookupResult(result);
+              found = this.findSampleByLookupValues?.(lookupValues) || null;
+              if (found) break;
+            }
+          }
+          if (!hadLocalUnsavedChanges) this.markDataSynced?.();
+          this.updateServerStatus?.("已加载");
+          if (render) this.render?.();
+          return found;
+        } catch (e) {
+          this._lastSampleLookupError = e;
+          this.updateServerStatus?.("加载失败");
+          console.error("样机档案加载失败：", e);
+          return null;
+        } finally {
+          delete this._sampleLookupPromises[lookupKey];
+        }
+      })();
+    }
+    return this._sampleLookupPromises[lookupKey];
+  },
+
+  ensureTaskReferenceSamplesLoaded(task) {
+    if (!task || typeof this.ensureSampleLoaded !== "function") return [];
+    const ids = new Set();
+    const add = value => {
+      const id = String(value || "").trim();
+      if (id) ids.add(id);
+    };
+    if (typeof this.taskMutationSampleIds === "function") {
+      this.taskMutationSampleIds(task).forEach(add);
+    } else {
+      const entries = typeof this.taskResultSampleEntries === "function"
+        ? this.taskResultSampleEntries(task)
+        : (task.sampleIds || []).map(sampleId => ({ sampleId }));
+      entries.forEach(entry => add(entry.sampleId));
+    }
+    (task.logs || []).forEach(log => (log?.sampleRefs || []).forEach(ref => add(ref?.sampleId || ref?.sid)));
+    const missing = [...ids].filter(id => !this.findSampleByLookupValues?.(this.sampleLookupIdentityValues(id, task.sampleSnapshots?.[id] || null)));
+    if (!missing.length) return [];
+    return Promise.all(missing.map(id => this.ensureSampleLoaded(id, { snapshot: task.sampleSnapshots?.[id] || null })));
+  },
+
   async fetchSampleDestroyImpactScope(params = {}) {
     const query = new URLSearchParams();
     ["sampleId", "categoryId"].forEach(key => {
@@ -1105,6 +1289,7 @@ app.registerModule("app.server", {
     if (!project || !stage || !task) return false;
     this._lastTaskMutationError = null;
     const sampleIds = this.taskMutationSampleIds(task);
+    this.ensureTaskSampleSnapshots?.(task, sampleIds);
     const samples = sampleIds
       .map(id => this.compactSampleForMutation(this.findSample(id)?.sample))
       .filter(Boolean);
@@ -1174,6 +1359,7 @@ app.registerModule("app.server", {
 
   async commitTaskBatchMutation(project, stage, tasks, { action = "task_batch_mutation", remark = "批量任务增量变更", user = "", render = true, createIfMissing = true } = {}) {
     if (!project || !stage || !Array.isArray(tasks) || !tasks.length) return false;
+    tasks.forEach(task => this.ensureTaskSampleSnapshots?.(task, this.taskMutationSampleIds(task)));
     const payload = {
       revision: this.serverRevision,
       projectId: project.id,
@@ -1217,6 +1403,7 @@ app.registerModule("app.server", {
   },
 
   taskMutationPayloadFor(project, stage, task, { createIfMissing = false } = {}) {
+    this.ensureTaskSampleSnapshots?.(task, this.taskMutationSampleIds(task));
     return {
       projectId: project?.id,
       stageId: stage?.id,

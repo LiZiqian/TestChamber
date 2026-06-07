@@ -242,7 +242,8 @@ app.registerModule("workspace.taskActions", {
       const code = found?.sample
         ? this.sampleDisplayCode(found.sample)
         : (snapshot?.code || snapshot?.sampleNo || entry.sampleId);
-      const codeHtml = found?.sample
+      const isDestroyedSnapshot = !found?.sample && !!snapshot?.destroyedAt;
+      const codeHtml = entry.sampleId && !isDestroyedSnapshot
         ? `<button type="button" class="sample-log-link" data-app-action="sample-readonly" data-stop-propagation="1" data-id="${Utils.esc(entry.sampleId)}">${Utils.esc(code)}</button>`
         : `<span class="sample-log-ref-missing" title="样机档案不存在或已销毁">${Utils.esc(code)}</span>`;
       const removedTag = entry.state === "removed" ? `<span class="task-result-tag-removed">变更</span>` : "";
@@ -259,8 +260,19 @@ app.registerModule("workspace.taskActions", {
   tempChangeTask(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!p || !s || !t || this.isTaskCompleted(t)) return;
-    const progress = s.progress.find(x => x.id === t.progressId);
-    const sampleCards = this.buildTaskSamplePickerHtml(t.sampleIds || [], "tempSamplePick", "", "", t.id);
+    const { progress } = this.resolveTaskProgress(s, t, t.progressId);
+    const requiredSampleCount = this.getProgressRequiredSampleCount(s, progress);
+    const sampleCards = this.buildTaskSamplePickerHtml(
+      t.sampleIds || [],
+      "tempSamplePick",
+      "tempSampleProgress",
+      "tempSampleLimitHint",
+      t.id,
+      {
+        progressId: progress?.id || t.progressId || "",
+        requiredSampleCount: requiredSampleCount ?? t.requiredSampleCount ?? null
+      }
+    );
     this.showModal("临时变更", `
       <div class="temp-change-header-row">
         <div class="form-group"><label class="req danger-field-label">任务变更人</label>${this.projectMemberSelectHtml("tempUser", "", "请选择任务变更人")}</div>
@@ -272,7 +284,14 @@ app.registerModule("workspace.taskActions", {
         <div class="form-group"><label>计划完成</label><input type="date" id="tempPlanEnd" value="${Utils.esc(t.planEndDate || t.endDate || "")}"></div>
       </div>
       <div class="temp-change-sample-section">
-        <div class="form-group"><label>样机逐台变更</label><div class="dispatch-sample-select">${sampleCards}</div></div>
+        <input type="hidden" id="tempSampleProgress" value="${Utils.esc(progress?.id || t.progressId || "")}">
+        <div class="form-group task-sample-config-group">
+          <div class="task-sample-label-row task-sample-label-row-compact">
+            <label>样机逐台变更</label>
+            <div id="tempSampleLimitHint" class="sample-limit-hint sample-limit-global" title="当前已选 / 任务要求样机数"></div>
+          </div>
+          <div class="dispatch-sample-select">${sampleCards}</div>
+        </div>
       </div>
     `, async () => {
       const user = document.getElementById("tempUser").value.trim();
@@ -394,7 +413,10 @@ app.registerModule("workspace.taskActions", {
       });
       return !saved;
     }, "确认", { className: "temp-change-modal", headerHint: `任务：${Utils.esc(t.testItem || "-")}` });
-    setTimeout(() => this.initTaskSamplePicker("tempSamplePick"), 0);
+    setTimeout(() => {
+      this.initTaskSamplePicker("tempSamplePick");
+      this.updateTaskSampleLimitUI("tempSampleProgress", "tempSamplePick", "tempSampleLimitHint");
+    }, 0);
   },
 
   // 阻塞任务
@@ -423,7 +445,7 @@ app.registerModule("workspace.taskActions", {
         user
       });
       return !saved;
-    });
+    }, "确认", { className: "task-block-modal" });
   },
 
 });

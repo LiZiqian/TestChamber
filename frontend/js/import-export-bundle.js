@@ -7,7 +7,25 @@ app.registerModule("import-export-bundle", {
 
   // ── 导出 ──
 
-  async _downloadZipResponse(resp, fallbackName, successText) {
+  _downloadFilenameSegment(value, fallback = "-") {
+    let text = String(value || "").trim() || fallback;
+    text = text.replace(/[<>:"/\\|?*\r\n\t]/g, "-");
+    text = text.replace(/\s+/g, "-").replace(/^[ ._-]+|[ ._-]+$/g, "");
+    return (text || fallback).slice(0, 80);
+  },
+
+  _sampleArchiveDownloadName(sampleId) {
+    const found = this.findSample?.(sampleId);
+    const sample = found?.sample || {};
+    const category = found?.category || {};
+    const categoryName = this._downloadFilenameSegment(category.name, "未命名样机池");
+    const archiveCode = this._downloadFilenameSegment(this.sampleDisplayCode?.(sample) || sample.sampleNo || sampleId, "未录入身份");
+    const stableId = this._downloadFilenameSegment(sample.id || sampleId, "sample-id");
+    const ts = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+    return `${categoryName}-${archiveCode}-${stableId}-${ts}.zip`;
+  },
+
+  async _downloadZipResponse(resp, fallbackName, successText, options = {}) {
     if (!resp.ok) {
       let serverMsg = "";
       try {
@@ -19,9 +37,17 @@ app.registerModule("import-export-bundle", {
     const blob = await resp.blob();
     if (!blob || blob.size === 0) throw new Error("数据包为空");
     let filename = fallbackName;
-    const cd = resp.headers.get("Content-Disposition") || "";
-    const fnMatch = cd.match(/filename\s*=\s*"?([^";\r\n]+)"?/i);
-    if (fnMatch && fnMatch[1]) filename = fnMatch[1];
+    if (!options.preferFallback) {
+      const cd = resp.headers.get("Content-Disposition") || "";
+      const utf8Match = cd.match(/filename\*\s*=\s*UTF-8''([^;\r\n]+)/i);
+      const fnMatch = cd.match(/filename\s*=\s*"?([^";\r\n]+)"?/i);
+      if (utf8Match && utf8Match[1]) {
+        try { filename = decodeURIComponent(utf8Match[1]); }
+        catch (_) { filename = utf8Match[1]; }
+      } else if (fnMatch && fnMatch[1]) {
+        filename = fnMatch[1];
+      }
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -55,7 +81,7 @@ app.registerModule("import-export-bundle", {
     Utils.toast("正在生成样机档案包…");
     try {
       const resp = await fetch(`/api/samples/${encodeURIComponent(sampleId)}/archive`);
-      await this._downloadZipResponse(resp, "sample_archive.zip", "样机档案包导出完成");
+      await this._downloadZipResponse(resp, this._sampleArchiveDownloadName(sampleId), "样机档案包导出完成", { preferFallback: true });
     } catch (e) {
       Utils.toast("样机档案导出失败：" + (e.message || e));
     }
@@ -85,12 +111,18 @@ app.registerModule("import-export-bundle", {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".zip";
+    input.multiple = true;
     input.addEventListener("change", async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      Utils.toast("正在分析样机档案包…");
+      const files = Array.from(input.files || []).filter(Boolean);
+      if (!files.length) return;
+      const targetCategoryId = categoryId || this.selectedCategoryId?.() || "";
+      Utils.toast(files.length > 1 ? `已选择 ${files.length} 个样机档案包` : "正在分析样机档案包…");
       try {
-        const preview = await this.importSampleArchivePreview(file, categoryId || this.selectedCategoryId?.() || "");
+        if (files.length > 1) {
+          this._showSampleArchiveBatchModal(files, targetCategoryId);
+          return;
+        }
+        const preview = await this.importSampleArchivePreview(files[0], targetCategoryId);
         this._showSampleArchivePreviewModal(preview);
       } catch (e) {
         Utils.toast("样机档案分析失败: " + (e.message || e));
@@ -796,6 +828,301 @@ app.registerModule("import-export-bundle", {
         return true;
       }
     }, "确认导入", { cancelText: "取消" });
+  },
+
+  _sampleArchiveBatchFileSize(file) {
+    return `${Math.ceil((file?.size || 0) / 1024).toLocaleString()} KB`;
+  },
+
+  _sampleArchiveBatchReasonFromBlockers(blockers = []) {
+    if (!blockers.length) return "";
+    return blockers.map(blocker => {
+      const type = String(blocker.type || "");
+      const count = Number(blocker.count || 0);
+      const ids = (blocker.assetIds || []).slice(0, 3).filter(Boolean).join("、");
+      const suffix = ids ? `：${ids}${count > 3 ? " 等" : ""}` : "";
+      if (type === "missing_photos") return `缺失照片资源 ${count} 项${suffix}`;
+      if (type === "asset_integrity_mismatch") return `照片/资源校验失败 ${count} 项${suffix}`;
+      return `${type || "阻断项"} ${count} 项${suffix}`;
+    }).join("；");
+  },
+
+  _sampleArchiveBatchPreviewSummary(preview = {}) {
+    const summary = preview.summary || {};
+    const samples = summary.samples || {};
+    return [
+      `新增 ${Number(samples.new || 0)}`,
+      `合并 ${Number(summary.sampleIdentityConflicts || 0)}`,
+      `字段冲突 ${Number(summary.fieldConflicts || 0)}`,
+    ].join(" / ");
+  },
+
+  _sampleArchiveBatchCommitSummary(result = {}) {
+    const stats = result.stats || {};
+    return [
+      `新增 ${Number(stats.samplesAdded || 0)}`,
+      `合并 ${Number(stats.samplesMerged || 0)}`,
+      `事件 ${Number(stats.sampleEventsAdded || 0)}`,
+    ].join(" / ");
+  },
+
+  _sampleArchiveBatchCounts() {
+    const state = this._sampleArchiveBatchState || {};
+    const rows = state.rows || [];
+    return {
+      total: rows.length,
+      pending: rows.filter(row => row.status === "pending").length,
+      checking: rows.filter(row => row.status === "checking").length,
+      valid: rows.filter(row => row.status === "valid").length,
+      invalid: rows.filter(row => row.status === "invalid").length,
+      selected: rows.filter(row => row.status === "valid" && row.selected).length,
+      importing: rows.filter(row => row.status === "importing").length,
+      imported: rows.filter(row => row.status === "imported").length,
+      failed: rows.filter(row => row.status === "failed").length,
+    };
+  },
+
+  _sampleArchiveBatchRowIcon(status) {
+    if (status === "valid" || status === "imported") return "✓";
+    if (status === "invalid" || status === "failed") return "✕";
+    if (status === "checking" || status === "importing") return "…";
+    return "○";
+  },
+
+  _sampleArchiveBatchRowText(row) {
+    if (row.status === "pending") return "待检查";
+    if (row.status === "checking") return "正在检查档案内容…";
+    if (row.status === "valid") return `可导入：${row.summary || ""}`;
+    if (row.status === "invalid") return `无法导入原因：${row.reason || "未知错误"}`;
+    if (row.status === "importing") return "正在导入到样机池…";
+    if (row.status === "imported") return `已导入：${row.summary || ""}`;
+    if (row.status === "failed") return `导入失败原因：${row.reason || "未知错误"}`;
+    return "";
+  },
+
+  _sampleArchiveBatchStatusText(counts) {
+    const state = this._sampleArchiveBatchState || {};
+    if (state.phase === "checking") {
+      return `待检查 ${counts.pending} / 正在检查 ${counts.checking} / 可导入 ${counts.valid} / 不可导入 ${counts.invalid}`;
+    }
+    if (state.phase === "selection") {
+      return `可导入 ${counts.valid} 个 / 不可导入 ${counts.invalid} 个 / 已选择 ${counts.selected} 个`;
+    }
+    if (state.phase === "importing" || state.phase === "done") {
+      return `导入成功 ${counts.imported} 个 / 导入失败 ${counts.failed} 个 / 未导入 ${counts.valid} 个`;
+    }
+    return `待检查 ${counts.total} 个`;
+  },
+
+  _renderSampleArchiveBatchBody() {
+    const state = this._sampleArchiveBatchState || {};
+    const rows = state.rows || [];
+    const counts = this._sampleArchiveBatchCounts();
+    const helperText = state.phase === "ready"
+      ? "先检查档案，不会写入样机池；检查通过后可勾选要导入的档案。"
+      : state.phase === "selection"
+        ? "请勾选需要导入的档案；红色叉叉的档案不可导入。"
+        : state.phase === "done"
+          ? "导入流程已完成，可查看每个档案的成功或失败结果。"
+          : "请等待当前批量任务完成。";
+    const fileRows = rows.map((row, idx) => {
+      const canSelect = state.phase === "selection" && row.status === "valid";
+      const showCheckbox = state.phase === "selection" || state.phase === "importing" || state.phase === "done";
+      const checked = row.selected ? "checked" : "";
+      const disabled = canSelect ? "" : "disabled";
+      return `
+        <div class="sample-archive-batch-row sample-archive-batch-row-${Utils.esc(row.status)}">
+          <label class="sample-archive-batch-check">
+            ${showCheckbox ? `<input type="checkbox" data-sample-archive-batch-select="${idx}" ${checked} ${disabled}>` : ""}
+          </label>
+          <span class="sample-archive-batch-status">${this._sampleArchiveBatchRowIcon(row.status)}</span>
+          <div class="sample-archive-batch-main">
+            <b>${idx + 1}. ${Utils.esc(row.file?.name || "未命名档案.zip")}</b>
+            <div class="sample-archive-batch-detail">${Utils.esc(this._sampleArchiveBatchRowText(row))}</div>
+          </div>
+          <span class="sample-archive-batch-size">${Utils.esc(this._sampleArchiveBatchFileSize(row.file))}</span>
+        </div>
+      `;
+    }).join("");
+    return `<div class="import-section">
+      <div class="import-section-title">批量导入样机档案</div>
+      <div class="import-source-grid">
+        <span>目标样机池：</span><span>${Utils.esc(state.targetName || "当前样机池")}</span>
+        <span>已选择：</span><span>${counts.total} 个 ZIP 档案</span>
+        <span>当前状态：</span><span>${Utils.esc(this._sampleArchiveBatchStatusText(counts))}</span>
+      </div>
+      <p class="path">${helperText}</p>
+    </div>
+    <div class="import-section">
+      <div class="import-section-title">文件清单</div>
+      <div class="sample-archive-batch-list">${fileRows}</div>
+    </div>`;
+  },
+
+  _refreshSampleArchiveBatchModal() {
+    const body = document.getElementById("modalBody");
+    if (body) this.replaceHtml(body, this._renderSampleArchiveBatchBody());
+    this._bindSampleArchiveBatchSelectionHandlers();
+    this._updateSampleArchiveBatchOkButton();
+  },
+
+  _updateSampleArchiveBatchOkButton() {
+    const state = this._sampleArchiveBatchState;
+    const ok = document.getElementById("modalOk");
+    const cancel = document.getElementById("modalCancel");
+    if (!state || !ok) return;
+    const counts = this._sampleArchiveBatchCounts();
+    const busy = state.phase === "checking" || state.phase === "importing";
+    ok.disabled = busy;
+    if (cancel) {
+      cancel.disabled = busy;
+      cancel.innerText = state.phase === "done" ? "关闭" : "取消";
+    }
+    if (state.phase === "ready") {
+      ok.innerText = "检查档案";
+    } else if (state.phase === "checking") {
+      ok.innerText = "检查中…";
+    } else if (state.phase === "selection") {
+      ok.innerText = `确认导入 ${counts.selected} 个档案`;
+    } else if (state.phase === "importing") {
+      ok.innerText = "导入中…";
+    } else if (state.phase === "done") {
+      ok.innerText = "完成";
+    }
+  },
+
+  _bindSampleArchiveBatchSelectionHandlers() {
+    const state = this._sampleArchiveBatchState;
+    if (!state) return;
+    document.querySelectorAll("[data-sample-archive-batch-select]").forEach(input => {
+      input.addEventListener("change", () => {
+        const idx = Number(input.dataset.sampleArchiveBatchSelect);
+        const row = state.rows?.[idx];
+        if (!row || row.status !== "valid") return;
+        row.selected = !!input.checked;
+        this._refreshSampleArchiveBatchModal();
+      });
+    });
+  },
+
+  async _checkSampleArchiveBatch() {
+    const state = this._sampleArchiveBatchState;
+    if (!state) return true;
+    state.phase = "checking";
+    this._refreshSampleArchiveBatchModal();
+    for (let idx = 0; idx < state.rows.length; idx += 1) {
+      const row = state.rows[idx];
+      row.status = "checking";
+      row.selected = false;
+      row.reason = "";
+      row.summary = "";
+      this._refreshSampleArchiveBatchModal();
+      try {
+        Utils.toast(`正在检查样机档案 ${idx + 1}/${state.rows.length}：${row.file?.name || ""}`);
+        const preview = await this.importSampleArchivePreview(row.file, state.targetCategoryId);
+        const blockers = preview.blockers || [];
+        if (blockers.length) {
+          row.status = "invalid";
+          row.reason = this._sampleArchiveBatchReasonFromBlockers(blockers);
+          row.preview = null;
+        } else {
+          row.status = "valid";
+          row.preview = preview;
+          row.selected = true;
+          row.summary = this._sampleArchiveBatchPreviewSummary(preview);
+        }
+      } catch (e) {
+        row.status = "invalid";
+        row.reason = e.message || String(e || "预览失败");
+        row.preview = null;
+      }
+      this._refreshSampleArchiveBatchModal();
+    }
+    state.phase = "selection";
+    this._refreshSampleArchiveBatchModal();
+    const counts = this._sampleArchiveBatchCounts();
+    Utils.toast(`检查完成：可导入 ${counts.valid} 个，不可导入 ${counts.invalid} 个。`);
+    return true;
+  },
+
+  async _commitSampleArchiveBatch() {
+    const state = this._sampleArchiveBatchState;
+    if (!state) return true;
+    const selectedRows = (state.rows || []).filter(row => row.status === "valid" && row.selected && row.preview?.previewId);
+    if (!selectedRows.length) {
+      Utils.toast("请至少勾选 1 个可导入的样机档案。");
+      return true;
+    }
+    state.phase = "importing";
+    this._refreshSampleArchiveBatchModal();
+    const totals = { samplesAdded: 0, samplesMerged: 0, sampleEventsAdded: 0, skipped: 0 };
+    let successCount = 0;
+    let failCount = 0;
+    let lastResult = null;
+    for (let idx = 0; idx < selectedRows.length; idx += 1) {
+      const row = selectedRows[idx];
+      row.status = "importing";
+      this._refreshSampleArchiveBatchModal();
+      try {
+        Utils.toast(`正在导入样机档案 ${idx + 1}/${selectedRows.length}：${row.file?.name || ""}`);
+        const result = await this.importSampleArchiveCommit(row.preview.previewId);
+        const stats = result.stats || {};
+        totals.samplesAdded += Number(stats.samplesAdded || 0);
+        totals.samplesMerged += Number(stats.samplesMerged || 0);
+        totals.sampleEventsAdded += Number(stats.sampleEventsAdded || 0);
+        totals.skipped += Number(stats.skipped || 0);
+        successCount += 1;
+        lastResult = result;
+        row.status = "imported";
+        row.summary = this._sampleArchiveBatchCommitSummary(result);
+      } catch (e) {
+        failCount += 1;
+        row.status = "failed";
+        row.reason = e.message || String(e || "提交失败");
+      }
+      this._refreshSampleArchiveBatchModal();
+    }
+    if (lastResult) await this.applyImportBundleMutationResult(lastResult, { render: true });
+    state.phase = "done";
+    this._refreshSampleArchiveBatchModal();
+    Utils.toast(`样机档案批量导入完成：成功 ${successCount} 个，失败 ${failCount} 个，新增 ${totals.samplesAdded}，合并 ${totals.samplesMerged}，事件 ${totals.sampleEventsAdded}`);
+    return true;
+  },
+
+  async _onSampleArchiveBatchOk() {
+    const state = this._sampleArchiveBatchState;
+    if (!state) return false;
+    if (state.phase === "ready") return this._checkSampleArchiveBatch();
+    if (state.phase === "selection") return this._commitSampleArchiveBatch();
+    if (state.phase === "done") {
+      this._sampleArchiveBatchState = null;
+      return false;
+    }
+    return true;
+  },
+
+  _showSampleArchiveBatchModal(files, targetCategoryId = "") {
+    const targetName = this.sampleCategoryRecords?.()
+      ?.find(cat => String(cat.id || "") === String(targetCategoryId || ""))
+      ?.name || "当前样机池";
+    this._sampleArchiveBatchState = {
+      phase: "ready",
+      targetCategoryId,
+      targetName,
+      rows: files.map(file => ({
+        file,
+        status: "pending",
+        selected: false,
+        preview: null,
+        summary: "",
+        reason: "",
+      })),
+    };
+    this.showModal("批量导入样机档案", this._renderSampleArchiveBatchBody(), async () => {
+      return this._onSampleArchiveBatchOk();
+    }, "检查档案", { cancelText: "取消", className: "import-bundle-modal" });
+    this._bindSampleArchiveBatchSelectionHandlers();
+    this._updateSampleArchiveBatchOkButton();
   },
 
 });

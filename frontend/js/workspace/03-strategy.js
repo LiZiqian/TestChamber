@@ -94,6 +94,9 @@ app.registerModule("workspace.strategy", {
 
   // ==================== BOM 上料清单（删除规格/说明列）====================
   workspaceBomHtml(stage) {
+    const skuNames = Array.isArray(stage.skuNames) ? stage.skuNames : [];
+    const bomRows = stage.bom || [];
+    const bomScrollMinWidth = Math.max(180, (skuNames.length * 180) + 72);
     return `
       <div class="section-head">
         <div>
@@ -102,27 +105,42 @@ app.registerModule("workspace.strategy", {
         </div>
         <button class="btn btn-sm" data-app-action="bom-add">+ 新增物料</button>
       </div>
-      <div class="mini-table bom-table"><table class="bom-config-table">
-        <colgroup>
-          <col class="col-row-no">
-          <col class="col-bom-material">
-          ${stage.skuNames.map(() => `<col class="col-bom-sku">`).join("")}
-          <col class="col-action">
-        </colgroup>
-        <thead><tr>
-          <th></th>
-          <th style="color:var(--primary);font-weight:900">物料名称<span class="req-star">*</span></th>
-          ${stage.skuNames.map(n => `<th style="color:var(--primary);font-weight:900">${Utils.esc(n)}</th>`).join("")}
-          <th>操作</th>
-        </tr></thead>
-        <tbody>${(stage.bom || []).map((r, idx) => `
-          <tr>
-            <td class="row-no">${idx + 1}</td>
-            <td><input value="${Utils.esc(r.materialName || "")}" data-app-action="bom-update" data-app-events="change" data-index="${idx}" data-field="materialName" placeholder="必填"></td>
-            ${stage.skuNames.map((n, i) => `<td><input value="${Utils.esc(r['sku' + (i + 1)] || "")}" data-app-action="bom-update" data-app-events="change" data-index="${idx}" data-field="sku${i + 1}" placeholder="说明"></td>`).join("")}
-            <td><button class="stage-row-delete-btn" data-app-action="bom-delete" data-index="${idx}" title="删除" aria-label="删除 BOM 物料">🗑</button></td>
-          </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 3}" class="empty">暂无 BOM 物料</td></tr>`}</tbody>
-      </table></div>`;
+      <div class="mini-table split-table bom-table">
+        <div class="split-frozen bom-frozen">
+          <table class="bom-config-table bom-frozen-table">
+            <colgroup>
+              <col class="col-row-no">
+              <col class="col-bom-material">
+            </colgroup>
+            <thead><tr>
+              <th></th>
+              <th style="color:var(--primary);font-weight:900">物料名称</th>
+            </tr></thead>
+            <tbody>${bomRows.map((r, idx) => `
+              <tr>
+                <td class="row-no">${idx + 1}</td>
+                <td><input value="${Utils.esc(r.materialName || "")}" data-app-action="bom-update" data-app-events="change" data-index="${idx}" data-field="materialName" placeholder="选填"></td>
+              </tr>`).join("") || `<tr><td colspan="2" class="empty">暂无 BOM 物料</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="split-scroll bom-scroll">
+          <table class="bom-config-table bom-scroll-table" style="min-width:${bomScrollMinWidth}px">
+            <colgroup>
+              ${skuNames.map(() => `<col class="col-bom-sku">`).join("")}
+              <col class="col-action">
+            </colgroup>
+            <thead><tr>
+              ${skuNames.map(n => `<th style="color:var(--primary);font-weight:900">${Utils.esc(n)}</th>`).join("")}
+              <th>操作</th>
+            </tr></thead>
+            <tbody>${bomRows.map((r, idx) => `
+              <tr>
+                ${skuNames.map((n, i) => `<td><input value="${Utils.esc(r['sku' + (i + 1)] || "")}" data-app-action="bom-update" data-app-events="change" data-index="${idx}" data-field="sku${i + 1}" placeholder="说明"></td>`).join("")}
+                <td><button class="stage-row-delete-btn" data-app-action="bom-delete" data-index="${idx}" title="删除" aria-label="删除 BOM 物料">🗑</button></td>
+              </tr>`).join("") || `<tr><td colspan="${skuNames.length + 1}" class="empty"></td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>`;
   },
 
   addBomRow() {
@@ -200,7 +218,8 @@ app.registerModule("workspace.strategy", {
     const p = this.currentProject();
     const caseCount = (p?.testCaseMaster || []).length;
     const visibleRows = this.stageStrategyVisibleRows(stage);
-    const strategyMinWidth = 56 + 236 + 276 + 140 + (stage.skuNames.length * 92) + 86;
+    const skuNames = Array.isArray(stage.skuNames) ? stage.skuNames : [];
+    const strategyScrollMinWidth = Math.max(180, (skuNames.length * 92) + 86);
     return `
       <div class="section-head">
         <div>
@@ -214,36 +233,51 @@ app.registerModule("workspace.strategy", {
         </div>
       </div>
       ${this.stageStrategySearchHtml(stage, visibleRows)}
-      <div class="mini-table wide-table-scroll strategy-table"><table class="strategy-config-table" style="min-width:${strategyMinWidth}px">
-        <colgroup>
-          <col class="col-row-no">
-          <col class="col-test-category">
-          <col class="col-test-item">
-          <col class="col-sample-size">
-          ${stage.skuNames.map(() => `<col class="col-strategy-sku">`).join("")}
-          <col class="col-action">
-        </colgroup>
-        <thead><tr>
-          <th></th>
-          <th style="color:var(--primary);font-weight:900">测量类别<span class="req-star">*</span></th>
-          <th style="color:var(--primary);font-weight:900">用例名称<span class="req-star">*</span></th>
-          <th style="color:var(--primary);font-weight:900">样机数<span class="req-star">*</span></th>
-          ${stage.skuNames.map(n => `<th style="color:var(--primary);font-weight:900;text-align:center">${Utils.esc(n)}</th>`).join("")}
-          <th>操作</th>
-        </tr></thead>
-        <tbody>${visibleRows.map(({ row: r, index: idx }) => `
-          <tr data-strategy-row="${idx}">
-            <td class="row-no">${idx + 1}</td>
-            <td><input data-field="category" data-index="${idx}" data-app-action="strategy-input" data-app-events="focusin click input" value="${Utils.esc(r.category || "")}" autocomplete="off"
-              placeholder="选择或输入"></td>
-            <td><input data-field="item" data-index="${idx}" data-app-action="strategy-input" data-app-events="focusin click input" value="${Utils.esc(r.item || "")}" autocomplete="off"
-              placeholder="搜索/选择/输入"></td>
-            <td><input data-field="sampleSize" data-index="${idx}" data-app-action="strategy-input" data-app-events="input focusout" type="number" min="1" step="1" value="${Utils.esc(r.sampleSize || "")}"
-              placeholder="正整数"></td>
-            ${stage.skuNames.map((n, i) => `<td style="text-align:center;vertical-align:middle"><input data-sku="${i + 1}" data-index="${idx}" data-app-action="strategy-sku" data-app-events="change" type="checkbox" style="width:auto;vertical-align:middle" ${r.skuMap?.[i + 1] ? 'checked' : ''}></td>`).join("")}
-            <td><button class="stage-row-delete-btn" data-app-action="strategy-delete" data-index="${idx}" title="删除" aria-label="删除测试策略">🗑</button></td>
-          </tr>`).join("") || `<tr><td colspan="${stage.skuNames.length + 5}" class="empty">${(stage.strategy || []).length ? "无匹配策略，请调整搜索条件。" : "暂无策略。先新增测试项。"}</td></tr>`}</tbody>
-      </table></div>
+      <div class="mini-table wide-table-scroll split-table strategy-table">
+        <div class="split-frozen strategy-frozen">
+          <table class="strategy-config-table strategy-frozen-table">
+            <colgroup>
+              <col class="col-row-no">
+              <col class="col-test-category">
+              <col class="col-test-item">
+              <col class="col-sample-size">
+            </colgroup>
+            <thead><tr>
+              <th></th>
+              <th style="color:var(--primary);font-weight:900">测量类别<span class="req-star">*</span></th>
+              <th style="color:var(--primary);font-weight:900">用例名称<span class="req-star">*</span></th>
+              <th style="color:var(--primary);font-weight:900">样机数<span class="req-star">*</span></th>
+            </tr></thead>
+            <tbody>${visibleRows.map(({ row: r, index: idx }) => `
+              <tr data-strategy-row="${idx}">
+                <td class="row-no">${idx + 1}</td>
+                <td><input data-field="category" data-index="${idx}" data-app-action="strategy-input" data-app-events="focusin click input" value="${Utils.esc(r.category || "")}" autocomplete="off"
+                  placeholder="选择或输入"></td>
+                <td><input data-field="item" data-index="${idx}" data-app-action="strategy-input" data-app-events="focusin click input" value="${Utils.esc(r.item || "")}" autocomplete="off"
+                  placeholder="搜索/选择/输入"></td>
+                <td><input data-field="sampleSize" data-index="${idx}" data-app-action="strategy-input" data-app-events="input focusout" type="number" min="1" step="1" value="${Utils.esc(r.sampleSize || "")}"
+                  placeholder="正整数"></td>
+              </tr>`).join("") || `<tr><td colspan="4" class="empty">${(stage.strategy || []).length ? "无匹配策略，请调整搜索条件。" : "暂无策略。先新增测试项。"}</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="split-scroll strategy-scroll">
+          <table class="strategy-config-table strategy-scroll-table" style="min-width:${strategyScrollMinWidth}px">
+            <colgroup>
+              ${skuNames.map(() => `<col class="col-strategy-sku">`).join("")}
+              <col class="col-action">
+            </colgroup>
+            <thead><tr>
+              ${skuNames.map(n => `<th style="color:var(--primary);font-weight:900;text-align:center">${Utils.esc(n)}</th>`).join("")}
+              <th>操作</th>
+            </tr></thead>
+            <tbody>${visibleRows.map(({ row: r, index: idx }) => `
+              <tr>
+                ${skuNames.map((n, i) => `<td style="text-align:center;vertical-align:middle"><input data-sku="${i + 1}" data-index="${idx}" data-app-action="strategy-sku" data-app-events="change" type="checkbox" style="width:auto;vertical-align:middle" ${r.skuMap?.[i + 1] ? 'checked' : ''}></td>`).join("")}
+                <td><button class="stage-row-delete-btn" data-app-action="strategy-delete" data-index="${idx}" title="删除" aria-label="删除测试策略">🗑</button></td>
+              </tr>`).join("") || `<tr><td colspan="${skuNames.length + 1}" class="empty"></td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
         <div class="task-add-footer">
           <button class="task-add-main" data-app-action="strategy-add">
             <span class="row-action-btn row-add-btn"></span>
@@ -318,7 +352,12 @@ app.registerModule("workspace.strategy", {
       if (item) r.item = item.value.trim();
       if (sampleSize) r.sampleSize = Utils.normalizeDigits(sampleSize.value);
       if (!r.skuMap) r.skuMap = {};
-      tr.querySelectorAll('input[data-sku]').forEach(cb => { r.skuMap[cb.dataset.sku] = cb.checked; });
+    });
+    document.querySelectorAll('.strategy-scroll-table input[data-sku]').forEach(cb => {
+      const r = s.strategy[Number(cb.dataset.index)];
+      if (!r) return;
+      if (!r.skuMap) r.skuMap = {};
+      r.skuMap[cb.dataset.sku] = cb.checked;
     });
   },
 

@@ -5,7 +5,7 @@
 
 /* ---- Modal Sizing ---- */
 .task-config-modal.modal {
-  width: min(960px, 96vw);
+  width: min(1320px, 96vw);
   height: min(920px, 92vh);
   max-height: 92vh;
   display: flex;
@@ -64,7 +64,7 @@
   flex-direction: column;
   gap: 6px;
   border-right: 1px solid #e5e7eb;
-  background: #f8fafc;
+  background: transparent;
   padding: 14px 10px;
 }
 .task-config-nav-card {
@@ -102,7 +102,7 @@
   flex-direction: column;
   border: none;
   border-radius: 0;
-  background: #fafbfc;
+  background: transparent;
   padding: 14px;
 }
 
@@ -227,12 +227,31 @@
   overflow-y: auto;
   overflow-x: hidden;
   display: block;
-  padding: 0 0 96px;
+  padding: 0 30px 12px 0;
   border: none;
   border-radius: 0;
   background: transparent;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #2563eb #dbeafe;
   overscroll-behavior: contain;
+}
+
+.task-config-modal .dispatch-sample-select.task-config-sample-scroll::-webkit-scrollbar {
+  width: 13px;
+}
+.task-config-modal .dispatch-sample-select.task-config-sample-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #dbeafe;
+  border: 4px solid #fafbfc;
+}
+.task-config-modal .dispatch-sample-select.task-config-sample-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #2563eb;
+  border: 3px solid #dbeafe;
+}
+.task-config-modal .dispatch-sample-select.task-config-sample-scroll::-webkit-scrollbar-thumb:hover {
+  background: #1d4ed8;
 }
 
 /* ---- Pool Groups — 扁平化，仅用底部分隔线 ---- */
@@ -243,8 +262,14 @@
   margin: 0;
   overflow: visible;
   border: none;
-  border-bottom: 1px solid #dde1e7;
+  border-bottom: 2px solid #cbd5e1;
   border-radius: 0;
+  background: transparent;
+}
+.task-config-modal #tcPanelSample .task-sample-selected-group {
+  background: #f0fdf4;
+}
+.task-config-modal #tcPanelSample .task-sample-candidate-group {
   background: transparent;
 }
 .task-config-modal #tcPanelSample .dispatch-sample-head {
@@ -319,8 +344,8 @@
 }
 .task-config-modal #tcPanelSample .dispatch-sample-body.open {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
   align-items: start;
   align-content: start;
   min-height: 0;
@@ -328,65 +353,126 @@
   max-height: clamp(500px, 58vh, 680px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 4px 28px;
+  padding: 8px 14px 18px 4px;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #16a34a #dcfce7;
   overscroll-behavior: auto;
 }
 
+.task-config-modal #tcPanelSample .dispatch-sample-body.open::-webkit-scrollbar {
+  width: 10px;
+}
+.task-config-modal #tcPanelSample .dispatch-sample-body.open::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #dcfce7;
+  border: 3px solid #fafbfc;
+}
+.task-config-modal #tcPanelSample .dispatch-sample-body.open::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #16a34a;
+  border: 2px solid #dcfce7;
+}
+.task-config-modal #tcPanelSample .dispatch-sample-body.open::-webkit-scrollbar-thumb:hover {
+  background: #15803d;
+}
+
 .task-config-modal #tcPanelSample .dispatch-sample-row {
-  min-height: 86px;
-  padding: 10px 14px;
-  border-radius: 11px;
+  min-height: 66px;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
   background: #fff;
 }
 
 .task-config-modal #tcPanelSample .dispatch-sample-id {
-  font-size: 14px;
-  font-weight: 900;
+  font-size: 11px;
+  line-height: 1.15;
+  font-weight: 800;
 }
 
 .task-config-modal #tcPanelSample .dispatch-sample-stage,
 .task-config-modal #tcPanelSample .dispatch-sample-tested {
-  font-size: 12px;
+  min-width: 0;
+  font-size: 9.5px;
+  line-height: 1.18;
 }
 
 .task-config-modal #tcPanelSample .dispatch-sample-status {
-  width: 66px;
-  gap: 6px;
+  width: 48px;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+  align-items: flex-end;
 }
 
 .task-config-modal #tcPanelSample .dispatch-sample-status .badge {
-  min-width: 58px;
-  height: 20px;
-  padding: 0 8px;
-  font-size: 11px;
+  min-width: 0;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 8.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* Last group: no border, extra bottom breathing room */
 .task-config-modal #tcPanelSample .dispatch-sample-group:last-child {
   border-bottom: none;
-  margin-bottom: 88px;
+  margin-bottom: 12px;
 }
 
 /* ---- Responsive ---- */
 @media (max-width: 900px) {
+  .task-config-modal.modal {
+    width: min(1320px, calc(100vw - 48px));
+    height: min(920px, calc(100vh - 48px));
+    max-height: calc(100vh - 48px);
+  }
+  .task-config-modal .modal-body {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 12px 14px;
+    scrollbar-gutter: stable;
+  }
+  .task-config-titlebar {
+    gap: 12px;
+  }
+  .task-config-titlebar > span:first-child {
+    font-size: 17px;
+  }
+  .task-config-title-context {
+    min-width: 0;
+    max-width: 100%;
+    font-size: 16px;
+  }
   .task-config-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: 96px minmax(1040px, 1fr);
+    min-width: 1136px;
   }
   .task-config-nav {
-    flex-direction: row;
-    border-right: 0;
-    border-bottom: 1px solid #e5e7eb;
-    padding: 10px;
+    flex-direction: column;
+    border-right: 1px solid #e5e7eb;
+    border-bottom: 0;
+    padding: 10px 8px;
   }
   .task-config-nav-card {
-    flex: 1;
+    flex: 0 0 auto;
+    padding: 9px 8px;
   }
   .task-config-nav-card.active {
-    border-left: 1px solid transparent;
+    border-left: none;
     border-bottom: none;
   }
   .task-config-main {
+    min-width: 1040px;
     min-height: 0;
+    padding: 10px;
+  }
+  .task-config-modal .dispatch-sample-select.task-config-sample-scroll {
+    padding-right: 22px;
+  }
+  .task-config-modal #tcPanelSample .dispatch-sample-body.open {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }

@@ -307,6 +307,10 @@
     flex-direction: row;
     overflow-x: auto;
   }
+  .sample-archive-nav .sample-archive-export-nav {
+    margin-top: 0;
+    margin-left: auto;
+  }
   .sample-archive-nav button {
     white-space: nowrap;
   }

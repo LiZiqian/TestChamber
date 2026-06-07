@@ -145,13 +145,13 @@ app.registerModule("workspace.home", {
     const title = document.createElement("h2");
     title.textContent = "项目配置工作台";
     const desc = document.createElement("p");
-    desc.textContent = "项目需首先完成阶段配置、人员配置与位置配置。";
+    desc.textContent = "项目需首先完成人员配置、位置配置与阶段方案配置。";
     intro.append(title, desc);
     configCard.append(intro);
 
-    configCard.append(this.projectStageConfigSectionNode(stageCards, addStageCard, sortMode));
     this.appendWorkspaceHtml(configCard, this.workspaceMembersHtml(project, sampleOwnerCounts));
     this.appendWorkspaceHtml(configCard, this.workspaceLocationsHtml(project));
+    configCard.append(this.projectStageConfigSectionNode(stageCards, addStageCard, sortMode));
     nodes.push(configCard);
 
     if (stage) {
@@ -221,9 +221,9 @@ app.registerModule("workspace.home", {
         const stat = this.memberWorkStats(project, m, sampleOwnerCounts);
         const identity = Utils.personText(m.name, m.employeeNo);
         return `
-          <div class="project-member-card" data-app-action="project-member-edit" data-app-events="dblclick" data-id="${Utils.esc(m.id)}">
+          <div class="project-member-card" data-app-action="project-member-edit" data-app-events="dblclick" data-id="${Utils.esc(m.id)}" tabindex="0" title="双击编辑人员" aria-label="双击编辑人员 ${Utils.esc(identity || "-")}">
             <div class="project-member-identity">${Utils.esc(identity || "-")}</div>
-            <div class="project-member-stat">${stat.tasks} 项 / ${stat.hours.toFixed(1)}h · 挂账 ${stat.ownedSamples} 台</div>
+            <div class="project-member-stat">${stat.tasks} 项 · 挂账 ${stat.ownedSamples} 台</div>
             <span class="project-member-remove" data-app-action="project-member-remove" data-stop-propagation="1" data-id="${Utils.esc(m.id)}" title="移出人员">🗑</span>
           </div>`;
       }).join("");
@@ -256,7 +256,7 @@ app.registerModule("workspace.home", {
     const collapsed = this.isCollapsed('locations');
     const locations = project.locations.filter(Boolean);
     const cards = locations.map((loc, idx) => `
-      <div class="project-location-card" data-app-action="project-location-edit" data-app-events="dblclick" data-value="${idx}">
+      <div class="project-location-card" data-app-action="project-location-edit" data-app-events="dblclick" data-value="${idx}" tabindex="0" title="双击编辑位置" aria-label="双击编辑位置 ${Utils.esc(loc)}">
         <b>${Utils.esc(loc)}</b>
         <span class="project-location-remove" data-app-action="project-location-remove" data-stop-propagation="1" data-value="${idx}" title="删除位置">🗑</span>
       </div>`).join("");
@@ -492,25 +492,19 @@ app.registerModule("workspace.home", {
     }, { title: "移出人员", okText: "移出", okClass: "btn btn-danger" });
   },
   memberWorkStats(project, member, sampleOwnerCounts = null) {
-    let tasks = 0, hours = 0;
+    let tasks = 0;
     (project.stages || []).forEach(stage => {
       (stage.tasks || []).forEach(t => {
         const owner = String(t.owner || "");
         if (owner !== member.name && owner !== member.employeeNo && !owner.includes(member.name) && !owner.includes(member.employeeNo)) return;
         tasks++;
-        const start = t.startedAt || t.startTime || t.startDate;
-        const end = t.completedAt || t.endTime || t.endDate;
-        if (start && end) {
-          const diff = new Date(end).getTime() - new Date(start).getTime();
-          if (Number.isFinite(diff) && diff > 0) hours += diff / 3600000;
-        }
       });
     });
     const memberKey = Utils.memberIdentityKey(member.name, member.employeeNo);
     const ownedSamples = sampleOwnerCounts instanceof Map
       ? (sampleOwnerCounts.get(memberKey) || 0)
       : this.allSamples().filter(sample => Utils.personMatchesMember(sample.owner, member)).length;
-    return { tasks, hours, ownedSamples };
+    return { tasks, ownedSamples };
   },
 
   toggleStageSortMode() {
