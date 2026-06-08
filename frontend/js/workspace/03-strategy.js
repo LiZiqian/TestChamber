@@ -279,7 +279,7 @@ app.registerModule("workspace.strategy", {
         </div>
       </div>
         <div class="task-add-footer">
-          <button class="task-add-main" data-app-action="strategy-add">
+          <button type="button" class="task-add-main" data-app-action="strategy-add">
             <span class="row-action-btn row-add-btn"></span>
             <span>新增测试项</span>
           </button>
@@ -290,7 +290,7 @@ app.registerModule("workspace.strategy", {
     const s = this.currentStage();
     s.strategy.push({ id: Utils.id("strat_"), category: "", item: "", sampleSize: 1, skuMap: { 1: true } });
     this.persistStageStrategyMutation("update_strategy", "新增测试策略", { render: false });
-    this.render();
+    this.renderPreserveScroll();
   },
   onStrategyInput(idx, field, el) {
     const s = this.currentStage();
