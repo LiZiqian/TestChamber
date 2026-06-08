@@ -14,7 +14,7 @@ TestChamber 是给硬件测试实验室使用的本地内网 Web 台账，用来
 它的部署方式很轻：不需要云服务，不需要单独安装数据库，不需要 `pip install` 或 `npm install`。下载源码后，用 Python 启动服务，在浏览器打开即可使用。
 
 > [!NOTE]
-> - 当前版本以根目录 `VERSION` 为准
+> - 当前版本由系统内置版本模块统一维护
 > - 默认端口：`9398`
 > - 默认数据目录：项目内 `data/`
 > - 推荐环境：Windows + Python 3.9+ + Chrome / Edge
