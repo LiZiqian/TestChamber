@@ -19,7 +19,7 @@ TestChamber 是给硬件测试实验室使用的本地内网 Web 台账，用来
 > - 默认数据目录：项目内 `data/`
 > - 推荐环境：Windows + Python 3.9+ + Chrome / Edge
 
-## 适合的场景
+## 使用场景
 
 - 实验室或测试团队需要在内网共享一套测试台账。
 - 样机需要在多个项目、阶段和任务之间流转。
@@ -41,9 +41,48 @@ TestChamber 是给硬件测试实验室使用的本地内网 Web 台账，用来
 
 核心工作流：
 
-```text
-项目/阶段 -> 测试策略 -> 任务配置 -> 样机池选样 -> 启动测试
-  -> 结果录入 -> 结束任务 -> 样机履历 / 数据包导出
+```mermaid
+flowchart TB
+    classDef project fill:#eff6ff,stroke:#93c5fd,stroke-width:1.4px,color:#0f172a
+    classDef sample fill:#f0fdf4,stroke:#86efac,stroke-width:1.4px,color:#0f172a
+    classDef action fill:#fefce8,stroke:#facc15,stroke-width:1.4px,color:#0f172a
+    classDef result fill:#fff7ed,stroke:#fdba74,stroke-width:1.4px,color:#0f172a
+    classDef archive fill:#f8fafc,stroke:#cbd5e1,stroke-width:1.4px,color:#0f172a
+
+    subgraph Top[" "]
+        direction LR
+
+        subgraph ProjectFlow["项目链路"]
+            direction TB
+            Project["项目管理<br/>阶段 / 方案 / 人员"]:::project
+            TaskSheet["测试任务工作表<br/>按阶段配置 / 管理"]:::project
+            Project --> TaskSheet
+        end
+
+        subgraph SampleFlow["样机链路"]
+            direction TB
+            SampleArchive["样机档案库<br/>样机池 A / B / C / ..."]:::sample
+            SampleCard["样机卡片<br/>信息详情 / 测试履历 / 图片数据 等"]:::sample
+            SampleArchive --> SampleCard
+        end
+    end
+
+    subgraph ExecuteFlow["执行闭环"]
+        direction TB
+        Task["任务按阶段执行<br/> 测试项 / 分配样机 / 进度管理 等"]:::action
+        Result["结果录入<br/>测试结论 / 照片 / 样机去向 / 持有人 等"]:::result
+        Archive["履历与迁移<br/>样机履历 / 完整数据包"]:::archive
+        Task --> Result --> Archive
+    end
+
+    TaskSheet --> Task
+    SampleCard --> Task
+
+    style Top fill:transparent,stroke:transparent
+    style ProjectFlow fill:transparent,stroke:#dbeafe,stroke-width:1px,color:#334155
+    style SampleFlow fill:transparent,stroke:#dcfce7,stroke-width:1px,color:#334155
+    style ExecuteFlow fill:transparent,stroke:#e2e8f0,stroke-width:1px,color:#334155
+    linkStyle default stroke:#cbd5e1,stroke-width:1.4px
 ```
 
 ## 快速启动
@@ -183,20 +222,7 @@ data/
 - 启动窗口里是否有 Python 报错。
 - `http://127.0.0.1:9398/api/health` 是否能打开。
 
-### 局域网其他电脑打不开
 
-本机能打开、其他电脑打不开时，通常是网络或防火墙问题。优先检查：
-
-- 服务器 IP 是否正确。
-- Windows 防火墙是否允许端口入站。
-- 访问电脑和服务器是否在同一网段。
-- 公司 Wi-Fi 是否启用了访客网络、客户端隔离、VLAN 或 ACL 限制。
-
-PowerShell 快速测试：
-
-```powershell
-Test-NetConnection 服务器IP -Port 9398
-```
 
 ### Python 找不到
 
