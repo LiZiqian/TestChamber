@@ -45,6 +45,37 @@
   padding-top: 0;
   border-top: 0;
 }
+.project-default-sample-section .stage-summary-section-head { margin-top: 0 }
+.project-default-sample-body {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 420px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+}
+.project-default-sample-section.is-collapsed .project-default-sample-body {
+  display: none;
+}
+.project-default-sample-label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.project-default-sample-select {
+  width: 100%;
+  min-width: 0;
+}
+.project-default-sample-current {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .project-default-sample-body {
+    grid-template-columns: 1fr;
+  }
+}
 .project-hero > .stage-summary-section-head { margin-top: 26px }
 .project-members-section .stage-summary-section-head { margin-top: 0 }
 .project-locations-section .stage-summary-section-head { margin-top: 0 }

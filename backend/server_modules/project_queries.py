@@ -229,6 +229,7 @@ def list_project_summary(conn: sqlite3.Connection) -> list[dict]:
             "name": row["name"] or project.get("name") or "",
             "code": row["code"] or project.get("code") or "",
             "owner": row["owner"] or project.get("owner") or "",
+            "defaultSampleCategoryId": project.get("defaultSampleCategoryId") or "",
             "stageCount": stages_by_project.get(str(row["id"]), 0),
             "taskCount": tasks_by_project.get(str(row["id"]), 0),
         })

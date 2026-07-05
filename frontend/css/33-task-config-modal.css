@@ -110,6 +110,26 @@
 .task-config-panel { display: none; }
 .task-config-panel.active { display: block; min-height: 0; }
 
+.task-config-shell:has(#tcPanelPlan .is-invalid) .task-config-nav-card[data-value="plan"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(11, 116, 222, .22);
+}
+.task-config-shell:has(#tcPanelPlan .is-invalid) .task-config-nav-card[data-value="sample"] {
+  background: transparent;
+  border-color: transparent;
+  color: inherit;
+  box-shadow: none;
+}
+.task-config-shell:has(#tcPanelPlan .is-invalid) #tcPanelPlan {
+  display: block;
+  min-height: 0;
+}
+.task-config-shell:has(#tcPanelPlan .is-invalid) #tcPanelSample {
+  display: none;
+}
+
 /* ---- Plan Config Tab ---- */
 #tcPanelPlan.active {
   display: block;

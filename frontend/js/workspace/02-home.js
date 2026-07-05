@@ -151,6 +151,7 @@ app.registerModule("workspace.home", {
 
     this.appendWorkspaceHtml(configCard, this.workspaceMembersHtml(project, sampleOwnerCounts));
     this.appendWorkspaceHtml(configCard, this.workspaceLocationsHtml(project));
+    this.appendWorkspaceHtml(configCard, this.workspaceDefaultSampleCategoryHtml(project));
     configCard.append(this.projectStageConfigSectionNode(stageCards, addStageCard, sortMode));
     nodes.push(configCard);
 
@@ -277,6 +278,64 @@ app.registerModule("workspace.home", {
           </div>
         </div>
       </div>`;
+  },
+
+  workspaceDefaultSampleCategoryHtml(project) {
+    const collapsed = this.isCollapsed("sampleCategoryConfig");
+    const categories = this.sampleCategoryRecords();
+    const selectedId = this.projectDefaultSampleCategoryId(project);
+    const options = [
+      `<option value="" ${selectedId ? "" : "selected"}>不设置（默认全部样机池）</option>`,
+      ...categories.map(category => {
+        const id = String(category.id || "");
+        const selected = id === selectedId ? "selected" : "";
+        const count = Number(category.sampleCount ?? (category.samples || []).length) || 0;
+        const suffix = count ? ` (${count})` : "";
+        return `<option value="${Utils.esc(id)}" ${selected}>${Utils.esc(category.name || id)}${suffix}</option>`;
+      })
+    ].join("");
+    const configured = selectedId
+      ? `当前默认：${Utils.esc(this.projectDefaultSampleCategoryName(project) || selectedId)}`
+      : "当前未设置，任务配置和临时变更默认显示全部样机池。";
+    return `
+      <div class="project-config-section project-default-sample-section ${collapsed ? 'is-collapsed' : ''}">
+        <div class="stage-summary-section-head">
+          ${this.sectionToggleTriangle('sampleCategoryConfig')}
+          <div class="stage-summary-section-title">样机池配置</div>
+        </div>
+        <div class="stage-summary-section-desc">设置本项目任务配置、临时变更等样机选择入口的默认候选池。</div>
+        <div class="project-default-sample-body project-config-body">
+          <label class="project-default-sample-label" for="projectDefaultSampleCategory">默认样机池</label>
+          <select id="projectDefaultSampleCategory" class="project-default-sample-select" data-app-action="project-default-sample-category" data-app-events="change">${options}</select>
+          <span class="project-default-sample-current">${configured}</span>
+        </div>
+      </div>`;
+  },
+
+  async setProjectDefaultSampleCategory(categoryId) {
+    const p = this.currentProject();
+    if (!p) return;
+    const nextId = String(categoryId || "").trim();
+    if (nextId && !this.findSampleCategoryRecord(nextId)) {
+      alert("所选样机池不存在或已被删除。");
+      this.render();
+      return;
+    }
+    const before = String(p.defaultSampleCategoryId || "");
+    if (before === nextId) return;
+    const snapshot = this.dataSnapshot();
+    p.defaultSampleCategoryId = nextId;
+    const saved = await this.commitProjectMutation(p, {
+      action: "set_project_default_sample_category",
+      remark: nextId ? "设置项目默认样机池" : "清除项目默认样机池",
+      user: "管理员"
+    });
+    if (!saved) {
+      this.restoreDataSnapshot(snapshot);
+      this.render();
+      return;
+    }
+    Utils.toast(nextId ? "默认样机池已保存" : "已恢复为全部样机池");
   },
 
   addProjectLocation() {

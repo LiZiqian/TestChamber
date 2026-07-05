@@ -456,13 +456,13 @@ app.registerModule("workspace.taskConfig", {
     const check = this.validateTaskSampleSelection(progress, sampleIds, "样机分配");
     // 验证 plan
     this.clearFieldValidationMarks();
-    if (!owner) { this.markFieldInvalid(document.getElementById("tcPlanOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return true; }
+    if (!owner) { this.markTaskPlanConfigInvalid(document.getElementById("tcPlanOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return true; }
     if (!start || !end) {
-      if (!start) this.markFieldInvalid(document.getElementById("tcPlanStartDate"), "必须填写计划开始时间");
-      if (!end) this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "必须填写计划终止时间");
+      if (!start) this.markTaskPlanConfigInvalid(document.getElementById("tcPlanStartDate"), "必须填写计划开始时间");
+      if (!end) this.markTaskPlanConfigInvalid(document.getElementById("tcPlanEndDate"), "必须填写计划终止时间");
       return true;
     }
-    if (start > end) { this.markFieldInvalid(document.getElementById("tcPlanEndDate"), "计划终止时间不能早于计划开始时间"); return true; }
+    if (start > end) { this.markTaskPlanConfigInvalid(document.getElementById("tcPlanEndDate"), "计划终止时间不能早于计划开始时间"); return true; }
     // 验证 sample — 文字提示 + 自动切到样机 Tab，不弹 alert，不标红计数胶囊
     if (!check.ok) {
       const labelRow = document.querySelector(".task-sample-label-row-compact");
@@ -540,6 +540,17 @@ app.registerModule("workspace.taskConfig", {
     else if (planChanged) Utils.toast("计划配置已保存");
     else Utils.toast("样机配置已保存");
     return false;
+  },
+
+  markTaskPlanConfigInvalid(el, message) {
+    const showPlan = () => this.switchTaskConfigTab("plan");
+    showPlan();
+    this.markFieldInvalid(el, message);
+    el?.focus?.({ preventScroll: true });
+    if (typeof setTimeout === "function") {
+      setTimeout(showPlan, 0);
+      setTimeout(showPlan, 120);
+    }
   },
 
   hasUnsavedTaskConfigChanges(projectId, stageId, progressId, taskId) {

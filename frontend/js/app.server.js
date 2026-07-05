@@ -357,7 +357,13 @@ app.registerModule("app.server", {
       try {
         const healthRes = await fetch("/api/health", { cache: "no-store" });
         const health = await healthRes.json().catch(() => ({}));
-        if (healthRes.ok && health.version === this.version) {
+        if (healthRes.ok) {
+          if (health.version !== this.version) {
+            console.warn("服务端版本与前端不一致，仍继续请求服务端缓存清理头。", {
+              server: health.version,
+              client: this.version
+            });
+          }
           const res = await fetch("/api/browser-cache/clear", { method: "POST", cache: "no-store" });
           const obj = await res.json().catch(() => ({}));
           if (!res.ok || obj.ok === false) {

@@ -465,6 +465,23 @@ app.registerModule("app.data", {
     return this.sampleCategoryRecords().find(category => String(category.id || "") === id) || null;
   },
 
+  findSampleCategoryRecord(categoryId) {
+    const id = String(categoryId || "");
+    if (!id) return null;
+    return this.sampleCategoryRecords().find(category => String(category.id || "") === id) || null;
+  },
+
+  projectDefaultSampleCategoryId(project = null) {
+    const p = project || this.currentProject();
+    const id = String(p?.defaultSampleCategoryId || "").trim();
+    return id && this.findSampleCategoryRecord(id) ? id : "";
+  },
+
+  projectDefaultSampleCategoryName(project = null) {
+    const category = this.findSampleCategoryRecord(this.projectDefaultSampleCategoryId(project));
+    return category?.name || "";
+  },
+
   samplePoolPageState(fallbackPageSize = 100) {
     return {
       page: Math.max(1, Number.parseInt(this.view?.samplePage, 10) || 1),

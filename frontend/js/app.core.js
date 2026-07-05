@@ -394,6 +394,9 @@ const app = {
       case "project-location-add":
         this.addProjectLocation();
         break;
+      case "project-default-sample-category":
+        this.setProjectDefaultSampleCategory(target.value);
+        break;
       case "sample-readonly":
         {
           const pending = this.openSampleReadonly(id);

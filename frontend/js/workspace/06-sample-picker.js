@@ -27,9 +27,12 @@ app.registerModule("workspace.samplePicker", {
     return `${this.taskSamplePickerDomId(inputName)}_${suffix}`;
   },
 
-  resetTaskSamplePickerState(inputName, { selectedIds = [], progressSelectId = "", hintId = "", excludeTaskId = "", progressId = "", requiredSampleCount = null } = {}) {
+  resetTaskSamplePickerState(inputName, { selectedIds = [], progressSelectId = "", hintId = "", excludeTaskId = "", progressId = "", requiredSampleCount = null, categoryId = null } = {}) {
     if (!this._taskSamplePickerStates) this._taskSamplePickerStates = {};
     const uniqueSelected = [...new Set((selectedIds || []).map(id => String(id || "").trim()).filter(Boolean))];
+    const initialCategoryId = categoryId === null || typeof categoryId === "undefined"
+      ? this.projectDefaultSampleCategoryId?.()
+      : String(categoryId || "").trim();
     this._taskSamplePickerStates[inputName] = {
       inputName,
       progressSelectId,
@@ -40,7 +43,7 @@ app.registerModule("workspace.samplePicker", {
       selectedIds: new Set(uniqueSelected),
       page: 1,
       pageSize: 50,
-      categoryId: "",
+      categoryId: initialCategoryId || "",
       status: "",
       keyword: "",
       excludeKeyword: "",
@@ -269,8 +272,17 @@ app.registerModule("workspace.samplePicker", {
     const totalPages = result.totalPages || 1;
     const total = Number(result.total || 0);
     const selectedCount = state.selectedIds.size;
-    const categoryOptions = [`<option value="">全部样机池</option>`]
-      .concat((state.categories || result.categories || []).map(category => {
+    const categoryMap = new Map();
+    [
+      ...(typeof this.sampleCategoryRecords === "function" ? this.sampleCategoryRecords() : []),
+      ...(result.categories || []),
+      ...(state.categories || []),
+    ].forEach(category => {
+      const id = String(category?.id || "");
+      if (id) categoryMap.set(id, { ...(categoryMap.get(id) || {}), ...category });
+    });
+    const categoryOptions = [`<option value="" ${state.categoryId ? "" : "selected"}>全部样机池</option>`]
+      .concat([...categoryMap.values()].map(category => {
         const id = String(category.id || "");
         const selected = id === String(state.categoryId || "") ? "selected" : "";
         const count = Number(category.sampleCount || 0);

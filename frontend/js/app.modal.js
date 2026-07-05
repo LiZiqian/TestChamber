@@ -228,11 +228,23 @@ app.registerModule("app.modal", {
   // 将指定元素标记为校验失败，在其所属 .form-group 中显示错误信息
   markFieldInvalid(el, message) {
     if (!el) return;
+    this.revealInvalidFieldPanel?.(el);
     el.classList.add("is-invalid");
     const group = el.closest(".form-group") || el.closest(".form-row") || el.parentElement;
     this.appendFieldError(group, message);
     const first = document.querySelector(".modal .is-invalid");
     first?.scrollIntoView({ block: "center", behavior: "smooth" });
+  },
+
+  revealInvalidFieldPanel(el) {
+    const panel = el?.closest?.(".task-config-panel");
+    if (!panel || panel.classList.contains("active")) return;
+    document.querySelectorAll(".task-config-panel").forEach(item => item.classList.toggle("active", item === panel));
+    const value = panel.id === "tcPanelSample" ? "sample" : panel.id === "tcPanelPlan" ? "plan" : "";
+    if (!value) return;
+    document.querySelectorAll(".task-config-nav-card").forEach(item => {
+      item.classList.toggle("active", item.dataset.value === value);
+    });
   },
 
   // ---- 危险确认弹窗（DELETE 关键词二次验证） ----
