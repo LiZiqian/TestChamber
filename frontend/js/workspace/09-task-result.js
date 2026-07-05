@@ -47,7 +47,7 @@ app.registerModule("workspace.taskResult", {
     }).join("；");
     return {
       locked: true,
-      hint: `该样机正被“${names}”任务使用，不可再次变更样机信息。`
+      hint: `该样机正在其他任务中：${names}。不可再次变更样机信息。`
     };
   },
 
@@ -93,15 +93,21 @@ app.registerModule("workspace.taskResult", {
     const row = selectEl.closest(".task-result-sample-row");
     if (!row) return;
     const dest = selectEl.value;
-    const takerSel = row.querySelector("select[id^='taskResultTaker_']");
+    const takerSel = this.taskResultMemberField(row, "taskResultTaker_");
     if (dest === "取走分析") {
-      if (takerSel) { takerSel.disabled = false; takerSel.required = true; }
+      if (takerSel) {
+        takerSel.disabled = false;
+        takerSel.required = true;
+        takerSel.placeholder = "请选择取走人";
+      }
     } else {
-      if (takerSel) { takerSel.disabled = true; takerSel.value = ""; takerSel.required = false; }
-    }
-    // 更新取走人占位文案
-    if (takerSel?.options?.[0]) {
-      takerSel.options[0].textContent = dest === "取走分析" ? "请选择取走人" : "无需填写";
+      if (takerSel) {
+        takerSel.disabled = true;
+        takerSel.value = "";
+        takerSel.required = false;
+        takerSel.placeholder = "无需填写";
+        this.closeProjectMemberComboboxes?.(takerSel);
+      }
     }
     // 更新取走人标签上的必填星号
     const takerLabel = row.querySelector(".task-result-route-grid .form-group:nth-child(3) > label");
@@ -118,6 +124,142 @@ app.registerModule("workspace.taskResult", {
         if (star) star.remove();
       }
     }
+  },
+
+  taskResultMemberField(row, prefix) {
+    if (!row || !prefix) return null;
+    return row.querySelector(`input[id^='${prefix}']`)
+      || row.querySelector(`select[id^='${prefix}']`);
+  },
+
+  taskResultLocationMenu(input) {
+    if (!input || typeof document === "undefined") return null;
+    const menuId = input.dataset?.locationMenuId || "";
+    return menuId ? document.getElementById(menuId) : input.closest?.(".task-result-location-combobox")?.querySelector?.(".task-result-location-menu");
+  },
+
+  openTaskResultLocationCombobox(input, options = {}) {
+    if (!input || input.disabled) return;
+    const picker = input.closest?.(".task-result-location-combobox");
+    const menu = this.taskResultLocationMenu(input);
+    if (!picker || !menu) return;
+    this.closeTaskResultLocationComboboxes(input);
+    this.closeProjectMemberComboboxes?.();
+    picker.classList.add("is-open");
+    input.setAttribute?.("aria-expanded", "true");
+    if (options.reset !== false) this.filterTaskResultLocationCombobox(input, "");
+  },
+
+  closeTaskResultLocationComboboxes(exceptInput = null) {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+    document.querySelectorAll(".task-result-location-combobox.is-open").forEach(picker => {
+      const input = picker.querySelector?.(".task-result-sample-location");
+      if (exceptInput && input === exceptInput) return;
+      picker.classList.remove("is-open");
+      input?.setAttribute?.("aria-expanded", "false");
+      picker.querySelectorAll?.(".task-result-location-option.is-active").forEach(option => option.classList.remove("is-active"));
+    });
+  },
+
+  scheduleTaskResultLocationFilter(input) {
+    if (!input) return;
+    if (!this._taskResultLocationTimers) this._taskResultLocationTimers = {};
+    const key = input.id || input.dataset?.locationMenuId || "default";
+    if (this._taskResultLocationTimers[key]) clearTimeout(this._taskResultLocationTimers[key]);
+    this._taskResultLocationTimers[key] = setTimeout(() => {
+      delete this._taskResultLocationTimers[key];
+      this.filterTaskResultLocationCombobox(input);
+    }, 500);
+  },
+
+  filterTaskResultLocationCombobox(input, forcedKeyword = null) {
+    const menu = this.taskResultLocationMenu(input);
+    if (!menu) return 0;
+    const keyword = String(forcedKeyword === null ? input?.value || "" : forcedKeyword).trim().toLowerCase();
+    let visibleCount = 0;
+    const options = Array.from(menu.querySelectorAll?.(".task-result-location-option") || []);
+    options.forEach(option => {
+      const haystack = String(option.dataset?.locationSearchKey || option.textContent || "").toLowerCase();
+      const visible = !keyword || haystack.includes(keyword);
+      option.hidden = !visible;
+      option.classList.remove("is-active");
+      if (visible) visibleCount += 1;
+    });
+    const empty = menu.querySelector?.(".project-member-combobox-empty");
+    if (empty) {
+      if (options.length) {
+        empty.hidden = visibleCount > 0;
+        empty.textContent = "没有匹配位置";
+      } else {
+        empty.hidden = false;
+        empty.textContent = "暂无项目位置，可直接输入";
+      }
+    }
+    return visibleCount;
+  },
+
+  handleTaskResultLocationCombobox(input, event, eventType) {
+    if (!input || input.disabled) return;
+    if (eventType === "focusin" || eventType === "click") {
+      this.openTaskResultLocationCombobox(input, { reset: true });
+      return;
+    }
+    if (eventType === "input") {
+      this.openTaskResultLocationCombobox(input, { reset: false });
+      this.scheduleTaskResultLocationFilter(input);
+      return;
+    }
+    if (eventType === "keydown") this.handleTaskResultLocationKey(input, event);
+  },
+
+  visibleTaskResultLocationOptions(input) {
+    const menu = this.taskResultLocationMenu(input);
+    return Array.from(menu?.querySelectorAll?.(".task-result-location-option") || []).filter(option => !option.hidden);
+  },
+
+  handleTaskResultLocationKey(input, event) {
+    if (!input || !event) return;
+    if (event.key === "Escape") {
+      this.closeTaskResultLocationComboboxes();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+    const options = this.visibleTaskResultLocationOptions(input);
+    if (!options.length) return;
+    const activeIndex = options.findIndex(option => option.classList.contains("is-active"));
+    if (event.key === "Enter") {
+      if (activeIndex >= 0) {
+        event.preventDefault();
+        this.selectTaskResultLocationOption(options[activeIndex]);
+      }
+      return;
+    }
+    event.preventDefault();
+    this.openTaskResultLocationCombobox(input, { reset: false });
+    const nextIndex = event.key === "ArrowDown"
+      ? (activeIndex + 1) % options.length
+      : (activeIndex <= 0 ? options.length - 1 : activeIndex - 1);
+    options.forEach(option => option.classList.remove("is-active"));
+    options[nextIndex].classList.add("is-active");
+    options[nextIndex].scrollIntoView?.({ block: "nearest" });
+  },
+
+  selectTaskResultLocationOption(option) {
+    if (!option || typeof document === "undefined") return;
+    const targetId = option.dataset?.locationTarget || "";
+    const input = targetId ? document.getElementById(targetId) : null;
+    if (!input || input.disabled) return;
+    input.value = option.dataset?.locationValue || "";
+    const menu = this.taskResultLocationMenu(input);
+    menu?.querySelectorAll?.(".task-result-location-option").forEach(item => {
+      item.classList.toggle("is-selected", item === option);
+      item.classList.remove("is-active");
+      item.hidden = false;
+    });
+    const empty = menu?.querySelector?.(".project-member-combobox-empty");
+    if (empty) empty.hidden = true;
+    input.dispatchEvent?.(new Event("change", { bubbles: true }));
+    this.closeTaskResultLocationComboboxes();
   },
 
 
@@ -241,6 +383,7 @@ app.registerModule("workspace.taskResult", {
   taskResultSampleRowsHtml(task, draft = null) {
     const entries = this.taskResultSampleEntries(task);
     const draftBySample = new Map((draft?.samples || []).map(item => [item.sampleId || item.sid, item]));
+    const taskCompleted = this.isTaskCompleted(task);
     return entries.map((entry, idx) => {
       const id = entry.sampleId;
       const draftItem = draftBySample.get(id) || null;
@@ -250,14 +393,20 @@ app.registerModule("workspace.taskResult", {
       const status = found ? this.sampleEffectiveStatus(sample) : (draftItem?.destination || "闲置");
       const editLock = this.taskResultCurrentEditLock(task, id);
       const currentDestination = status === "取走分析" || status === "已退库" ? status : "闲置";
+      const preferDraft = !!draftItem && !taskCompleted && !editLock.locked;
+      const draftField = (key, fallback = "") => {
+        if (!preferDraft) return fallback;
+        return Object.prototype.hasOwnProperty.call(draftItem, key) ? draftItem[key] : fallback;
+      };
       const destination = editLock.locked
         ? status
-        : (found ? currentDestination : (draftItem?.destination || currentDestination));
-      const accountOwner = found ? (sample.owner || "") : (draftItem?.accountOwner || "");
-      const destLocation = found ? (sample.location || "") : (draftItem?.destLocation || snapshot?.location || "");
-      const receiver = found
+        : String(draftField("destination", found ? currentDestination : (draftItem?.destination || currentDestination)) || currentDestination);
+      const accountOwner = String(draftField("accountOwner", found ? (sample.owner || "") : (draftItem?.accountOwner || "")) || "");
+      const destLocation = String(draftField("destLocation", found ? (sample.location || "") : (draftItem?.destLocation || snapshot?.location || "")) || "");
+      const currentReceiver = found
         ? (editLock.locked ? (sample.borrower || "") : (destination === "取走分析" ? this.defaultSampleReceiver(sample, task) : ""))
         : (draftItem?.receiver || "");
+      const receiver = String(draftField("receiver", currentReceiver) || "");
       const isTakerDisabled = editLock.locked || destination !== "取走分析";
       const takerPlaceholder = editLock.locked ? "当前无取走人" : (isTakerDisabled ? "无需填写" : "请选择取走人");
       const lockedAttr = editLock.locked ? " disabled" : "";
@@ -269,9 +418,9 @@ app.registerModule("workspace.taskResult", {
       const sampleCodeHtml = id && !snapshot?.destroyedAt
         ? `<b data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情">${Utils.esc(archiveName)}</b>`
         : `<b>${Utils.esc(archiveName)}</b>`;
-      // 项目位置列表（供去向位置 datalist 使用）
+      // 项目位置列表（供去向位置自定义下拉使用）
       const p = this.currentProject();
-      const locationOptions = (p?.locations || []).map(loc => `<option value="${Utils.esc(loc)}">`).join("");
+      const locations = (p?.locations || []).map(loc => String(loc || "").trim()).filter(Boolean);
       return `<div class="task-result-sample-row ${entry.state === "removed" ? "is-removed" : ""}" data-sid="${Utils.esc(id)}" data-sample-state="${Utils.esc(entry.state)}" data-current-edit-locked="${editLock.locked ? "1" : "0"}">
         <div class="task-result-sample-index">${idx + 1}</div>
         <div class="task-result-sample-code">
@@ -286,16 +435,15 @@ app.registerModule("workspace.taskResult", {
           </div>
           <div class="form-group">
             <label class="req">去向位置</label>
-            <input class="task-result-sample-location" list="taskResultLocationList_${idx}" value="${Utils.esc(destLocation)}" placeholder="如：失效分析区"${lockedAttr}>
-            <datalist id="taskResultLocationList_${idx}">${locationOptions}</datalist>
+            ${this.taskResultLocationComboboxHtml(`taskResultLocation_${idx}`, destLocation, locations, editLock.locked)}
           </div>
           <div class="form-group">
             <label>取走人${destination === '取走分析' ? '<span class="req-star">*</span>' : ''}</label>
-            ${this.projectMemberSelectHtml(`taskResultTaker_${idx}`, receiver, takerPlaceholder, isTakerDisabled)}
+            ${this.projectMemberSelectHtml(`taskResultTaker_${idx}`, receiver, takerPlaceholder, { scope: "developer", disabled: isTakerDisabled })}
           </div>
           <div class="form-group task-result-account-group">
             <label>挂账人</label>
-            ${this.projectMemberSelectHtml(`taskResultAccountOwner_${idx}`, accountOwner, "请选择挂账人", editLock.locked)}
+            ${this.projectMemberSelectHtml(`taskResultAccountOwner_${idx}`, accountOwner, "请选择挂账人", { scope: "all", disabled: editLock.locked })}
           </div>
         </div>
         <div class="form-group task-result-problem-field">
@@ -303,6 +451,35 @@ app.registerModule("workspace.taskResult", {
         </div>
       </div>`;
     }).join("") || `<div class="empty">该任务暂无样机。</div>`;
+  },
+
+  taskResultLocationComboboxHtml(id, selected = "", locations = [], disabled = false) {
+    const cleanLocations = [];
+    const seen = new Set();
+    (locations || []).forEach(loc => {
+      const value = String(loc || "").trim();
+      const key = value.toLowerCase();
+      if (!value || seen.has(key)) return;
+      seen.add(key);
+      cleanLocations.push(value);
+    });
+    const menuId = `${id}Options`;
+    const disabledAttr = disabled ? " disabled" : "";
+    const optionsHtml = cleanLocations.map(loc => `<button type="button" class="project-member-combobox-option task-result-location-option ${loc === selected ? "is-selected" : ""}"
+        data-app-action="task-result-location-option" data-stop-propagation="1" data-location-target="${Utils.esc(id)}"
+        data-location-value="${Utils.esc(loc)}" data-location-search-key="${Utils.esc(loc.toLowerCase())}">
+        <span class="project-member-combobox-name task-result-location-name">${Utils.esc(loc)}</span>
+      </button>`).join("");
+    return `<div class="project-member-picker task-result-location-combobox">
+      <input id="${Utils.esc(id)}" class="task-result-sample-location project-member-combobox-input" value="${Utils.esc(selected || "")}" placeholder="请选择或输入位置"
+        data-location-menu-id="${Utils.esc(menuId)}" data-app-action="task-result-location-combobox"
+        data-app-events="focusin click input keydown" role="combobox" aria-autocomplete="list"
+        aria-expanded="false" aria-controls="${Utils.esc(menuId)}" autocomplete="off"${disabledAttr}>
+      <div id="${Utils.esc(menuId)}" class="project-member-combobox-menu task-result-location-menu" role="listbox">
+        ${optionsHtml}
+        <div class="project-member-combobox-empty" ${cleanLocations.length ? "hidden" : ""}>${cleanLocations.length ? "没有匹配位置" : "暂无项目位置，可直接输入"}</div>
+      </div>
+    </div>`;
   },
 
   taskResultRowPhotos(row) {
@@ -431,8 +608,8 @@ app.registerModule("workspace.taskResult", {
       const currentEditLocked = row.dataset.currentEditLocked === "1";
       const destination = row.querySelector(".task-result-sample-destination")?.value || "闲置";
       const destLocation = row.querySelector(".task-result-sample-location")?.value.trim() || "";
-      const accountOwner = row.querySelector("select[id^='taskResultAccountOwner_']")?.value.trim() || "";
-      const receiver = row.querySelector("select[id^='taskResultTaker_']")?.value.trim() || "";
+      const accountOwner = this.taskResultMemberField(row, "taskResultAccountOwner_")?.value.trim() || "";
+      const receiver = this.taskResultMemberField(row, "taskResultTaker_")?.value.trim() || "";
       const problem = row.querySelector(".task-result-sample-problem")?.value.trim() || "";
       const problemRecords = [...row.querySelectorAll(".task-result-existing-problem-row")].map(problemRow => ({
         id: problemRow.dataset.problemId || Utils.id("problem_"),
@@ -461,7 +638,9 @@ app.registerModule("workspace.taskResult", {
   validateTaskResultPayload(payload, finishTask = false) {
     payload = this.normalizeTaskResultFinishPayload(payload);
     if (!payload.result) return "请选择通过 / 不通过。";
-    if (!payload.user) return "请选择操作人。请先在项目人员配置中新增人员。";
+    if (!payload.user) return "请选择操作人。请先在项目人员配置中新增测试人员。";
+    const userCheck = this.validatePersonForScope(payload.user, "tester", "操作人");
+    if (!userCheck.ok) return userCheck.msg;
     if (finishTask && payload.finishType === "异常终止" && payload.result !== "不通过") {
       return "没有完成预定计划时，结果必须选择不通过。";
     }
@@ -470,8 +649,28 @@ app.registerModule("workspace.taskResult", {
     if (missingLocation) return `样机 ${this.taskSampleDisplayName(missingLocation.sid)} 必须填写去向位置。`;
     const missingTaker = editableSamples.find(x => x.destination === "取走分析" && !x.receiver);
     if (missingTaker) return `样机 ${this.taskSampleDisplayName(missingTaker.sid)} 去向为"取走分析"时，必须选择取走人。`;
+    const invalidTaker = editableSamples.find(x => x.destination === "取走分析" && !this.validatePersonForScope(x.receiver, "developer", "取走人").ok);
+    if (invalidTaker) return `样机 ${this.taskSampleDisplayName(invalidTaker.sid)} 的取走人只能选择开发人员。`;
+    const invalidAccountOwner = editableSamples.find(x => x.accountOwner && !this.validatePersonForScope(x.accountOwner, "all", "挂账人", { optional: true }).ok);
+    if (invalidAccountOwner) return `样机 ${this.taskSampleDisplayName(invalidAccountOwner.sid)} 的挂账人必须从项目人员配置中选择。`;
     const missingProblem = payload.samples.find(x => x.fault === "有故障" && !x.problem && !(x.problemRecords || []).length);
     if (missingProblem) return `样机 ${this.taskSampleDisplayName(missingProblem.sid)} 标记为有故障时，必须填写本次失效/问题。`;
+    return "";
+  },
+
+  validateTaskResultMemberFields(payload) {
+    payload = this.normalizeTaskResultFinishPayload(payload);
+    if (payload.user) {
+      const userCheck = this.validatePersonForScope(payload.user, "tester", "操作人");
+      if (!userCheck.ok) return userCheck.msg;
+    }
+    const editableSamples = (payload.samples || []).filter(x => !x.currentEditLocked);
+    const missingTaker = editableSamples.find(x => x.destination === "取走分析" && !x.receiver);
+    if (missingTaker) return `样机 ${this.taskSampleDisplayName(missingTaker.sid)} 去向为"取走分析"时，必须选择取走人。`;
+    const invalidTaker = editableSamples.find(x => x.destination === "取走分析" && !this.validatePersonForScope(x.receiver, "developer", "取走人").ok);
+    if (invalidTaker) return `样机 ${this.taskSampleDisplayName(invalidTaker.sid)} 的取走人只能选择开发人员。`;
+    const invalidAccountOwner = editableSamples.find(x => x.accountOwner && !this.validatePersonForScope(x.accountOwner, "all", "挂账人", { optional: true }).ok);
+    if (invalidAccountOwner) return `样机 ${this.taskSampleDisplayName(invalidAccountOwner.sid)} 的挂账人必须从项目人员配置中选择。`;
     return "";
   },
 
@@ -489,7 +688,7 @@ app.registerModule("workspace.taskResult", {
     this.clearTaskResultValidationMarks();
     if (!finishTask) return;
     if (!payload.result) this.markTaskResultInvalid(document.getElementById("taskResultValue"), "结束任务前必须选择通过 / 不通过");
-    if (!payload.user) this.markTaskResultInvalid(document.getElementById("taskResultUser"), "结束任务前必须选择操作人");
+    if (!payload.user || !this.validatePersonForScope(payload.user, "tester", "操作人").ok) this.markTaskResultInvalid(document.getElementById("taskResultUser"), "结束任务前必须选择测试人员作为操作人");
     document.querySelectorAll(".task-result-sample-row").forEach((row, idx) => {
       const item = payload.samples[idx];
       if (!item) return;
@@ -497,10 +696,36 @@ app.registerModule("workspace.taskResult", {
         this.markTaskResultInvalid(row.querySelector(".task-result-sample-location"), "必须填写去向位置");
       }
       if (!item.currentEditLocked && item.destination === "取走分析" && !item.receiver) {
-        this.markTaskResultInvalid(row.querySelector("select[id^='taskResultTaker_']"), "必须选择取走人");
+        this.markTaskResultInvalid(this.taskResultMemberField(row, "taskResultTaker_"), "必须选择取走人");
+      }
+      if (!item.currentEditLocked && item.destination === "取走分析" && item.receiver && !this.validatePersonForScope(item.receiver, "developer", "取走人").ok) {
+        this.markTaskResultInvalid(this.taskResultMemberField(row, "taskResultTaker_"), "取走人只能选择开发人员");
+      }
+      if (!item.currentEditLocked && item.accountOwner && !this.validatePersonForScope(item.accountOwner, "all", "挂账人", { optional: true }).ok) {
+        this.markTaskResultInvalid(this.taskResultMemberField(row, "taskResultAccountOwner_"), "挂账人必须从项目人员配置中选择");
       }
       if (item.fault === "有故障" && !item.problem && !(item.problemRecords || []).length) {
         this.markTaskResultInvalid(row.querySelector(".task-result-sample-problem"), "标记有故障时必须填写或保留问题记录");
+      }
+    });
+    document.querySelector(".task-result-modal .is-invalid")?.scrollIntoView({ block: "center", behavior: "smooth" });
+  },
+
+  markTaskResultMemberValidation(payload) {
+    this.clearTaskResultValidationMarks();
+    if (payload.user && !this.validatePersonForScope(payload.user, "tester", "操作人").ok) {
+      this.markTaskResultInvalid(document.getElementById("taskResultUser"), "操作人必须选择测试人员");
+    }
+    document.querySelectorAll(".task-result-sample-row").forEach((row, idx) => {
+      const item = payload.samples?.[idx];
+      if (!item || item.currentEditLocked) return;
+      if (item.destination === "取走分析" && !item.receiver) {
+        this.markTaskResultInvalid(this.taskResultMemberField(row, "taskResultTaker_"), "必须选择取走人");
+      } else if (item.destination === "取走分析" && !this.validatePersonForScope(item.receiver, "developer", "取走人").ok) {
+        this.markTaskResultInvalid(this.taskResultMemberField(row, "taskResultTaker_"), "取走人只能选择开发人员");
+      }
+      if (item.accountOwner && !this.validatePersonForScope(item.accountOwner, "all", "挂账人", { optional: true }).ok) {
+        this.markTaskResultInvalid(this.taskResultMemberField(row, "taskResultAccountOwner_"), "挂账人必须从项目人员配置中选择");
       }
     });
     document.querySelector(".task-result-modal .is-invalid")?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -587,7 +812,7 @@ app.registerModule("workspace.taskResult", {
       const found = this.findSample(item.sid);
       const problemRecords = this.syncTaskResultSampleProblems(found?.sample, item, {
         ...ctx,
-        mutateSample: !item.currentEditLocked
+        mutateSample: false
       });
       return {
         ...item,
@@ -609,7 +834,7 @@ app.registerModule("workspace.taskResult", {
     const reason = this.taskResultAutoReason({ ...payload, result }, finishTask, { projectId: project.id, stageId: stage.id, testItem: task.testItem });
     task.latestResult = result;
     task.resultDate = payload.resultDate;
-    // 结果保存始终同步样机档案；已结束任务只是不再改变任务完成状态。
+    // 只有结束任务或已完成任务追加结果时，才会同步样机档案。
 
     const sampleIdsForMutation = new Set();
     payload.samples.forEach(item => {
@@ -776,20 +1001,34 @@ app.registerModule("workspace.taskResult", {
         return false;
       }
 
-      const samplesChanged = !t.resultDraft || !this.isTaskResultSamplesEqual(t.resultDraft, payload);
-      this.saveTaskResultDraft(p, s, t, payload);
-      let sampleIdsForMutation = [];
-      if (samplesChanged) {
-        sampleIdsForMutation = this.applyTaskResult(p, s, t, payload, false);
+      const memberError = this.validateTaskResultMemberFields(payload);
+      if (memberError) {
+        this.markTaskResultMemberValidation(payload);
+        Utils.toast(memberError);
+        return true;
       }
+
+      if (!this.isTaskCompleted(t)) {
+        this.saveTaskResultDraft(p, s, t, payload);
+        const saved = await this.commitTaskMutation(p, s, t, {
+          action: "save_task_result_draft",
+          remark: "保存测试结果草稿",
+          user: payload.user,
+          sampleIdsForMutation: []
+        });
+        if (!saved) return true;
+        Utils.toast("结果草稿已保存；点击结束任务时会同步到样机档案。");
+        return false;
+      }
+      const sampleIdsForMutation = this.applyTaskResult(p, s, t, payload, false);
       const saved = await this.commitTaskMutation(p, s, t, {
-        action: samplesChanged ? "upload_task_result" : "save_task_result_draft",
-        remark: samplesChanged ? "保存测试结果" : "保存测试结果草稿",
+        action: "upload_task_result",
+        remark: "保存测试结果",
         user: payload.user,
         sampleIdsForMutation
       });
       if (!saved) return true;
-      Utils.toast(samplesChanged ? "结果已保存，样机去向和人员已同步到样机档案。" : "结果已保存（样机无变化）。");
+      Utils.toast("本次结果已保存，样机档案已同步。");
       return false;
     }
     const error = this.validateTaskResultPayload(payload, finishTask);
@@ -858,15 +1097,9 @@ app.registerModule("workspace.taskResult", {
     this.showModal(addOnly ? "添加结果" : "上传测试结果", `
       <div class="task-result-layout">
         <section class="task-result-fixed-panel">
-          <div class="task-result-fixed-head">
-            <div>
-              <b>任务级结果</b>
-              <span>保存可暂存阶段性结果；只有点击"结束任务"时才会检查全部必填项。</span>
-            </div>
-          </div>
           <div class="task-result-form-grid">
             <div class="form-group"><label class="req">结果</label><select id="taskResultValue" data-app-action="task-result-value" data-app-events="change"><option value="">请选择通过 / 不通过</option>${resultOptions}</select></div>
-            <div class="form-group"><label class="req">操作人</label>${this.projectMemberSelectHtml("taskResultUser", draft?.user || "", "请选择操作人")}</div>
+            <div class="form-group"><label class="req">操作人</label>${this.projectMemberSelectHtml("taskResultUser", draft?.user || "", "请选择操作人", { scope: "tester" })}</div>
             ${addOnly
               ? `<div class="form-group"><label>结果日期</label><input type="date" id="taskResultDate" value="${Utils.today()}"><input type="hidden" id="taskFinishType" value="正常完成"></div>`
               : `<div class="form-group"><label>结果日期</label><input type="date" id="taskResultDate" value="${Utils.esc(resultDate)}"></div>

@@ -60,6 +60,26 @@ def person_name_from_text(text: object) -> str:
     return raw
 
 
+def task_result_outcome_tokens(task: dict) -> list[str]:
+    tokens: list[str] = []
+
+    def add(value: object) -> None:
+        result = status_normalization.normalize_task_result_value(value)
+        if result == "通过":
+            tokens.extend(["通过", "PASS"])
+        elif result == "不通过":
+            tokens.extend(["不通过", "FAIL"])
+
+    add(task.get("latestResult"))
+    add(task.get("result"))
+    draft = task.get("resultDraft") if isinstance(task.get("resultDraft"), dict) else {}
+    add(draft.get("result"))
+    for upload in task.get("resultUploads") or []:
+        if isinstance(upload, dict):
+            add(upload.get("result"))
+    return tokens
+
+
 def task_search_text(task: dict, progress: dict | None = None) -> str:
     issue = task.get("issueRecord") if isinstance(task.get("issueRecord"), dict) else {}
     chunks = [
@@ -68,10 +88,12 @@ def task_search_text(task: dict, progress: dict | None = None) -> str:
         task.get("owner"),
         issue.get("dtsNo"),
         issue.get("issueNote"),
+        task.get("latestResult"),
         task.get("result"),
         task.get("resultSummary"),
         task.get("completionType"),
     ]
+    chunks.extend(task_result_outcome_tokens(task))
     if progress:
         chunks.extend([progress.get("category"), progress.get("testItem")])
     for upload in task.get("resultUploads") or []:

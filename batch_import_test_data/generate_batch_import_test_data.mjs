@@ -184,10 +184,11 @@ async function exportWorkbookFromTemplate(templateName, sheetName, writes, fileN
 async function main() {
   const generated = [];
 
-  const members = [["姓名/工号"]];
-  for (let i = 1; i <= 80; i += 1) members.push([personText(i)]);
+  const memberRoles = ["测试人员", "开发人员", "其他人员"];
+  const members = [["姓名/工号", "人员类型"]];
+  for (let i = 1; i <= 80; i += 1) members.push([personText(i), memberRoles[(i - 1) % memberRoles.length]]);
   await writeCsv("01_project_members_random_valid.csv", members);
-  generated.push({ fileName: "01_project_members_random_valid.csv", rows: members.length - 1, note: "当前解析器可导入的单列姓名/工号格式" });
+  generated.push({ fileName: "01_project_members_random_valid.csv", rows: members.length - 1, note: "当前解析器可导入的姓名/工号、人员类型两列格式；旧单列仍兼容并默认测试人员" });
 
   const sampleBase = sampleRows(150);
   generated.push({
@@ -233,7 +234,7 @@ async function main() {
     "",
     "## 文件",
     "",
-    "- `01_project_members_random_valid.csv`：项目人员导入。当前前端解析器要求单列 `姓名/工号`，不是仓库静态模板里的两列 `姓名,工号`。",
+    "- `01_project_members_random_valid.csv`：项目人员导入。新版两列为 `姓名/工号,人员类型`，旧单列 `姓名/工号` 仍可导入并默认测试人员。",
     "- `02_sample_import_random_valid.xlsx`：基于 `frontend/templates/sample_import_template.xlsx` 的常规有效样机批量导入数据。",
     "- `02b_sample_import_extended_edge_valid.xlsx`：基于同一模板，额外加入当前解析器支持的 `样机状态`、`标签` 扩展列，并覆盖只填 SN/IMEI/主板 SN、长备注、多问题项等边界但有效场景。",
     "- `03_test_cases_random_valid.xlsx`：基于 `frontend/templates/用例集导入模板.xlsx` 的常规有效用例集。",

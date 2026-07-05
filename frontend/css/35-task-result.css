@@ -124,8 +124,23 @@
 }
 /* 挂账人与「样机去向/去向位置/取走人」保持视觉距离 */
 .task-result-modal .task-result-route-grid .task-result-account-group {
-  padding-left: 14px;
+  position: relative;
+}
+.task-result-modal .task-result-route-grid .task-result-account-group::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -7px;
   border-left: 1px dashed var(--primary-border);
+  pointer-events: none;
+}
+.task-result-modal .task-result-route-grid .project-member-combobox-menu {
+  left: auto;
+  right: 0;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(320px, calc(100vw - 48px));
 }
 @media (max-width: 900px) {
   .task-result-modal .task-result-route-grid {
@@ -134,11 +149,16 @@
   }
   /* 窄屏改为上分隔线 + 上间距，取消左分隔 */
   .task-result-modal .task-result-route-grid .task-result-account-group {
-    padding-left: 0;
-    border-left: none;
     padding-top: 10px;
-    border-top: 1px dashed var(--primary-border);
     grid-column: 1 / -1;
+  }
+  .task-result-modal .task-result-route-grid .task-result-account-group::before {
+    top: 0;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    border-left: 0;
+    border-top: 1px dashed var(--primary-border);
   }
 }
 @media (max-width: 500px) {

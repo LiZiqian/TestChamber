@@ -252,11 +252,11 @@ app.registerModule("workspace.taskConfig", {
     const planStartDate = t?.planStartDate || t?.planDate || "";
     const planEndDate = t?.planEndDate || t?.endDate || "";
     // P1.4：项目还没人员时，直接给个红色提示和快速新增入口
-    const activeMembers = this.projectActiveMembers(p);
+    const activeMembers = this.projectActiveMembers(p, "tester");
     const memberMissingHint = activeMembers.length
       ? ""
       : `<div class="field-error" style="display:block;margin-top:6px">
-          ⚠ 项目人员名单为空，无法选择执行人。
+          ⚠ 项目测试人员名单为空，无法选择执行人。
           <button type="button" class="btn btn-sm" style="margin-left:8px"
             data-app-action="task-config-member-add">立即新增人员</button>
         </div>`;
@@ -264,7 +264,7 @@ app.registerModule("workspace.taskConfig", {
       <div class="path">计划任务：${Utils.esc(this.getProgressDisplayName(s, progress))}</div>
       <div class="form-group">
         <label class="req" style="color:var(--muted);font-weight:700">执行人<span class="req-star">*</span></label>
-        ${this.projectMemberSelectHtml("planOwner", t?.owner || "", "请选择执行人")}
+        ${this.projectMemberSelectHtml("planOwner", t?.owner || "", "请选择执行人", { scope: "tester" })}
         ${memberMissingHint}
       </div>
       <div class="form-row">
@@ -276,7 +276,8 @@ app.registerModule("workspace.taskConfig", {
       const start = document.getElementById("planStartDate").value;
       const end = document.getElementById("planEndDate").value;
       this.clearFieldValidationMarks();
-      if (!owner) { this.markFieldInvalid(document.getElementById("planOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return true; }
+      const ownerCheck = this.validatePersonForScope(owner, "tester", "执行人");
+      if (!ownerCheck.ok) { this.markFieldInvalid(document.getElementById("planOwner"), ownerCheck.msg); return true; }
       if (!start || !end) {
         if (!start) this.markFieldInvalid(document.getElementById("planStartDate"), "必须填写计划开始时间");
         if (!end) this.markFieldInvalid(document.getElementById("planEndDate"), "必须填写计划终止时间");
@@ -403,18 +404,18 @@ app.registerModule("workspace.taskConfig", {
     const t = task;
     const planStartDate = t?.planStartDate || t?.planDate || "";
     const planEndDate = t?.planEndDate || t?.endDate || "";
-    const activeMembers = this.projectActiveMembers(project);
+    const activeMembers = this.projectActiveMembers(project, "tester");
     const memberMissingHint = activeMembers.length
       ? ""
       : `<div class="field-error" style="display:block;margin-top:6px">
-          ⚠ 项目人员名单为空，无法选择执行人。
+          ⚠ 项目测试人员名单为空，无法选择执行人。
           <button type="button" class="btn btn-sm" style="margin-left:8px"
             data-app-action="task-config-member-add">立即新增人员</button>
         </div>`;
     return `
       <div class="form-group">
         <label>执行人</label>
-        ${this.projectMemberSelectHtml("tcPlanOwner", t?.owner || "", "请选择执行人")}
+        ${this.projectMemberSelectHtml("tcPlanOwner", t?.owner || "", "请选择执行人", { scope: "tester" })}
         ${memberMissingHint}
       </div>
       <div class="form-row">
@@ -456,7 +457,8 @@ app.registerModule("workspace.taskConfig", {
     const check = this.validateTaskSampleSelection(progress, sampleIds, "样机分配");
     // 验证 plan
     this.clearFieldValidationMarks();
-    if (!owner) { this.markTaskPlanConfigInvalid(document.getElementById("tcPlanOwner"), "请选择执行人。请先在项目人员配置中新增人员。"); return true; }
+    const ownerCheck = this.validatePersonForScope(owner, "tester", "执行人");
+    if (!ownerCheck.ok) { this.markTaskPlanConfigInvalid(document.getElementById("tcPlanOwner"), ownerCheck.msg); return true; }
     if (!start || !end) {
       if (!start) this.markTaskPlanConfigInvalid(document.getElementById("tcPlanStartDate"), "必须填写计划开始时间");
       if (!end) this.markTaskPlanConfigInvalid(document.getElementById("tcPlanEndDate"), "必须填写计划终止时间");

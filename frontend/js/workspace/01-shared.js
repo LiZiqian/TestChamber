@@ -155,24 +155,217 @@ app.registerModule("workspace.shared", {
     return `${sku} · ${progress.category || ""} · ${progress.testItem || ""}`;
   },
 
-  projectMemberSelectHtml(id, selected = "", placeholder = "请选择人员", disabled = false) {
-    const p = this.currentProject();
-    const members = this.projectActiveMembers(p);
+  projectMemberSelectHtml(id, selected = "", placeholder = "请选择人员", disabledOrOptions = false, extraOptions = {}) {
+    const optionsArg = (disabledOrOptions && typeof disabledOrOptions === "object")
+      ? disabledOrOptions
+      : { ...(extraOptions || {}), disabled: !!disabledOrOptions };
+    const disabled = !!optionsArg.disabled;
+    const scope = this.memberScopeRole(optionsArg.scope || "all");
+    const explicitProjectId = optionsArg.projectId || optionsArg.project?.id || "";
+    const p = optionsArg.project
+      || (explicitProjectId && typeof this.findProjectRecord === "function" ? this.findProjectRecord(explicitProjectId) : null)
+      || this.currentProject();
+    const members = this.projectActiveMembers(p, scope);
+    const allMembers = this.projectActiveMembers(p);
     const selectedText = String(selected || "");
+    const roleText = scope === "all" ? "项目人员" : this.memberRoleLabel(scope);
     const selectedIdentity = Utils.personIdentityFromText(selectedText);
     const selectedKey = selectedIdentity.name && selectedIdentity.employeeNo
       ? Utils.memberIdentityKey(selectedIdentity.name, selectedIdentity.employeeNo)
       : "";
     const disabledAttr = disabled ? " disabled" : "";
+    const menuId = `${id}MemberOptions`;
+    const inputAttrs = [
+      `id="${Utils.esc(id)}"`,
+      `class="project-member-select project-member-combobox-input"`,
+      `value="${Utils.esc(selectedText)}"`,
+      `placeholder="${Utils.esc(placeholder)}"`,
+      `data-member-scope="${Utils.esc(scope)}"`,
+      `data-member-project-id="${Utils.esc(p?.id || "")}"`,
+      `data-member-menu-id="${Utils.esc(menuId)}"`,
+      `data-app-action="project-member-combobox"`,
+      `data-app-events="focusin click input keydown"`,
+      `role="combobox"`,
+      `aria-autocomplete="list"`,
+      `aria-expanded="false"`,
+      `aria-controls="${Utils.esc(menuId)}"`,
+      `autocomplete="off"`,
+      disabledAttr
+    ].filter(Boolean).join(" ");
+    const selectedMember = selectedKey
+      ? allMembers.find(m => Utils.memberIdentityKey(m.name, m.employeeNo) === selectedKey)
+      : null;
+    const selectedAllowed = selectedMember && this.memberMatchesScope(selectedMember, scope);
     if (!members.length) {
-      return `<select id="${id}" disabled><option value="">请先在项目人员配置中新增人员</option></select>`;
+      return `<input ${inputAttrs} disabled title="请先在项目人员配置中新增${Utils.esc(roleText)}">`;
     }
-    const options = members.map(m => {
+    const compactRoleLabel = role => this.memberRoleLabel(role).replace(/人员$/, "");
+    const selectedValue = selectedAllowed ? Utils.personText(selectedMember.name, selectedMember.employeeNo) : "";
+    const optionHtml = list => list.map(m => {
       const value = Utils.personText(m.name, m.employeeNo);
-      const isSelected = selectedText === value || selectedKey === Utils.memberIdentityKey(m.name, m.employeeNo);
-      return `<option value="${Utils.esc(value)}" ${isSelected ? "selected" : ""}>${Utils.esc(value)}</option>`;
+      const role = this.memberRoleValue(m.role);
+      const searchKey = `${m.name || ""} ${m.employeeNo || ""} ${value} ${this.memberRoleLabel(role)} ${role}`.toLowerCase();
+      return `<button type="button" class="project-member-combobox-option ${value === selectedValue ? "is-selected" : ""}"
+        data-app-action="project-member-combobox-option" data-stop-propagation="1" data-member-target="${Utils.esc(id)}"
+        data-member-value="${Utils.esc(value)}" data-member-role="${Utils.esc(role)}" data-member-search-key="${Utils.esc(searchKey)}">
+        <span class="project-member-combobox-name">${Utils.esc(m.name || "-")}</span>
+        <span class="project-member-combobox-no">${Utils.esc(m.employeeNo || "-")}</span>
+        ${scope === "all" ? `<span class="project-member-combobox-role">${Utils.esc(compactRoleLabel(role))}</span>` : ""}
+      </button>`;
     }).join("");
-    return `<select id="${id}"${disabledAttr}><option value="">${Utils.esc(placeholder)}</option>${options}</select>`;
+    const optionGroups = scope === "all"
+      ? this.memberRoleList().map(role => {
+        const roleMembers = members.filter(m => this.memberRoleValue(m.role) === role);
+        if (!roleMembers.length) return "";
+        return `<div class="project-member-combobox-group" data-member-role-group="${Utils.esc(role)}">
+          <div class="project-member-combobox-group-label">${Utils.esc(compactRoleLabel(role))}</div>
+          ${optionHtml(roleMembers)}
+        </div>`;
+      }).join("")
+      : optionHtml(members);
+    const invalidHint = selectedText && selectedKey && !selectedAllowed
+      ? `<div class="project-member-select-hint is-invalid">当前：${Utils.esc(selectedText)}（不符合${Utils.esc(scope === "all" ? "项目人员" : this.memberRoleLabel(scope))}）</div>`
+      : "";
+    return `<div class="project-member-picker project-member-combobox">
+      <input type="text" ${inputAttrs}>
+      <div id="${Utils.esc(menuId)}" class="project-member-combobox-menu" role="listbox">
+        ${optionGroups}
+        <div class="project-member-combobox-empty" hidden>没有匹配人员</div>
+      </div>
+      ${invalidHint}
+    </div>`;
+  },
+
+  projectMemberComboboxMenu(input) {
+    if (!input || typeof document === "undefined") return null;
+    const menuId = input.dataset?.memberMenuId || "";
+    return menuId ? document.getElementById(menuId) : input.closest?.(".project-member-picker")?.querySelector?.(".project-member-combobox-menu");
+  },
+
+  openProjectMemberCombobox(input, options = {}) {
+    if (!input || input.disabled) return;
+    const picker = input.closest?.(".project-member-picker");
+    const menu = this.projectMemberComboboxMenu(input);
+    if (!picker || !menu) return;
+    this.closeProjectMemberComboboxes(input);
+    this.closeTaskResultLocationComboboxes?.();
+    picker.classList.add("is-open");
+    input.setAttribute?.("aria-expanded", "true");
+    if (options.reset !== false) this.filterProjectMemberCombobox(input, "");
+  },
+
+  closeProjectMemberComboboxes(exceptInput = null) {
+    if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+    document.querySelectorAll(".project-member-picker.is-open").forEach(picker => {
+      const input = picker.querySelector?.(".project-member-combobox-input");
+      if (exceptInput && input === exceptInput) return;
+      picker.classList.remove("is-open");
+      input?.setAttribute?.("aria-expanded", "false");
+      picker.querySelectorAll?.(".project-member-combobox-option.is-active").forEach(option => option.classList.remove("is-active"));
+    });
+  },
+
+  scheduleProjectMemberComboboxFilter(input) {
+    if (!input) return;
+    if (!this._projectMemberComboboxTimers) this._projectMemberComboboxTimers = {};
+    const key = input.id || input.dataset?.memberMenuId || "default";
+    if (this._projectMemberComboboxTimers[key]) clearTimeout(this._projectMemberComboboxTimers[key]);
+    this._projectMemberComboboxTimers[key] = setTimeout(() => {
+      delete this._projectMemberComboboxTimers[key];
+      this.filterProjectMemberCombobox(input);
+    }, 500);
+  },
+
+  filterProjectMemberCombobox(input, forcedKeyword = null) {
+    const menu = this.projectMemberComboboxMenu(input);
+    if (!menu) return 0;
+    const keyword = String(forcedKeyword === null ? input?.value || "" : forcedKeyword).trim().toLowerCase();
+    let visibleCount = 0;
+    const options = Array.from(menu.querySelectorAll?.(".project-member-combobox-option") || []);
+    options.forEach(option => {
+      const haystack = String(option.dataset?.memberSearchKey || option.textContent || "").toLowerCase();
+      const visible = !keyword || haystack.includes(keyword);
+      option.hidden = !visible;
+      option.classList.remove("is-active");
+      if (visible) visibleCount += 1;
+    });
+    menu.querySelectorAll?.(".project-member-combobox-group").forEach(group => {
+      group.hidden = !Array.from(group.querySelectorAll(".project-member-combobox-option")).some(option => !option.hidden);
+    });
+    const empty = menu.querySelector?.(".project-member-combobox-empty");
+    if (empty) empty.hidden = visibleCount > 0;
+    return visibleCount;
+  },
+
+  handleProjectMemberCombobox(input, event, eventType) {
+    if (!input || input.disabled) return;
+    if (eventType === "focusin" || eventType === "click") {
+      this.openProjectMemberCombobox(input, { reset: true });
+      return;
+    }
+    if (eventType === "input") {
+      this.openProjectMemberCombobox(input, { reset: false });
+      this.scheduleProjectMemberComboboxFilter(input);
+      return;
+    }
+    if (eventType === "keydown") {
+      this.handleProjectMemberComboboxKey(input, event);
+    }
+  },
+
+  visibleProjectMemberComboboxOptions(input) {
+    const menu = this.projectMemberComboboxMenu(input);
+    return Array.from(menu?.querySelectorAll?.(".project-member-combobox-option") || []).filter(option => !option.hidden);
+  },
+
+  handleProjectMemberComboboxKey(input, event) {
+    if (!input || !event) return;
+    if (event.key === "Escape") {
+      this.closeProjectMemberComboboxes();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+    const options = this.visibleProjectMemberComboboxOptions(input);
+    if (!options.length) return;
+    const activeIndex = options.findIndex(option => option.classList.contains("is-active"));
+    if (event.key === "Enter") {
+      if (activeIndex >= 0) {
+        event.preventDefault();
+        this.selectProjectMemberComboboxOption(options[activeIndex]);
+      }
+      return;
+    }
+    event.preventDefault();
+    this.openProjectMemberCombobox(input, { reset: false });
+    const nextIndex = event.key === "ArrowDown"
+      ? (activeIndex + 1) % options.length
+      : (activeIndex <= 0 ? options.length - 1 : activeIndex - 1);
+    options.forEach(option => option.classList.remove("is-active"));
+    options[nextIndex].classList.add("is-active");
+    options[nextIndex].scrollIntoView?.({ block: "nearest" });
+  },
+
+  selectProjectMemberComboboxOption(option) {
+    if (!option || typeof document === "undefined") return;
+    const targetId = option.dataset?.memberTarget || "";
+    const input = targetId ? document.getElementById(targetId) : null;
+    if (!input || input.disabled) return;
+    input.value = option.dataset?.memberValue || "";
+    const menu = this.projectMemberComboboxMenu(input);
+    menu?.querySelectorAll?.(".project-member-combobox-option").forEach(item => {
+      item.classList.toggle("is-selected", item === option);
+      item.classList.remove("is-active");
+      item.hidden = false;
+    });
+    menu?.querySelectorAll?.(".project-member-combobox-group").forEach(group => { group.hidden = false; });
+    const empty = menu?.querySelector?.(".project-member-combobox-empty");
+    if (empty) empty.hidden = true;
+    input.dispatchEvent?.(new Event("change", { bubbles: true }));
+    this.closeProjectMemberComboboxes();
+  },
+
+  filterProjectMemberSelect(input) {
+    return this.filterProjectMemberCombobox(input);
   },
 
   statusForOpenTaskUsage(task) {

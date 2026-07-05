@@ -1325,8 +1325,8 @@ app.registerModule("samples.pool", {
           <div class="form-group" style="margin-bottom:0"><label>位置</label>${this.sampleLocationInputHtml("sampleLocation", "")}</div>
         </div>
         <div class="form-row" style="gap:14px">
-          <div class="form-group" style="margin-bottom:0"><label>挂账人</label>${this.samplePersonInputHtml("sampleOwner", "", "姓名/工号")}</div>
-          <div class="form-group" style="margin-bottom:0"><label>持有人/取走人</label>${this.samplePersonInputHtml("sampleBorrower", "", "姓名/工号")}</div>
+          <div class="form-group" style="margin-bottom:0"><label>挂账人</label>${this.samplePersonInputHtml("sampleOwner", "", "姓名/工号", { scope: "all" })}</div>
+          <div class="form-group" style="margin-bottom:0"><label>持有人/取走人</label>${this.samplePersonInputHtml("sampleBorrower", "", "姓名/工号", { scope: "developer" })}</div>
         </div>
         <div class="form-group" style="margin-bottom:0"><label>其他备注信息</label><textarea id="sampleNotes" rows="1" style="min-height:38px;height:38px"></textarea></div>
         <div class="sample-info-divider" style="margin:4px 0"></div>
@@ -1360,14 +1360,14 @@ app.registerModule("samples.pool", {
       const borrowerRaw = borrowerEl?.value.trim() || "";
       let ownerText = "", borrowerText = "";
       if (ownerRaw) {
-        const parsed = Utils.parsePersonField(ownerRaw);
-        if (!parsed.ok) { this.markFieldInvalid(ownerEl, parsed.msg); return true; }
-        ownerText = Utils.personText(parsed.name, parsed.employeeNo);
+        const check = this.collectSamplePersonValue(ownerEl, "all", "挂账人");
+        if (!check.ok) { this.markFieldInvalid(ownerEl, check.msg); return true; }
+        ownerText = check.value;
       }
       if (borrowerRaw) {
-        const parsed = Utils.parsePersonField(borrowerRaw);
-        if (!parsed.ok) { this.markFieldInvalid(borrowerEl, parsed.msg); return true; }
-        borrowerText = Utils.personText(parsed.name, parsed.employeeNo);
+        const check = this.collectSamplePersonValue(borrowerEl, "developer", "持有人/取走人");
+        if (!check.ok) { this.markFieldInvalid(borrowerEl, check.msg); return true; }
+        borrowerText = check.value;
       }
 
       if (!Array.isArray(category.samples)) category.samples = [];

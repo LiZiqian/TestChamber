@@ -51,8 +51,8 @@ app.registerModule("samples.detail", {
                 <div class="form-group" style="margin-bottom:0"><label>当前位置</label>${this.sampleLocationInputHtml("sdLocation", s.location || "")}</div>
               </div>
               <div class="form-row">
-                <div class="form-group" style="margin-bottom:0"><label>挂账人</label>${this.samplePersonInputHtml("sdOwner", s.owner || "", "姓名/工号")}</div>
-                <div class="form-group" style="margin-bottom:0"><label>持有人/取走人</label>${this.samplePersonInputHtml("sdBorrower", s.borrower || "", "姓名/工号")}</div>
+                <div class="form-group" style="margin-bottom:0"><label>挂账人</label>${this.samplePersonInputHtml("sdOwner", s.owner || "", "姓名/工号", { scope: "all", sample: s })}</div>
+                <div class="form-group" style="margin-bottom:0"><label>持有人/取走人</label>${this.samplePersonInputHtml("sdBorrower", s.borrower || "", "姓名/工号", { scope: "developer", sample: s })}</div>
               </div>
               <div class="form-group" style="margin-bottom:0"><label>其他备注信息</label><textarea id="sdNotes" rows="2" style="min-height:56px">${Utils.esc(s.notes || "")}</textarea></div>
               <div class="sample-info-divider"></div>
@@ -111,12 +111,12 @@ app.registerModule("samples.detail", {
       const sdOwnerRaw = sdOwnerEl.value.trim();
       const sdBorrowerRaw = sdBorrowerEl?.value.trim() || "";
       if (sdOwnerRaw) {
-        const parsed = Utils.parsePersonField(sdOwnerRaw);
-        if (!parsed.ok) { this.markFieldInvalid(sdOwnerEl, parsed.msg); return true; }
+        const check = this.collectSamplePersonValue(sdOwnerEl, "all", "挂账人");
+        if (!check.ok) { this.markFieldInvalid(sdOwnerEl, check.msg); return true; }
       }
       if (sdBorrowerRaw) {
-        const parsed = Utils.parsePersonField(sdBorrowerRaw);
-        if (!parsed.ok) { this.markFieldInvalid(sdBorrowerEl, parsed.msg); return true; }
+        const check = this.collectSamplePersonValue(sdBorrowerEl, "developer", "持有人/取走人");
+        if (!check.ok) { this.markFieldInvalid(sdBorrowerEl, check.msg); return true; }
       }
 
       const snapshot = this.dataSnapshot();
@@ -140,8 +140,8 @@ app.registerModule("samples.detail", {
       s.sourceStageName = document.getElementById("sdStage").value.trim();
       s.sourceSkuName = s.config || "Unknown";
       // 人员字段已在上面校验通过，此处规范化为 姓名/工号
-      const ownerText = sdOwnerRaw ? (() => { const p = Utils.parsePersonField(sdOwnerRaw); return Utils.personText(p.name, p.employeeNo); })() : "";
-      const borrowerText = sdBorrowerRaw ? (() => { const p = Utils.parsePersonField(sdBorrowerRaw); return Utils.personText(p.name, p.employeeNo); })() : "";
+      const ownerText = sdOwnerRaw ? this.collectSamplePersonValue(sdOwnerEl, "all", "挂账人").value : "";
+      const borrowerText = sdBorrowerRaw ? this.collectSamplePersonValue(sdBorrowerEl, "developer", "持有人/取走人").value : "";
       const nextStatus = document.getElementById("sdStatus").value;
       if (s.status !== nextStatus) {
         this.changeSampleStatus(s.id, nextStatus, {

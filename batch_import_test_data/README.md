@@ -4,7 +4,7 @@
 
 ## 文件
 
-- `01_project_members_random_valid.csv`：项目人员导入。当前前端解析器要求单列 `姓名/工号`，不是仓库静态模板里的两列 `姓名,工号`。
+- `01_project_members_random_valid.csv`：项目人员导入。新版两列为 `姓名/工号,人员类型`，旧单列 `姓名/工号` 仍可导入并默认测试人员。
 - `02_sample_import_random_valid.xlsx`：基于 `frontend/templates/sample_import_template.xlsx` 的常规有效样机批量导入数据。
 - `02b_sample_import_extended_edge_valid.xlsx`：基于同一模板，额外加入当前解析器支持的 `样机状态`、`标签` 扩展列；2026-06-07 已刷新为 1500 行新样机，每行都有随机缺失字段但至少保留一个 SN/IMEI/主板 SN 标识。
 - `03_test_cases_random_valid.xlsx`：基于 `frontend/templates/用例集导入模板.xlsx` 的常规有效用例集。

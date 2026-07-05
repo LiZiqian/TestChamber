@@ -5,7 +5,7 @@
     {
       "fileName": "01_project_members_random_valid.csv",
       "rows": 80,
-      "note": "当前解析器可导入的单列姓名/工号格式"
+      "note": "当前解析器可导入的姓名/工号、人员类型两列格式；旧单列仍兼容并默认测试人员"
     },
     {
       "fileName": "02_sample_import_random_valid.xlsx",

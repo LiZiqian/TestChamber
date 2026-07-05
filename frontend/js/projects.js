@@ -151,7 +151,7 @@ app.registerModule("projects", {
       };
       // 项目负责人自动加入人员配置
       if (ownerParsed && ownerParsed.ok) {
-        p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, active: true });
+        p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, role: "other", active: true });
       }
       this.appendProjectRecord(p);
       this.selectProjectState(p.id, { selectedStageId: null });
@@ -202,7 +202,7 @@ app.registerModule("projects", {
         if (!Array.isArray(p.members)) p.members = [];
         const key = Utils.memberIdentityKey(ownerParsed.name, ownerParsed.employeeNo);
         if (!p.members.some(m => Utils.memberIdentityKey(m.name, m.employeeNo) === key)) {
-          p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, active: true });
+          p.members.push({ id: Utils.id("member_"), name: ownerParsed.name, employeeNo: ownerParsed.employeeNo, role: "other", active: true });
         }
       }
       const saved = await this.commitProjectMutation(p, {

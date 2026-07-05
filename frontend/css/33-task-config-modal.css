@@ -149,6 +149,9 @@
 .task-config-modal #tcPanelPlan select {
   max-width: 360px;
 }
+.task-config-modal #tcPanelPlan .project-member-picker {
+  max-width: 560px;
+}
 
 /* ---- Sample Panel: flex column so inner scroll works ---- */
 #tcPanelSample.active {

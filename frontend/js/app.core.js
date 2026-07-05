@@ -339,7 +339,7 @@ const app = {
         break;
       case "task-config-member-add":
         this.closeModal();
-        this.addProjectMember();
+        this.addProjectMember("tester");
         break;
       case "task-config-tab":
         this.switchTaskConfigTab(value || target.dataset.tab || "plan");
@@ -383,7 +383,37 @@ const app = {
         this.importProjectMembersCsv();
         break;
       case "project-member-add":
-        this.addProjectMember();
+        this.addProjectMember(value || target.dataset.role || "tester");
+        break;
+      case "project-member-search":
+        this.setProjectMemberSearch(target.value);
+        break;
+      case "project-member-selection":
+        this.updateProjectMemberSelectionCount();
+        break;
+      case "project-members-clear-selection":
+        this.clearProjectMemberSelection();
+        break;
+      case "project-members-role-toggle":
+        this.toggleProjectMemberRoleGroup(value);
+        break;
+      case "project-member-combobox":
+        this.handleProjectMemberCombobox(target, event, eventType);
+        break;
+      case "project-member-combobox-option":
+        this.selectProjectMemberComboboxOption(target);
+        break;
+      case "task-result-location-combobox":
+        this.handleTaskResultLocationCombobox(target, event, eventType);
+        break;
+      case "task-result-location-option":
+        this.selectTaskResultLocationOption(target);
+        break;
+      case "project-member-select-search":
+        this.filterProjectMemberSelect(target);
+        break;
+      case "project-members-bulk-role":
+        this.bulkUpdateProjectMembersRole(value);
         break;
       case "project-location-edit":
         this.editProjectLocation(Number(value));
@@ -611,6 +641,21 @@ const app = {
         if (dd && dd.contains(target)) return;
         if (state.inputEl && state.inputEl === target) return;
         this.closeCaseDropdown();
+      });
+    }
+    // 全局关闭项目人员组合下拉框（只绑定一次）
+    if (!this._projectMemberComboboxEventsBound) {
+      this._projectMemberComboboxEventsBound = true;
+      document.addEventListener("pointerdown", (event) => {
+        if (event.target?.closest?.(".project-member-picker")) return;
+        this.closeProjectMemberComboboxes?.();
+        this.closeTaskResultLocationComboboxes?.();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          this.closeProjectMemberComboboxes?.();
+          this.closeTaskResultLocationComboboxes?.();
+        }
       });
     }
   },

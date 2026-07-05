@@ -77,6 +77,22 @@ const Utils = {
     return !!(memberName && memberNo && text.includes(memberName) && text.includes(member?.employeeNo || ""));
   },
 
+  memberRoleValue(value, fallback = "tester") {
+    const text = String(value || "").trim().toLowerCase();
+    const normalized = text.replace(/\s+/g, "");
+    if (["tester", "test", "qa", "测试", "测试人员", "测试员"].includes(normalized)) return "tester";
+    if (["developer", "dev", "研发", "研发人员", "开发", "开发人员", "工程师"].includes(normalized)) return "developer";
+    if (["other", "others", "其他", "其他人员"].includes(normalized)) return "other";
+    return ["tester", "developer", "other"].includes(fallback) ? fallback : "tester";
+  },
+
+  memberRoleLabel(role) {
+    const value = Utils.memberRoleValue(role);
+    if (value === "developer") return "开发人员";
+    if (value === "other") return "其他人员";
+    return "测试人员";
+  },
+
   /** 解析正整数 */
   parsePositiveInt(v) {
     const s = Utils.normalizeDigits(v);
@@ -118,7 +134,7 @@ const Utils = {
     return rows;
   },
 
-  /** 解析项目人员CSV：每行必须使用 "姓名/工号" */
+  /** 解析项目人员CSV：支持旧版单列 "姓名/工号"，以及新版 "姓名/工号,人员类型" */
   parseProjectMembersCsv(text) {
     const lines = String(text || "").replace(/^﻿/, "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     if (!lines.length) return { error: "CSV文件没有可读取的数据", rows: [] };
@@ -131,16 +147,18 @@ const Utils = {
       const cols = Utils.parseCsvLine(lines[i]);
       if (cols.every(c => !c.trim())) continue;
       const first = String(cols[0] || "").trim();
+      const second = String(cols[1] || "").trim();
       if (i === 0 && Utils.normalizeImportHeader(first) === Utils.normalizeImportHeader("姓名/工号")) continue;
-      if (cols.length !== 1) { skipped++; continue; }
+      if (cols.length > 2) { skipped++; continue; }
       const parsed = Utils.parsePersonField(first);
       if (!parsed.ok) { skipped++; continue; }
       const { name, employeeNo } = parsed;
+      const role = Utils.memberRoleValue(second || "tester");
 
       const key = Utils.memberIdentityKey(name, employeeNo);
       if (seen.has(key)) { skipped++; continue; }
       seen.add(key);
-      rows.push({ name, employeeNo });
+      rows.push({ name, employeeNo, role });
     }
 
     if (!rows.length) return { error: "CSV中没有符合条件的人员数据", rows: [], skipped };

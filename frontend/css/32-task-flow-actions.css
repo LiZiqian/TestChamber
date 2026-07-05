@@ -81,6 +81,19 @@
   width: min(520px, 92vw);
 }
 
+.task-block-modal .modal-body {
+  min-height: min(430px, calc(90vh - 132px));
+  overflow: visible;
+}
+
+.task-block-modal .project-member-picker.is-open {
+  z-index: 120;
+}
+
+.task-block-modal .project-member-combobox-menu {
+  max-height: clamp(180px, 32vh, 260px);
+}
+
 /* —— 任务行操作按钮组在窄屏自动换行 —— */
 @media (max-width: 1280px) {
   .task-op-row { flex-wrap: wrap }

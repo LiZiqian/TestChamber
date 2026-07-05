@@ -12,11 +12,46 @@ app.registerModule("samples.detailFields", {
     </div>`;
   },
 
-  samplePersonInputHtml(id, value = "", placeholder = "任意填写") {
+  samplePersonContextProject(options = {}) {
+    if (options.project?.id) return options.project;
+    const sample = options.sample || {};
+    const projectId = options.projectId || sample.currentProjectId || sample.sourceProjectId || "";
+    if (projectId && typeof this.findProjectRecord === "function") return this.findProjectRecord(projectId);
+    if (typeof this.viewModule === "function" && this.viewModule() === "projectWorkspace" && this.view?.selectedProjectId) {
+      return typeof this.currentProject === "function" ? this.currentProject() : null;
+    }
+    return null;
+  },
+
+  samplePersonInputHtml(id, value = "", placeholder = "任意填写", options = {}) {
+    const project = this.samplePersonContextProject(options);
+    if (project?.id && typeof this.projectMemberSelectHtml === "function") {
+      return this.projectMemberSelectHtml(id, value, placeholder, {
+        scope: options.scope || "all",
+        disabled: !!options.disabled,
+        project
+      });
+    }
     // 失焦时严格按 "姓名/工号" 校验，不合法直接清空（不再保留残留串）。
     // 允许整字段为空，但只要填了就必须合法。
     return `<input id="${id}" value="${Utils.esc(value || "")}" placeholder="${Utils.esc(placeholder)}" autocomplete="off"
       data-app-action="sample-person-validate" data-app-events="focusout">`;
+  },
+
+  collectSamplePersonValue(input, scope = "all", label = "人员", options = {}) {
+    const raw = String(input?.value || "").trim();
+    if (!raw) return { ok: true, value: "" };
+    const project = this.samplePersonContextProject({
+      ...options,
+      projectId: options.projectId || input?.dataset?.memberProjectId || ""
+    });
+    if (project?.id) {
+      const check = this.validatePersonForScope(raw, scope, label, { optional: true, project });
+      return check.ok ? { ok: true, value: check.value } : check;
+    }
+    const parsed = Utils.parsePersonField(raw);
+    if (!parsed.ok) return { ok: false, msg: parsed.msg };
+    return { ok: true, value: Utils.personText(parsed.name, parsed.employeeNo) };
   },
 
   validateSamplePersonInput(input) {

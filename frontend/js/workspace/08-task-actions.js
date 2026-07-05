@@ -63,6 +63,11 @@ app.registerModule("workspace.taskActions", {
       alert("请先在「设置计划」中填写执行人、计划开始时间和计划终止时间。");
       return;
     }
+    const ownerCheck = this.validatePersonForScope(t.owner, "tester", "执行人", { project: p });
+    if (!ownerCheck.ok) {
+      alert(ownerCheck.msg || "执行人只能选择测试人员。请先修改计划。");
+      return;
+    }
     if (t.planStartDate > t.planEndDate) {
       alert("计划终止时间不能早于计划开始时间。请先修改计划。");
       return;
@@ -165,6 +170,25 @@ app.registerModule("workspace.taskActions", {
     return { activeTotal, activeFail, removedTotal, removedFail, problems, entries };
   },
 
+  taskResultOutcomeStatus(task) {
+    if (!task) return "";
+    return this.taskResultStatus(task) || this.normalizeTaskResultValue(task.resultDraft?.result || "");
+  },
+
+  taskResultOutcomeLabel(resultStatus) {
+    if (resultStatus === "通过") return "PASS";
+    if (resultStatus === "不通过") return "FAIL";
+    return "";
+  },
+
+  taskResultOutcomeBadgeHtml(task) {
+    const resultStatus = this.taskResultOutcomeStatus(task);
+    const label = this.taskResultOutcomeLabel(resultStatus);
+    if (!label) return "";
+    const cls = resultStatus === "不通过" ? "is-fail" : "is-pass";
+    return `<span class="task-result-outcome ${cls}" title="由测试结果“${Utils.esc(resultStatus)}”自动判定">${label}</span>`;
+  },
+
   /**
    * 任务"测试结果"列摘要：
    *   行1 失效比例： {F}F/{N}  · 变更 {F}F/{N}（仅在临时变更过的样机存在时显示后半段）
@@ -183,6 +207,10 @@ app.registerModule("workspace.taskActions", {
     if (task.issueRecord?.dtsNo) parts.push(task.issueRecord.dtsNo);
     // 问题确认说明
     if (task.issueRecord?.issueNote) parts.push(task.issueRecord.issueNote);
+    const resultStatus = this.taskResultOutcomeStatus(task);
+    const outcomeLabel = this.taskResultOutcomeLabel(resultStatus);
+    if (resultStatus) parts.push(resultStatus);
+    if (outcomeLabel) parts.push(outcomeLabel);
     // 失效比例统计文字
     if (stats.activeTotal > 0) {
       parts.push(`正式样机 ${stats.activeFail}F/${stats.activeTotal}`);
@@ -213,12 +241,19 @@ app.registerModule("workspace.taskActions", {
     const flowStatus = this.taskFlowStatus(task);
     const stats = this.taskFailureStats(project, stage, task);
     const { activeTotal, activeFail, removedTotal, removedFail, problems } = stats;
+    const resultStatus = this.taskResultOutcomeStatus(task);
+    const outcomeHtml = this.taskResultOutcomeBadgeHtml(task);
 
     // 待下发且没录入过任何结果：保持 "-"
-    if (flowStatus === "待下发" && !problems.size && !(task.resultUploads || []).length && !task.resultDraft) {
+    if (flowStatus === "待下发" && !problems.size && !(task.resultUploads || []).length && !task.resultDraft && !resultStatus) {
       return `<span class="muted">-</span>`;
     }
     if (activeTotal === 0 && removedTotal === 0) {
+      if (outcomeHtml) {
+        return `<div class="task-result-summary">
+          <div class="task-result-summary-ratio">${outcomeHtml}</div>
+        </div>`;
+      }
       return `<span class="muted">-</span>`;
     }
 
@@ -252,7 +287,7 @@ app.registerModule("workspace.taskActions", {
     });
 
     return `<div class="task-result-summary">
-      <div class="task-result-summary-ratio">${ratioHtml}</div>
+      <div class="task-result-summary-ratio">${outcomeHtml}${ratioHtml}</div>
       ${failLines.length ? `<div class="task-result-fail-list">${failLines.join("")}</div>` : ""}
     </div>`;
   },
@@ -275,11 +310,11 @@ app.registerModule("workspace.taskActions", {
     );
     this.showModal("临时变更", `
       <div class="temp-change-header-row">
-        <div class="form-group"><label class="req danger-field-label">任务变更人</label>${this.projectMemberSelectHtml("tempUser", "", "请选择任务变更人")}</div>
+        <div class="form-group"><label class="req danger-field-label">任务变更人</label>${this.projectMemberSelectHtml("tempUser", "", "请选择任务变更人", { scope: "tester" })}</div>
         <div class="form-group"><label>变更原因</label><textarea id="tempReason" rows="1" class="temp-reason-one-line" placeholder="选填"></textarea></div>
       </div>
       <div class="temp-change-plan-row">
-        <div class="form-group"><label class="req">执行人变更</label>${this.projectMemberSelectHtml("tempOwner", t.owner || "", "请选择执行人")}</div>
+        <div class="form-group"><label class="req">执行人变更</label>${this.projectMemberSelectHtml("tempOwner", t.owner || "", "请选择执行人", { scope: "tester" })}</div>
         <div class="form-group"><label>计划开始</label><input type="date" id="tempPlanStart" value="${Utils.esc(t.planStartDate || t.planDate || "")}"></div>
         <div class="form-group"><label>计划完成</label><input type="date" id="tempPlanEnd" value="${Utils.esc(t.planEndDate || t.endDate || "")}"></div>
       </div>
@@ -301,8 +336,10 @@ app.registerModule("workspace.taskActions", {
       const planEnd = document.getElementById("tempPlanEnd").value;
       const newSampleIds = this.getSelectedTaskSampleIds("tempSamplePick");
       this.clearFieldValidationMarks();
-      if (!user) { this.markFieldInvalid(document.getElementById("tempUser"), "请选择任务变更人。"); return true; }
-      if (!owner) { this.markFieldInvalid(document.getElementById("tempOwner"), "请选择执行人。"); return true; }
+      const userCheck = this.validatePersonForScope(user, "tester", "任务变更人");
+      if (!userCheck.ok) { this.markFieldInvalid(document.getElementById("tempUser"), userCheck.msg); return true; }
+      const ownerCheck = this.validatePersonForScope(owner, "tester", "执行人");
+      if (!ownerCheck.ok) { this.markFieldInvalid(document.getElementById("tempOwner"), ownerCheck.msg); return true; }
       const changeReason = reason || "临时变更";
       if (progress) {
         const check = this.validateTaskSampleSelection(progress, newSampleIds, "临时变更");
@@ -428,13 +465,14 @@ app.registerModule("workspace.taskActions", {
     this.showModal("阻塞暂停", `
       <div class="task-block-task-title">任务：${Utils.esc(t.testItem || "-")}</div>
       <div class="task-block-task-desc">阻塞只记录任务无法继续，样机失效请通过"上传结果"追加到档案。</div>
-      <div class="form-group"><label class="req">状态变更人</label>${this.projectMemberSelectHtml("user", "", "请选择状态变更人")}</div>
+      <div class="form-group"><label class="req">状态变更人</label>${this.projectMemberSelectHtml("user", "", "请选择状态变更人", { scope: "tester" })}</div>
       <div class="form-group"><label class="req">阻塞原因说明</label><textarea id="reason" rows="3" placeholder="必须填写，如：设备故障暂停"></textarea></div>
     `, async () => {
       this.clearFieldValidationMarks();
       const user = document.getElementById("user").value.trim();
       const reason = document.getElementById("reason").value.trim();
-      if (!user) { this.markFieldInvalid(document.getElementById("user"), "请选择状态变更人。请先在项目人员配置中新增人员。"); return true; }
+      const userCheck = this.validatePersonForScope(user, "tester", "状态变更人");
+      if (!userCheck.ok) { this.markFieldInvalid(document.getElementById("user"), userCheck.msg); return true; }
       if (!reason) { this.markFieldInvalid(document.getElementById("reason"), "必须填写阻塞原因"); return true; }
       const transition = this.transitionTaskStatus(s, t, "阻塞中", { reason, issue: reason });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "在位等待", { user, source: "任务阻塞", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));

@@ -104,12 +104,14 @@ app.registerModule("workspace.home", {
       </div>`;
 
     const sampleOwnerCounts = this.sampleOwnerCountsByMemberKey();
+    const sampleBorrowerCounts = this.sampleBorrowerCountsByMemberKey();
     this.replaceWorkspaceContentNodes(
       document.getElementById("content"),
       this.projectWorkspacePageNodes(p, s, {
         stageCards,
         addStageCard,
         sampleOwnerCounts,
+        sampleBorrowerCounts,
         sortMode,
       })
     );
@@ -135,7 +137,7 @@ app.registerModule("workspace.home", {
     }
   },
 
-  projectWorkspacePageNodes(project, stage, { stageCards, addStageCard, sampleOwnerCounts, sortMode }) {
+  projectWorkspacePageNodes(project, stage, { stageCards, addStageCard, sampleOwnerCounts, sampleBorrowerCounts, sortMode }) {
     const nodes = [];
     const configCard = document.createElement("div");
     configCard.className = "card project-config-card";
@@ -149,7 +151,7 @@ app.registerModule("workspace.home", {
     intro.append(title, desc);
     configCard.append(intro);
 
-    this.appendWorkspaceHtml(configCard, this.workspaceMembersHtml(project, sampleOwnerCounts));
+    this.appendWorkspaceHtml(configCard, this.workspaceMembersHtml(project, { sampleOwnerCounts, sampleBorrowerCounts }));
     this.appendWorkspaceHtml(configCard, this.workspaceLocationsHtml(project));
     this.appendWorkspaceHtml(configCard, this.workspaceDefaultSampleCategoryHtml(project));
     configCard.append(this.projectStageConfigSectionNode(stageCards, addStageCard, sortMode));
@@ -201,10 +203,18 @@ app.registerModule("workspace.home", {
   },
 
   sampleOwnerCountsByMemberKey() {
+    return this.samplePersonCountsByMemberKey("owner");
+  },
+
+  sampleBorrowerCountsByMemberKey() {
+    return this.samplePersonCountsByMemberKey("borrower");
+  },
+
+  samplePersonCountsByMemberKey(field) {
     const counts = new Map();
     this.sampleCategoryRecords().forEach(category => {
       (category.samples || []).forEach(sample => {
-        const identity = Utils.personIdentityFromText(sample.owner || "");
+        const identity = Utils.personIdentityFromText(sample?.[field] || "");
         const key = Utils.memberIdentityKey(identity.name, identity.employeeNo);
         if (key === "||") return;
         counts.set(key, (counts.get(key) || 0) + 1);
@@ -213,21 +223,88 @@ app.registerModule("workspace.home", {
     return counts;
   },
 
-  workspaceMembersHtml(project, sampleOwnerCounts = null) {
+  workspaceMembersHtml(project, counts = {}) {
     if (!Array.isArray(project.members)) project.members = [];
     const collapsed = this.isCollapsed('members');
     const activeMembers = this.projectActiveMembers(project);
-    const rows = activeMembers
-      .map(m => {
-        const stat = this.memberWorkStats(project, m, sampleOwnerCounts);
-        const identity = Utils.personText(m.name, m.employeeNo);
-        return `
-          <div class="project-member-card" data-app-action="project-member-edit" data-app-events="dblclick" data-id="${Utils.esc(m.id)}" tabindex="0" title="双击编辑人员" aria-label="双击编辑人员 ${Utils.esc(identity || "-")}">
-            <div class="project-member-identity">${Utils.esc(identity || "-")}</div>
-            <div class="project-member-stat">${stat.tasks} 项 · 挂账 ${stat.ownedSamples} 台</div>
-            <span class="project-member-remove" data-app-action="project-member-remove" data-stop-propagation="1" data-id="${Utils.esc(m.id)}" title="移出人员">🗑</span>
-          </div>`;
+    const memberUiState = this.projectMemberUiState();
+    const memberSearch = String(memberUiState.memberSearch || "");
+    const memberKw = memberSearch.trim().toLowerCase();
+    const detailRoleValue = String(memberUiState.memberDetailRole || "");
+    const detailRole = this.memberRoleList().includes(detailRoleValue) ? detailRoleValue : "";
+    const roleData = this.memberRoleList().map(role => {
+      const members = activeMembers.filter(m => this.memberRoleValue(m.role) === role);
+      const rows = members.map(m => {
+        const hidden = !this.projectMemberMatchesSearch(m, role, memberKw);
+        return this.projectMemberRowHtml(project, m, counts, { hidden });
       }).join("");
+      const totals = members.reduce((acc, member) => {
+        const stat = this.memberSampleStats(member, counts);
+        acc.ownedSamples += stat.ownedSamples;
+        acc.borrowedSamples += stat.borrowedSamples;
+        return acc;
+      }, { ownedSamples: 0, borrowedSamples: 0 });
+      const visibleCount = members.filter(m => this.projectMemberMatchesSearch(m, role, memberKw)).length;
+      return { role, members, rows, totals, visibleCount, activeDetail: role === detailRole };
+    });
+    const detailItem = roleData.find(item => item.activeDetail);
+    const visibleTotal = detailItem ? detailItem.visibleCount : 0;
+    const summaryCards = roleData.map(item => `
+      <div class="project-member-summary-card role-${Utils.esc(item.role)} ${item.activeDetail ? 'is-detail-open' : ''}" data-member-role="${Utils.esc(item.role)}">
+        <div class="project-member-summary-main">
+          <b>${Utils.esc(this.memberRoleLabel(item.role))}</b>
+          <span><em class="project-member-summary-visible">${item.visibleCount}</em> / ${item.members.length} 人</span>
+        </div>
+        <div class="project-member-summary-metrics">
+          <span><b>${item.totals.ownedSamples}</b> 挂账</span>
+          <span><b>${item.totals.borrowedSamples}</b> 持有</span>
+        </div>
+        <div class="project-member-summary-actions">
+          <button class="btn btn-sm btn-outline" data-app-action="project-member-add" data-value="${Utils.esc(item.role)}">新增</button>
+          <button class="btn btn-sm btn-outline" data-app-action="project-members-role-toggle" data-value="${Utils.esc(item.role)}">${item.activeDetail ? '收起详情' : '查看详情'}</button>
+        </div>
+      </div>
+    `).join("");
+    const bulkDisabled = "disabled aria-disabled=\"true\"";
+    const detailPanel = detailItem ? `
+          <div class="project-members-detail-panel" data-member-role="${Utils.esc(detailItem.role)}">
+            <div class="project-members-toolbar">
+              <label class="project-members-search">
+                <span>搜索人员</span>
+                <input type="search" value="${Utils.esc(memberSearch)}" placeholder="姓名 / 工号 / 类型" data-app-action="project-member-search" data-app-events="input">
+              </label>
+              <span class="project-members-search-count">显示 ${visibleTotal} / ${detailItem.members.length} 人</span>
+              <div class="project-members-bulk-actions">
+                <span class="project-members-selected-count">已选 0 人</span>
+                <button class="btn btn-sm btn-outline" data-app-action="project-members-bulk-role" data-value="tester" ${bulkDisabled}>移到测试</button>
+                <button class="btn btn-sm btn-outline" data-app-action="project-members-bulk-role" data-value="developer" ${bulkDisabled}>移到开发</button>
+                <button class="btn btn-sm btn-outline" data-app-action="project-members-bulk-role" data-value="other" ${bulkDisabled}>移到其他</button>
+                <button class="btn btn-sm btn-outline" data-app-action="project-members-clear-selection" ${bulkDisabled}>清空选择</button>
+              </div>
+            </div>
+            <section class="project-member-role-group project-member-role-detail" data-member-role="${Utils.esc(detailItem.role)}">
+              <div class="project-member-role-head">
+                <div class="project-member-role-title">
+                  <b>${Utils.esc(this.memberRoleLabel(detailItem.role))}名单</b>
+                  <span class="project-member-role-count">显示 <em class="project-member-role-visible">${detailItem.visibleCount}</em> / ${detailItem.members.length} 人</span>
+                </div>
+                <button class="btn btn-sm btn-outline" data-app-action="project-member-add" data-value="${Utils.esc(detailItem.role)}">新增</button>
+              </div>
+              <div class="project-member-table-shell">
+                <div class="project-member-table-head" aria-hidden="true">
+                  <span></span>
+                  <span>人员</span>
+                  <span>挂账</span>
+                  <span>持有</span>
+                  <span>操作</span>
+                </div>
+                <div class="project-member-table-body">
+                  ${detailItem.rows}
+                  <div class="project-member-empty ${detailItem.visibleCount ? 'is-hidden' : ''}">${detailItem.members.length ? '无匹配人员' : `暂无${Utils.esc(this.memberRoleLabel(detailItem.role))}`}</div>
+                </div>
+              </div>
+            </section>
+          </div>` : '';
 
     return `
       <div class="project-config-section project-members-section ${collapsed ? 'is-collapsed' : ''}">
@@ -239,17 +316,48 @@ app.registerModule("workspace.home", {
             <button class="btn btn-sm" data-app-action="project-members-import">批量导入人员名单</button>
           </div>
         </div>
-        <div class="stage-summary-section-desc">配置项目参与人员，后续可在任务管理中选择执行人和操作人。共 ${activeMembers.length} 人</div>
+        <div class="stage-summary-section-desc">测试人员用于任务下发和操作记录；开发人员用于样机取走；挂账人可从全部人员中选择。共 ${activeMembers.length} 人</div>
         <div class="project-members-body">
-          <div class="project-members-grid">
-            ${rows}
-            <div class="card add-card" data-app-action="project-member-add">
-              <div class="add-card-plus">+</div>
-              <div class="add-card-label">新增人员</div>
-            </div>
-          </div>
+          <div class="project-member-summary-grid">${summaryCards}</div>
+          ${detailPanel}
         </div>
       </div>`;
+  },
+
+  projectMemberMatchesSearch(member, role, keyword = "") {
+    const kw = String(keyword || "").trim().toLowerCase();
+    if (!kw) return true;
+    const roleValue = this.memberRoleValue(role || member?.role);
+    const identity = Utils.personText(member?.name, member?.employeeNo);
+    const searchKey = `${identity} ${member?.name || ""} ${member?.employeeNo || ""} ${roleValue} ${this.memberRoleLabel(roleValue)}`.toLowerCase();
+    return searchKey.includes(kw);
+  },
+
+  projectMemberRowHtml(project, member, counts = {}, options = {}) {
+    const stat = this.memberSampleStats(member, counts);
+    const identity = Utils.personText(member.name, member.employeeNo);
+    const role = this.memberRoleValue(member.role);
+    const searchKey = `${identity} ${member.name || ""} ${member.employeeNo || ""} ${role} ${this.memberRoleLabel(role)}`.toLowerCase();
+    return `
+      <div class="project-member-row project-member-card ${options.hidden ? 'is-search-hidden' : ''}" data-member-role="${Utils.esc(role)}" data-member-key="${Utils.esc(searchKey)}" data-app-action="project-member-edit" data-app-events="dblclick" data-id="${Utils.esc(member.id)}" tabindex="0" title="双击编辑人员" aria-label="双击编辑人员 ${Utils.esc(identity || "-")}">
+        <label class="project-member-check" title="选择用于批量改分类" data-stop-propagation="1">
+          <input type="checkbox" class="project-member-bulk-check" value="${Utils.esc(member.id)}" data-app-action="project-member-selection" data-app-events="change">
+        </label>
+        <div class="project-member-identity">
+          <b>${Utils.esc(member.name || "-")}</b>
+          <span>${Utils.esc(member.employeeNo || "-")}</span>
+        </div>
+        <div class="project-member-stat"><b>${stat.ownedSamples}</b><span>挂账</span></div>
+        <div class="project-member-stat"><b>${stat.borrowedSamples}</b><span>持有</span></div>
+        <div class="project-member-row-actions">
+          <button type="button" class="btn btn-sm btn-outline" data-app-action="project-member-edit" data-stop-propagation="1" data-id="${Utils.esc(member.id)}">编辑</button>
+          <button type="button" class="project-member-remove" data-app-action="project-member-remove" data-stop-propagation="1" data-id="${Utils.esc(member.id)}" title="移出人员">🗑</button>
+        </div>
+      </div>`;
+  },
+
+  projectMemberCardHtml(project, member, counts = {}) {
+    return this.projectMemberRowHtml(project, member, counts);
   },
 
   workspaceLocationsHtml(project) {
@@ -397,9 +505,54 @@ app.registerModule("workspace.home", {
   setProjectMemberSearch(value) {
     this.patchViewState({ memberSearch: value });
     const kw = String(value || "").trim().toLowerCase();
-    document.querySelectorAll(".project-member-card[data-member-key]").forEach(row => {
-      row.style.display = !kw || row.dataset.memberKey.includes(kw) ? "" : "none";
+    document.querySelectorAll(".project-member-row[data-member-key]").forEach(row => {
+      row.classList.toggle("is-search-hidden", !!kw && !row.dataset.memberKey.includes(kw));
     });
+    this.refreshProjectMemberVisibleCounts();
+  },
+  refreshProjectMemberVisibleCounts() {
+    const rows = [...document.querySelectorAll(".project-member-row[data-member-role]")];
+    const visibleRows = rows.filter(row => !row.classList.contains("is-search-hidden"));
+    document.querySelectorAll(".project-member-role-group[data-member-role]").forEach(group => {
+      const role = group.dataset.memberRole || "";
+      const roleRows = rows.filter(row => row.dataset.memberRole === role);
+      const visibleCount = roleRows.filter(row => !row.classList.contains("is-search-hidden")).length;
+      const countEl = group.querySelector(".project-member-role-visible");
+      if (countEl) countEl.textContent = String(visibleCount);
+      const emptyEl = group.querySelector(".project-member-empty");
+      if (emptyEl) {
+        emptyEl.textContent = roleRows.length ? "无匹配人员" : `暂无${this.memberRoleLabel(role)}`;
+        emptyEl.classList.toggle("is-hidden", visibleCount > 0);
+      }
+      const summaryEl = document.querySelector(`.project-member-summary-card[data-member-role="${role}"] .project-member-summary-visible`);
+      if (summaryEl) summaryEl.textContent = String(visibleCount);
+    });
+    const searchCount = document.querySelector(".project-members-search-count");
+    if (searchCount) searchCount.textContent = `显示 ${visibleRows.length} / ${rows.length} 人`;
+    this.updateProjectMemberSelectionCount();
+  },
+  updateProjectMemberSelectionCount() {
+    const selectedCount = document.querySelectorAll(".project-member-bulk-check:checked").length;
+    this.patchViewState({ memberSelectedCount: selectedCount });
+    const countEl = document.querySelector(".project-members-selected-count");
+    if (countEl) countEl.textContent = `已选 ${selectedCount} 人`;
+    document.querySelectorAll('.project-members-bulk-actions [data-app-action="project-members-bulk-role"], .project-members-bulk-actions [data-app-action="project-members-clear-selection"]').forEach(button => {
+      button.disabled = selectedCount === 0;
+      button.setAttribute("aria-disabled", selectedCount === 0 ? "true" : "false");
+    });
+    document.querySelector(".project-members-bulk-actions")?.classList.toggle("has-selection", selectedCount > 0);
+  },
+  clearProjectMemberSelection() {
+    document.querySelectorAll(".project-member-bulk-check:checked").forEach(input => {
+      input.checked = false;
+    });
+    this.updateProjectMemberSelectionCount();
+  },
+  toggleProjectMemberRoleGroup(role) {
+    const value = this.memberRoleValue(role);
+    const nextRole = this.projectMemberUiState().memberDetailRole === value ? "" : value;
+    this.patchViewState({ memberDetailRole: nextRole, memberSearch: "" });
+    this.render();
   },
   validateProjectMember(name, employeeNo = "") {
     const text = String(employeeNo || "").trim() ? Utils.personText(name, employeeNo) : String(name || "").trim();
@@ -420,9 +573,18 @@ app.registerModule("workspace.home", {
       return !cleanNo || !otherNo;
     });
   },
-  addProjectMember() {
+  projectMemberRoleSelectHtml(selected = "tester") {
+    const value = this.memberRoleValue(selected);
+    return `<select id="memberRole">${this.memberRoleList().map(role =>
+      `<option value="${Utils.esc(role)}" ${role === value ? "selected" : ""}>${Utils.esc(this.memberRoleLabel(role))}</option>`
+    ).join("")}</select>`;
+  },
+
+  addProjectMember(defaultRole = "tester") {
+    const role = this.memberRoleValue(defaultRole);
     this.showModal("新增项目人员", `
       <div class="form-group"><label class="req modal-field-title">人员</label><input id="memberText" placeholder="姓名/工号，如：张三/00609513"></div>
+      <div class="form-group"><label class="req modal-field-title">人员类型</label>${this.projectMemberRoleSelectHtml(role)}</div>
       <div class="form-hint">人员必须按「姓名/工号」填写，姓名和工号都不能为空。</div>
     `, async () => {
       this.clearFieldValidationMarks();
@@ -431,6 +593,7 @@ app.registerModule("workspace.home", {
       const snapshot = this.dataSnapshot();
       if (!Array.isArray(p.members)) p.members = [];
       const memberEl = document.getElementById("memberText");
+      const nextRole = this.memberRoleValue(document.getElementById("memberRole")?.value || "tester");
       const check = this.validateProjectMember(memberEl.value);
       if (!check.ok) { this.markFieldInvalid(memberEl, check.msg); return true; }
       if (this.hasProjectMemberNameConflict(p, check.name, check.employeeNo)) {
@@ -443,8 +606,9 @@ app.registerModule("workspace.home", {
         existing.name = check.name;
         existing.employeeNo = check.employeeNo;
         existing.active = true;
+        existing.role = nextRole;
       } else {
-        p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, active: true });
+        p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, role: nextRole, active: true });
       }
       const saved = await this.commitProjectMutation(p, { action: "add_project_member", remark: "新增项目人员", user: Utils.personText(check.name, check.employeeNo) });
       if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
@@ -459,11 +623,13 @@ app.registerModule("workspace.home", {
     const currentIdentity = Utils.personText(m.name, m.employeeNo);
     this.showModal("编辑项目人员", `
       <div class="form-group"><label class="req modal-field-title">人员</label><input id="memberText" value="${Utils.esc(currentIdentity)}" placeholder="姓名/工号，如：张三/00609513"></div>
+      <div class="form-group"><label class="req modal-field-title">人员类型</label>${this.projectMemberRoleSelectHtml(m.role)}</div>
       <div class="form-hint">人员必须按「姓名/工号」填写，姓名和工号都不能为空。</div>
     `, async () => {
       this.clearFieldValidationMarks();
       const snapshot = this.dataSnapshot();
       const memberEl = document.getElementById("memberText");
+      const nextRole = this.memberRoleValue(document.getElementById("memberRole")?.value || m.role || "tester");
       const check = this.validateProjectMember(memberEl.value);
       if (!check.ok) { this.markFieldInvalid(memberEl, check.msg); return true; }
       if (this.hasProjectMemberNameConflict(p, check.name, check.employeeNo, m.id)) {
@@ -477,6 +643,7 @@ app.registerModule("workspace.home", {
       }
       m.name = check.name;
       m.employeeNo = check.employeeNo;
+      m.role = nextRole;
       const saved = await this.commitProjectMutation(p, { action: "update_project_member", remark: "编辑项目人员", user: Utils.personText(check.name, check.employeeNo) });
       if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("人员已保存");
@@ -485,9 +652,10 @@ app.registerModule("workspace.home", {
   },
   downloadProjectMembersTemplate() {
     Utils.downloadCsv([
-      ["姓名/工号"],
-      ["张三/00609513"],
-      ["李四/wx517815"]
+      ["姓名/工号", "人员类型"],
+      ["张三/00609513", "测试人员"],
+      ["李四/wx517815", "开发人员"],
+      ["王五/00609515", "其他人员"]
     ], "项目人员导入模板.csv");
   },
   importProjectMembersCsv() {
@@ -503,35 +671,42 @@ app.registerModule("workspace.home", {
         const p = this.currentProject();
         if (!p) return;
         if (!Array.isArray(p.members)) p.members = [];
-        let added = 0, restored = 0, skippedDup = 0;
+        let added = 0, restored = 0, skippedDup = 0, roleUpdated = 0;
         let skippedNameConflict = 0;
         const snapshot = this.dataSnapshot();
         result.rows.forEach(row => {
           const check = this.validateProjectMember(Utils.personText(row.name, row.employeeNo));
           if (!check.ok) { skippedNameConflict++; return; }
-          if (this.hasProjectMemberNameConflict(p, check.name, check.employeeNo)) {
-            skippedNameConflict++;
-            return;
-          }
           const existing = this.findProjectMemberByIdentity(p, check.name, check.employeeNo);
           if (existing) {
             if (existing.active !== false) {
-              skippedDup++;
+              const nextRole = this.memberRoleValue(row.role || "tester");
+              if (this.memberRoleValue(existing.role) !== nextRole) {
+                existing.role = nextRole;
+                roleUpdated++;
+              } else {
+                skippedDup++;
+              }
             } else {
               existing.name = check.name;
               existing.employeeNo = check.employeeNo;
+              existing.role = this.memberRoleValue(row.role || "tester");
               existing.active = true;
               restored++;
             }
           } else {
-            p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, active: true });
+            if (this.hasProjectMemberNameConflict(p, check.name, check.employeeNo)) {
+              skippedNameConflict++;
+              return;
+            }
+            p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, role: this.memberRoleValue(row.role || "tester"), active: true });
             added++;
           }
         });
         const saved = await this.commitProjectMutation(p, { action: "import_project_members", remark: "批量导入项目人员", user: "管理员" });
         if (!saved) { this.restoreDataSnapshot(snapshot); return; }
         this.render();
-        Utils.toast(`人员名单导入完成：新增 ${added} 人，恢复 ${restored} 人，重复跳过 ${skippedDup} 人，格式错误跳过 ${skippedNameConflict + (result.skipped || 0)} 行。`);
+        Utils.toast(`人员名单导入完成：新增 ${added} 人，恢复 ${restored} 人，更新分类 ${roleUpdated} 人，重复跳过 ${skippedDup} 人，格式错误跳过 ${skippedNameConflict + (result.skipped || 0)} 行。`);
       }, { once: true });
       reader.readAsText(file, "utf-8");
     }, { once: true });
@@ -550,20 +725,41 @@ app.registerModule("workspace.home", {
       Utils.toast("人员已移出");
     }, { title: "移出人员", okText: "移出", okClass: "btn btn-danger" });
   },
-  memberWorkStats(project, member, sampleOwnerCounts = null) {
-    let tasks = 0;
-    (project.stages || []).forEach(stage => {
-      (stage.tasks || []).forEach(t => {
-        const owner = String(t.owner || "");
-        if (owner !== member.name && owner !== member.employeeNo && !owner.includes(member.name) && !owner.includes(member.employeeNo)) return;
-        tasks++;
-      });
-    });
+  memberSampleStats(member, sampleOwnerCounts = null) {
     const memberKey = Utils.memberIdentityKey(member.name, member.employeeNo);
-    const ownedSamples = sampleOwnerCounts instanceof Map
-      ? (sampleOwnerCounts.get(memberKey) || 0)
+    const ownerCounts = sampleOwnerCounts?.sampleOwnerCounts instanceof Map ? sampleOwnerCounts.sampleOwnerCounts : sampleOwnerCounts;
+    const borrowerCounts = sampleOwnerCounts?.sampleBorrowerCounts instanceof Map ? sampleOwnerCounts.sampleBorrowerCounts : null;
+    const ownedSamples = ownerCounts instanceof Map
+      ? (ownerCounts.get(memberKey) || 0)
       : this.allSamples().filter(sample => Utils.personMatchesMember(sample.owner, member)).length;
-    return { tasks, ownedSamples };
+    const borrowedSamples = borrowerCounts instanceof Map
+      ? (borrowerCounts.get(memberKey) || 0)
+      : this.allSamples().filter(sample => Utils.personMatchesMember(sample.borrower, member)).length;
+    return { ownedSamples, borrowedSamples };
+  },
+
+  async bulkUpdateProjectMembersRole(role) {
+    const p = this.currentProject();
+    if (!p) return;
+    const nextRole = this.memberRoleValue(role);
+    const ids = [...document.querySelectorAll(".project-member-bulk-check:checked")]
+      .map(el => String(el.value || "").trim())
+      .filter(Boolean);
+    if (!ids.length) { alert("请先勾选需要改分类的人员。"); return; }
+    const selected = new Set(ids);
+    const snapshot = this.dataSnapshot();
+    let changed = 0;
+    (p.members || []).forEach(member => {
+      if (!selected.has(String(member.id || "")) || member.active === false) return;
+      if (this.memberRoleValue(member.role) === nextRole) return;
+      member.role = nextRole;
+      changed++;
+    });
+    if (!changed) { Utils.toast("所选人员已在目标分类中。"); return; }
+    const saved = await this.commitProjectMutation(p, { action: "bulk_update_project_member_roles", remark: "批量调整人员分类", user: "管理员" });
+    if (!saved) { this.restoreDataSnapshot(snapshot); this.render(); return; }
+    this.render();
+    Utils.toast(`已将 ${changed} 人移到${this.memberRoleLabel(nextRole)}。`);
   },
 
   toggleStageSortMode() {

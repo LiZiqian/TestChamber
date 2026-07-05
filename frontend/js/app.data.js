@@ -191,8 +191,63 @@ app.registerModule("app.data", {
     return clean;
   },
 
-  projectActiveMembers(project) {
-    return (project?.members || []).filter(m => m.active !== false && String(m.name || "").trim() && String(m.employeeNo || "").trim());
+  memberRoleValue(role) {
+    return Utils.memberRoleValue(role);
+  },
+
+  memberRoleLabel(role) {
+    return Utils.memberRoleLabel(role);
+  },
+
+  memberRoleList() {
+    return ["tester", "developer", "other"];
+  },
+
+  memberScopeRole(scope = "all") {
+    const value = String(scope || "all").trim();
+    return ["tester", "developer", "other"].includes(value) ? value : "all";
+  },
+
+  memberMatchesScope(member, scope = "all") {
+    const role = this.memberScopeRole(scope);
+    if (role === "all") return true;
+    return this.memberRoleValue(member?.role) === role;
+  },
+
+  projectActiveMembers(project, scope = "all") {
+    const role = this.memberScopeRole(scope);
+    return (project?.members || [])
+      .filter(m => m.active !== false && String(m.name || "").trim() && String(m.employeeNo || "").trim())
+      .filter(m => role === "all" || this.memberRoleValue(m.role) === role);
+  },
+
+  findActiveProjectMemberByPersonText(project, personText) {
+    const identity = Utils.personIdentityFromText(personText);
+    if (!identity.name || !identity.employeeNo) return null;
+    const key = Utils.memberIdentityKey(identity.name, identity.employeeNo);
+    return this.projectActiveMembers(project).find(m => Utils.memberIdentityKey(m.name, m.employeeNo) === key) || null;
+  },
+
+  validatePersonForScope(value, scope = "all", label = "人员", options = {}) {
+    const text = String(value || "").trim();
+    const optional = !!options.optional;
+    if (!text) {
+      return optional ? { ok: true, value: "" } : { ok: false, msg: `请选择${label}。` };
+    }
+    const parsed = Utils.parsePersonField(text);
+    if (!parsed.ok) return { ok: false, msg: parsed.msg || `${label}格式必须为「姓名/工号」。` };
+    const normalizedText = Utils.personText(parsed.name, parsed.employeeNo);
+    const project = options.project || (typeof this.currentProject === "function" ? this.currentProject() : null);
+    const requireProjectMember = options.requireProjectMember !== false;
+    if (project && requireProjectMember) {
+      const member = this.findActiveProjectMemberByPersonText(project, normalizedText);
+      if (!member) return { ok: false, msg: `${label}必须从当前项目人员配置中选择。` };
+      if (!this.memberMatchesScope(member, scope)) {
+        const scopeText = this.memberScopeRole(scope) === "all" ? "项目人员" : this.memberRoleLabel(scope);
+        return { ok: false, msg: `${label}只能选择${scopeText}。` };
+      }
+    }
+    return { ok: true, value: normalizedText };
   },
 
   normalize() {
@@ -228,11 +283,13 @@ app.registerModule("app.data", {
         if (typeof m !== "string") return m || {};
         const identity = Utils.personIdentityFromText(m);
         this._normalizedChanged = true;
-        return { id: Utils.id("member_"), name: identity.name, employeeNo: identity.employeeNo, active: !!(identity.name && identity.employeeNo) };
+        return { id: Utils.id("member_"), name: identity.name, employeeNo: identity.employeeNo, active: !!(identity.name && identity.employeeNo), role: "tester" };
       });
       p.members.forEach(m => {
         if (!m.id) { m.id = Utils.id("member_"); this._normalizedChanged = true; }
         if (typeof m.active === "undefined") { m.active = true; this._normalizedChanged = true; }
+        const role = Utils.memberRoleValue(m.role, "tester");
+        if (m.role !== role) { m.role = role; this._normalizedChanged = true; }
         const legacyIdentity = Utils.personIdentityFromText(m.name);
         if ((!m.employeeNo || !String(m.employeeNo).trim()) && legacyIdentity.name && legacyIdentity.employeeNo) {
           m.name = legacyIdentity.name;
@@ -778,6 +835,14 @@ app.registerModule("app.data", {
 
   setStageSortModeState(enabled) {
     return this.patchViewState({ stageSortMode: !!enabled });
+  },
+
+  projectMemberUiState() {
+    const detailRole = String(this.view?.memberDetailRole || "");
+    return {
+      memberSearch: String(this.view?.memberSearch || ""),
+      memberDetailRole: this.memberRoleList().includes(detailRole) ? detailRole : ""
+    };
   },
 
   sampleEventRecords() {
