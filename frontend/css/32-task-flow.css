@@ -134,10 +134,14 @@
 .task-flow-table td { vertical-align: middle; border-right: 1px solid #eef2f7 }
 .task-flow-table th:last-child,
 .task-flow-table td:last-child { border-right: 0 }
-.task-flow-table th { border-right-color: #e2e8f0 }
+.task-flow-table th {
+  border-right-color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+}
 .task-flow-table th:nth-child(1) { width: 46px; text-align: center }
 .task-flow-table th:nth-child(2) { width: 72px; text-align: center }
-.task-flow-table th:nth-child(3) { width: 100px; text-align: center }
+.task-flow-table th:nth-child(3) { width: 150px; text-align: center }
 .task-flow-table th:nth-child(4) { width: 80px; text-align: center }
 .task-flow-table th:nth-child(5) { width: 140px; text-align: center  }
 .task-flow-table th:nth-child(6) { width: 80px; text-align: center }
@@ -151,7 +155,7 @@
   color: #111827;
   font-weight: 800;
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0;
 }
 /* 方案(SKU)列加粗 */
@@ -159,8 +163,8 @@
 /* 类别/用例列加粗 */
 .task-flow-table .task-type-cat,
 .task-flow-table .task-type-item { font-weight: 600 }
-/* 执行人列不加粗 */
-.task-flow-table .task-executor-name,
+/* 执行人列：姓名加粗，工号常规 */
+.task-flow-table .task-executor-name { font-weight: 600 }
 .task-flow-table .task-executor-id { font-weight: 400 }
 /* 样机数量加粗 */
 .task-flow-table .task-sample-count { font-weight: 600 }
@@ -169,7 +173,7 @@
 .task-flow-table .issue-value { color: var(--text); font-weight: 400 }
 .task-flow-table .task-issue-repeat-no { color: #dc2626; font-weight: 700 }
 .task-flow-table .task-issue-record-cell b { font-weight: 600; color: var(--text) }
-.task-flow-table th:nth-child(10) { width: 240px; text-align: center  }
+.task-flow-table th:nth-child(10) { width: 190px; text-align: center  }
 .task-flow-table td { font-size: 12px; font-weight: 400 }
 .task-flow-table .compact-cell { white-space: normal; line-height: 1.45; word-break: break-word }
 .task-flow-table .op-cell { min-width: 150px; max-width: 260px;  text-align: left; }
@@ -195,37 +199,54 @@
   gap: 6px;
   line-height: 1.5;
 }
+.task-result-outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0;
+  border: 1px solid transparent;
+}
+.task-result-outcome.is-pass {
+  background: var(--status-result-pass-bg);
+  color: var(--status-result-pass-text);
+  border-color: var(--status-result-pass-soft-border);
+}
+.task-result-outcome.is-fail {
+  background: var(--status-result-fail-bg);
+  color: var(--status-result-fail-text);
+  border-color: var(--status-result-fail-soft-border);
+}
 .task-result-summary-ratio {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   color: #4b5563;
 }
 .task-result-ratio {
   display: inline-flex;
   align-items: center;
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: 0;
   font-size: 12px;
   line-height: 1.5;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
-  background: var(--status-result-pass-soft-bg);
   color: var(--status-result-pass-soft-text);
-  border: 1px solid var(--status-result-pass-soft-border);
 }
 .task-result-ratio.is-pass {
-  background: var(--status-result-pass-soft-bg);
   color: var(--status-result-pass-soft-text);
-  border-color: var(--status-result-pass-soft-border);
 }
 .task-result-ratio.is-fail {
-  background: var(--status-result-fail-soft-bg);
   color: var(--status-result-fail-soft-text);
-  border-color: var(--status-result-fail-soft-border);
 }
 .task-result-ratio-sep {
   color: var(--muted);
@@ -234,20 +255,15 @@
 .task-result-ratio-removed {
   display: inline-flex;
   align-items: center;
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: 0;
   font-size: 12px;
   line-height: 1.5;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
-  background: #f8fafc;
   color: var(--muted);
-  border: 1px dashed var(--border);
 }
 .task-result-ratio-removed.is-fail {
   color: var(--status-sample-removed-warn-text);
-  background: var(--status-sample-removed-warn-bg);
-  border-color: var(--status-sample-removed-warn-border);
 }
 .task-result-fail-list {
   display: flex;
@@ -294,17 +310,21 @@
 .badge.status-blocked { background: var(--status-task-blocked-bg); color: var(--status-task-blocked-text) }
 .badge.status-done { background: var(--status-task-done-bg); color: var(--status-task-done-text) }
 .badge.status-bad { background: var(--status-task-aborted-soft-bg); color: var(--status-task-aborted-soft-text) }
+.task-flow-table td:nth-child(9) .badge {
+  font-size: 12px;
+  font-weight: 600;
+}
 /* —— 任务表格新布局：类别/用例两行、执行人姓名/工号两行、样机数量/查看两行 —— */
 .task-type-cell { display: flex; flex-direction: column; gap: 2px; line-height: 1.5 }
 .task-type-cat { font-size: 12px; color: var(--primary); font-weight: 600 }
-.task-type-item { font-size: 13px; color: #1f2937; font-weight: 600; line-height: 1.5; word-break: break-word }
+.task-type-item { font-size: 12px; color: #1f2937; font-weight: 600; line-height: 1.5; word-break: break-word }
 
 .task-executor-cell { display: flex; flex-direction: column; gap: 1px; line-height: 1.5 }
-.task-executor-name { font-size: 13px; color: #1f2937; font-weight: 600 }
+.task-executor-name { font-size: 12px; color: #1f2937; font-weight: 600 }
 .task-executor-id { font-size: 12px; color: #6b7280; font-weight: 400 }
 
 .task-sample-cell { display: flex; flex-direction: column; gap: 4px; align-items: center; width: 100%; line-height: 1.5 }
-.task-sample-count { font-size: 13px; color: #1f2937; font-weight: 600; line-height: 1.5 }
+.task-sample-count { font-size: 12px; color: #1f2937; font-weight: 600; line-height: 1.5 }
 .task-sample-count-num { font-weight: 600 }
 .task-sample-cell .btn { font-size: 12px; padding: 3px 7px }
 

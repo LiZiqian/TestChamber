@@ -320,7 +320,7 @@ app.registerModule("workspace.taskTable", {
         ${pagerHtml}
         <div class="table-wrap task-flow-table"><table>
           <thead>
-<tr><th style="font-weight:700">序号</th><th style="font-weight:700">方案</th><th style="font-weight:700">类别/用例</th><th style="font-weight:700">执行人</th><th style="font-weight:700">启动/完成时间</th><th style="font-weight:700">样机</th><th style="font-weight:700">测试结果</th><th style="font-weight:700">问题单</th><th style="font-weight:700">状态</th><th style="font-weight:700">操作</th></tr>
+<tr><th>序号</th><th>方案</th><th>类别/用例</th><th>执行人</th><th>启动/完成时间</th><th>样机</th><th>测试结果</th><th>问题单</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>${loadingRow || rows.map((row, rowIndex) => {
       const t = row.task;
