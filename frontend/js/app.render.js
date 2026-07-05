@@ -320,14 +320,33 @@ app.registerModule("app.render", {
   closeTaskOpMenus(exceptEl = null) {
     document.querySelectorAll(".task-op-menu.open, .task-more-menu.open").forEach(menu => {
       if (exceptEl && menu === exceptEl) return;
-      menu.classList.remove("open");
+      menu.classList.remove("open", "open-up");
     });
   },
 
   handleTaskOpMenuClick(menu) {
     const wasOpen = menu.classList.contains("open");
     this.closeTaskOpMenus();
-    if (!wasOpen) menu.classList.add("open");
+    if (!wasOpen) {
+      menu.classList.add("open");
+      this.positionTaskMoreMenu(menu);
+    }
+  },
+
+  positionTaskMoreMenu(menu) {
+    if (!menu || typeof menu.querySelector !== "function") return;
+    menu.classList.remove("open-up");
+    const panel = menu.querySelector(".task-more-panel");
+    if (!panel || typeof panel.getBoundingClientRect !== "function") return;
+    const menuRect = menu.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+    const gap = 8;
+    const spaceBelow = viewportHeight - menuRect.bottom;
+    const spaceAbove = menuRect.top;
+    if (spaceBelow < panelRect.height + gap && spaceAbove > spaceBelow) {
+      menu.classList.add("open-up");
+    }
   }
 
 });

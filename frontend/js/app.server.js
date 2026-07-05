@@ -1291,12 +1291,15 @@ app.registerModule("app.server", {
     }).join("\n");
   },
 
-  async commitTaskMutation(project, stage, task, { action = "task_mutation", remark = "任务增量变更", user = "", render = true, createIfMissing = false, deleteMode = "" } = {}) {
+  async commitTaskMutation(project, stage, task, { action = "task_mutation", remark = "任务增量变更", user = "", render = true, createIfMissing = false, deleteMode = "", sampleIdsForMutation = null } = {}) {
     if (!project || !stage || !task) return false;
     this._lastTaskMutationError = null;
     const sampleIds = this.taskMutationSampleIds(task);
     this.ensureTaskSampleSnapshots?.(task, sampleIds);
-    const samples = sampleIds
+    const mutationSampleIds = Array.isArray(sampleIdsForMutation)
+      ? [...new Set(sampleIdsForMutation.map(id => String(id || "").trim()).filter(Boolean))]
+      : sampleIds;
+    const samples = mutationSampleIds
       .map(id => this.compactSampleForMutation(this.findSample(id)?.sample))
       .filter(Boolean);
     const payload = {
@@ -1331,6 +1334,18 @@ app.registerModule("app.server", {
         }).join("\n");
         this.updateServerStatus("样机占用冲突");
         alert(`保存被拒绝：样机占用冲突。\n\n同一样机不能被多个未完成任务同时占用：\n${detail}`);
+        return false;
+      }
+      if (resp.status === 409 && json.error_code === "SAMPLE_CURRENT_STATE_LOCKED") {
+        this._lastTaskMutationError = json;
+        const detail = (json.conflicts || []).slice(0, 5).map(c => {
+          const sample = this.findSample?.(c.sampleId);
+          const sampleName = sample?.sample?.sampleNo || sample?.sample?.sn || c.sampleId;
+          const items = (c.tasks || []).map(t => t.testItem || t.taskId || "未命名任务").join("、");
+          return `· 样机 ${sampleName}：正在「${items}」中使用`;
+        }).join("\n");
+        this.updateServerStatus("样机当前信息已锁定");
+        alert(`保存被拒绝：样机正在其他未完成任务中，不能通过已完成任务覆盖当前信息。\n${detail}`);
         return false;
       }
       if (resp.status === 409 && json.error_code === "SAMPLE_STATUS_NOT_SELECTABLE") {

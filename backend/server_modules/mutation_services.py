@@ -97,6 +97,21 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
                     "samples": status_blockers,
                     "server_revision": current_revision,
                 }
+            sample_payloads = [sample for sample in (payload.get("samples") or []) if isinstance(sample, dict)]
+            if action == "upload_task_result" and task_mutation_rules.existing_finished_task(conn, task_id) and sample_payloads:
+                locked = task_mutation_rules.detect_completed_task_sample_current_state_locks(
+                    conn,
+                    task_id,
+                    {str(sample.get("id") or "") for sample in sample_payloads},
+                )
+                if locked:
+                    return False, {
+                        "status": 409,
+                        "error_code": "SAMPLE_CURRENT_STATE_LOCKED",
+                        "error": "样机正在其他未完成任务中，已拒绝通过已完成任务覆盖当前样机信息。",
+                        "conflicts": locked,
+                        "server_revision": current_revision,
+                    }
             conflicts = task_mutation_rules.detect_task_mutation_occupancy_conflicts(conn, task_id, task, project_id, stage_id)
             if conflicts:
                 return False, {

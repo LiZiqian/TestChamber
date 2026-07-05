@@ -190,6 +190,10 @@
 .task-more-menu.open .task-more-panel {
   display: block;
 }
+.task-more-menu.open-up .task-more-panel {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
 .task-more-item {
   width: 100%;
   border: 0;

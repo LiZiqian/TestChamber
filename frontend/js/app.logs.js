@@ -14,7 +14,9 @@ app.registerModule("app.logs", {
 
   logHtml(l, seq = "", seqPrefix = "", task = null) {
     const seqHtml = seq ? `<span class="log-seq">${Utils.esc(seqPrefix)}${Utils.esc(seq)}</span>` : "";
-    const rawContent = this.normalizeStatusText(String(l.reason || l.problemDescription || "").trim());
+    const reasonText = this.normalizeStatusText(String(l.reason || l.problemDescription || "").trim());
+    const detailText = this.normalizeStatusText(String(l.detail || "").trim());
+    const rawContent = [reasonText, detailText && detailText !== reasonText ? detailText : ""].filter(Boolean).join("；");
     const content = rawContent ? `<div class="task-log-text" title="${Utils.esc(rawContent)}">${this.linkSampleRefsInLogText(this.compactTaskLogText(rawContent), task, l)}</div>` : "";
     const actionTitle = this.normalizeStatusText(l.action || l.source || "-");
     return `<div class="log-line">${seqHtml}<b>${Utils.esc(actionTitle)}</b>

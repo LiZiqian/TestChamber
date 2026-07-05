@@ -66,6 +66,44 @@ def detect_task_mutation_occupancy_conflicts(
     return conflicts
 
 
+def detect_completed_task_sample_current_state_locks(
+    conn: sqlite3.Connection,
+    task_id: str,
+    sample_ids: set[str],
+) -> list[dict]:
+    target_sample_ids = {str(item) for item in sample_ids if str(item)}
+    if not target_sample_ids:
+        return []
+    placeholders = ",".join("?" for _ in target_sample_ids)
+    rows = conn.execute(
+        f"""
+        SELECT sample_id, task_id, project_id, stage_id, test_item, status, flow_status
+        FROM project_task_samples
+        WHERE sample_id IN ({placeholders})
+          AND task_id != ?
+          AND flow_status NOT IN ('正常完成', '异常终止')
+        """,
+        (*target_sample_ids, task_id),
+    ).fetchall()
+    conflicts_by_sample: dict[str, list[dict]] = {}
+    for row in rows:
+        sample_id = str(row["sample_id"] or "")
+        if not sample_id:
+            continue
+        conflicts_by_sample.setdefault(sample_id, []).append({
+            "taskId": str(row["task_id"] or ""),
+            "projectId": str(row["project_id"] or ""),
+            "stageId": str(row["stage_id"] or ""),
+            "testItem": str(row["test_item"] or ""),
+            "status": str(row["status"] or ""),
+            "flowStatus": str(row["flow_status"] or ""),
+        })
+    return [
+        {"sampleId": sample_id, "tasks": tasks}
+        for sample_id, tasks in conflicts_by_sample.items()
+    ]
+
+
 def task_sample_ids(task: dict) -> set[str]:
     return {str(item) for item in (task.get("sampleIds") or []) if str(item)}
 

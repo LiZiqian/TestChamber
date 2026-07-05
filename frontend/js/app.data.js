@@ -928,6 +928,10 @@ app.registerModule("app.data", {
       flowStatus,
       reason: ctx.reason || "",
       detail: ctx.detail || "",
+      destination: ctx.destination || flowStatus,
+      destLocation: ctx.destLocation || sample.location || "",
+      receiver: ctx.receiver || sample.borrower || "",
+      accountOwner: ctx.accountOwner || sample.owner || "",
       projectId: ctx.projectId || sample.currentProjectId,
       stageId: ctx.stageId || sample.currentStageId,
       projectName: ctx.projectName || this.projectName(ctx.projectId || sample.currentProjectId),
@@ -947,6 +951,11 @@ app.registerModule("app.data", {
     if (!found) return;
     const s = found.sample, old = this.sampleEffectiveStatus(s);
     if (old === newStatus && !ctx.forceLog && !ctx.taskId && !ctx.receiver) return;
+    const previous = {
+      location: String(s.location || "").trim(),
+      owner: this.normalizePersonText(s.owner || ""),
+      borrower: this.normalizePersonText(s.borrower || "")
+    };
     this.repairSampleStatus(s, newStatus, { markChanged: false });
     s.updatedAt = Utils.now();
     const isFault = !!ctx.faultMarked;
@@ -977,7 +986,19 @@ app.registerModule("app.data", {
     s.currentTaskId = freeStatus ? null : (ctx.taskId ?? s.currentTaskId);
     s.currentTestItem = freeStatus ? "" : (ctx.testItem ?? s.currentTestItem);
     const displayStatus = this.sampleEffectiveStatus(s);
-    const log = this.createSampleEventLog(s, old, displayStatus, newStatus, { ...ctx, faultMarked: isFault, problemDescription });
+    const next = {
+      location: String(s.location || "").trim(),
+      owner: this.normalizePersonText(s.owner || ""),
+      borrower: this.normalizePersonText(s.borrower || "")
+    };
+    const valueText = value => String(value || "").trim() || "空";
+    const detailParts = [];
+    if (old !== displayStatus) detailParts.push(`状态：${valueText(old)} → ${valueText(displayStatus)}`);
+    if (previous.location !== next.location) detailParts.push(`位置：${valueText(previous.location)} → ${valueText(next.location)}`);
+    if (previous.owner !== next.owner) detailParts.push(`挂账人：${valueText(previous.owner)} → ${valueText(next.owner)}`);
+    if (previous.borrower !== next.borrower) detailParts.push(`取走人：${valueText(previous.borrower)} → ${valueText(next.borrower)}`);
+    const detail = ctx.detail || detailParts.join("；");
+    const log = this.createSampleEventLog(s, old, displayStatus, newStatus, { ...ctx, detail, faultMarked: isFault, problemDescription });
     if (!Array.isArray(this.data.sampleLibrary.logs)) this.data.sampleLibrary.logs = [];
     this.data.sampleLibrary.logs.push(log);
   },

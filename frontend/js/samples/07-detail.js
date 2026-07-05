@@ -120,6 +120,12 @@ app.registerModule("samples.detail", {
       }
 
       const snapshot = this.dataSnapshot();
+      const previousRoute = {
+        status: this.sampleEffectiveStatus(s),
+        location: String(s.location || "").trim(),
+        owner: this.normalizePersonText(s.owner || ""),
+        borrower: this.normalizePersonText(s.borrower || "")
+      };
       s.sn = newSn;
       s.imei = newImei;
       s.boardSn = newBoardSn;
@@ -150,6 +156,30 @@ app.registerModule("samples.detail", {
       } else {
         s.owner = ownerText;
         s.borrower = borrowerText;
+        s.location = location;
+        const nextRoute = {
+          status: this.sampleEffectiveStatus(s),
+          location: String(s.location || "").trim(),
+          owner: this.normalizePersonText(s.owner || ""),
+          borrower: this.normalizePersonText(s.borrower || "")
+        };
+        const valueText = value => String(value || "").trim() || "空";
+        const detailParts = [];
+        if (previousRoute.location !== nextRoute.location) detailParts.push(`位置：${valueText(previousRoute.location)} → ${valueText(nextRoute.location)}`);
+        if (previousRoute.owner !== nextRoute.owner) detailParts.push(`挂账人：${valueText(previousRoute.owner)} → ${valueText(nextRoute.owner)}`);
+        if (previousRoute.borrower !== nextRoute.borrower) detailParts.push(`取走人：${valueText(previousRoute.borrower)} → ${valueText(nextRoute.borrower)}`);
+        if (detailParts.length) {
+          this.sampleEventRecords().push(this.createSampleEventLog(s, previousRoute.status, nextRoute.status, nextRoute.status, {
+            user: "管理员",
+            source: "样机详情编辑",
+            reason: "手动编辑样机详情",
+            detail: detailParts.join("；"),
+            destination: nextRoute.status,
+            destLocation: nextRoute.location,
+            receiver: nextRoute.borrower,
+            accountOwner: nextRoute.owner
+          }));
+        }
       }
       s.location = location;
       s.notes = document.getElementById("sdNotes").value.trim();

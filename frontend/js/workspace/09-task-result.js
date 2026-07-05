@@ -21,11 +21,34 @@ app.registerModule("workspace.taskResult", {
     return `<option value="无故障" ${value === "无故障" ? "selected" : ""}>无故障</option><option value="有故障" ${value === "有故障" ? "selected" : ""}>有故障</option>`;
   },
 
-  taskSampleDestinationOptionsHtml(selected = "") {
-    const value = ["闲置", "取走分析", "已退库"].includes(selected) ? selected : "闲置";
-    return ["闲置", "取走分析", "已退库"].map(dest =>
+  taskSampleDestinationOptionsHtml(selected = "", options = {}) {
+    const base = ["闲置", "取走分析", "已退库"];
+    const normalizedSelected = this.normalizeSampleStatusValue(selected || "");
+    const values = options.includeCurrent && normalizedSelected && !base.includes(normalizedSelected)
+      ? [normalizedSelected, ...base]
+      : base;
+    const value = values.includes(normalizedSelected) ? normalizedSelected : "闲置";
+    return values.map(dest =>
       `<option value="${Utils.esc(dest)}" ${dest === value ? "selected" : ""}>${Utils.esc(dest)}</option>`
     ).join("");
+  },
+
+  taskResultCurrentEditLock(task, sampleId) {
+    if (!task || !this.isTaskCompleted(task) || !sampleId) return { locked: false, hint: "" };
+    const usages = typeof this.activeTaskUsagesForSample === "function"
+      ? this.activeTaskUsagesForSample(sampleId, task.id)
+      : [];
+    if (!usages.length) return { locked: false, hint: "" };
+    const names = usages.map(usage => {
+      const projectName = usage.project?.name || "未知项目";
+      const stageName = usage.stage?.name || "未知阶段";
+      const taskName = usage.task?.testItem || usage.task?.id || "未命名任务";
+      return `${projectName} / ${stageName} / ${taskName}`;
+    }).join("；");
+    return {
+      locked: true,
+      hint: `该样机正被“${names}”任务使用，不可再次变更样机信息。`
+    };
   },
 
   normalizeTaskResultFinishPayload(payload = {}) {
@@ -224,13 +247,21 @@ app.registerModule("workspace.taskResult", {
       const found = this.findSample(id);
       const sample = found?.sample || {};
       const snapshot = task.sampleSnapshots?.[id] || null;
-      const status = found ? this.sampleEffectiveStatus(sample) : "闲置";
-      const receiver = draftItem?.receiver || this.defaultSampleReceiver(sample, task);
-      const destination = draftItem?.destination || (status === "取走分析" || status === "已退库" ? status : "闲置");
-      const accountOwner = draftItem?.accountOwner || sample.owner || "";
-      const destLocation = draftItem?.destLocation || sample.location || "";
-      const isTakerDisabled = destination !== "取走分析";
-      const takerPlaceholder = isTakerDisabled ? "无需填写" : "请选择取走人";
+      const status = found ? this.sampleEffectiveStatus(sample) : (draftItem?.destination || "闲置");
+      const editLock = this.taskResultCurrentEditLock(task, id);
+      const currentDestination = status === "取走分析" || status === "已退库" ? status : "闲置";
+      const destination = editLock.locked
+        ? status
+        : (found ? currentDestination : (draftItem?.destination || currentDestination));
+      const accountOwner = found ? (sample.owner || "") : (draftItem?.accountOwner || "");
+      const destLocation = found ? (sample.location || "") : (draftItem?.destLocation || snapshot?.location || "");
+      const receiver = found
+        ? (editLock.locked ? (sample.borrower || "") : (destination === "取走分析" ? this.defaultSampleReceiver(sample, task) : ""))
+        : (draftItem?.receiver || "");
+      const isTakerDisabled = editLock.locked || destination !== "取走分析";
+      const takerPlaceholder = editLock.locked ? "当前无取走人" : (isTakerDisabled ? "无需填写" : "请选择取走人");
+      const lockedAttr = editLock.locked ? " disabled" : "";
+      const lockedHint = editLock.locked ? `<div class="task-result-current-lock">${Utils.esc(editLock.hint)}</div>` : "";
       const removedInfo = entry.state === "removed"
         ? `<span class="task-result-sample-state removed">退出测试</span><span>退出时间：${Utils.esc(entry.removedAt || "-")}</span>${entry.reason ? `<span>退出原因：${Utils.esc(entry.reason)}</span>` : ""}`
         : `<span class="task-result-sample-state active">当前测试样机</span>`;
@@ -241,20 +272,21 @@ app.registerModule("workspace.taskResult", {
       // 项目位置列表（供去向位置 datalist 使用）
       const p = this.currentProject();
       const locationOptions = (p?.locations || []).map(loc => `<option value="${Utils.esc(loc)}">`).join("");
-      return `<div class="task-result-sample-row ${entry.state === "removed" ? "is-removed" : ""}" data-sid="${Utils.esc(id)}" data-sample-state="${Utils.esc(entry.state)}">
+      return `<div class="task-result-sample-row ${entry.state === "removed" ? "is-removed" : ""}" data-sid="${Utils.esc(id)}" data-sample-state="${Utils.esc(entry.state)}" data-current-edit-locked="${editLock.locked ? "1" : "0"}">
         <div class="task-result-sample-index">${idx + 1}</div>
         <div class="task-result-sample-code">
           ${sampleCodeHtml}
           ${removedInfo}
+          ${lockedHint}
         </div>
         <div class="task-result-route-grid">
           <div class="form-group">
             <label class="req">样机去向</label>
-            <select class="task-result-sample-destination" data-app-action="task-result-destination" data-app-events="change">${this.taskSampleDestinationOptionsHtml(destination)}</select>
+            <select class="task-result-sample-destination" data-app-action="task-result-destination" data-app-events="change"${lockedAttr}>${this.taskSampleDestinationOptionsHtml(destination, { includeCurrent: editLock.locked })}</select>
           </div>
           <div class="form-group">
             <label class="req">去向位置</label>
-            <input class="task-result-sample-location" list="taskResultLocationList_${idx}" value="${Utils.esc(destLocation)}" placeholder="如：失效分析区">
+            <input class="task-result-sample-location" list="taskResultLocationList_${idx}" value="${Utils.esc(destLocation)}" placeholder="如：失效分析区"${lockedAttr}>
             <datalist id="taskResultLocationList_${idx}">${locationOptions}</datalist>
           </div>
           <div class="form-group">
@@ -263,7 +295,7 @@ app.registerModule("workspace.taskResult", {
           </div>
           <div class="form-group task-result-account-group">
             <label>挂账人</label>
-            ${this.projectMemberSelectHtml(`taskResultAccountOwner_${idx}`, accountOwner, "请选择挂账人")}
+            ${this.projectMemberSelectHtml(`taskResultAccountOwner_${idx}`, accountOwner, "请选择挂账人", editLock.locked)}
           </div>
         </div>
         <div class="form-group task-result-problem-field">
@@ -396,6 +428,7 @@ app.registerModule("workspace.taskResult", {
     const samples = [...document.querySelectorAll(".task-result-sample-row")].map(row => {
       const sid = row.dataset.sid;
       const state = row.dataset.sampleState || "active";
+      const currentEditLocked = row.dataset.currentEditLocked === "1";
       const destination = row.querySelector(".task-result-sample-destination")?.value || "闲置";
       const destLocation = row.querySelector(".task-result-sample-location")?.value.trim() || "";
       const accountOwner = row.querySelector("select[id^='taskResultAccountOwner_']")?.value.trim() || "";
@@ -420,7 +453,7 @@ app.registerModule("workspace.taskResult", {
         type: photo.type || "",
         size: photo.size || 0
       }));
-      return { sid, state, fault, destination, destLocation, accountOwner, receiver, problem, problemRecords, photos };
+      return { sid, state, currentEditLocked, fault, destination, destLocation, accountOwner, receiver, problem, problemRecords, photos };
     });
     return this.normalizeTaskResultFinishPayload({ result, user, resultDate, finishType, samples });
   },
@@ -432,9 +465,10 @@ app.registerModule("workspace.taskResult", {
     if (finishTask && payload.finishType === "异常终止" && payload.result !== "不通过") {
       return "没有完成预定计划时，结果必须选择不通过。";
     }
-    const missingLocation = payload.samples.find(x => !x.destLocation);
+    const editableSamples = payload.samples.filter(x => !x.currentEditLocked);
+    const missingLocation = editableSamples.find(x => !x.destLocation);
     if (missingLocation) return `样机 ${this.taskSampleDisplayName(missingLocation.sid)} 必须填写去向位置。`;
-    const missingTaker = payload.samples.find(x => x.destination === "取走分析" && !x.receiver);
+    const missingTaker = editableSamples.find(x => x.destination === "取走分析" && !x.receiver);
     if (missingTaker) return `样机 ${this.taskSampleDisplayName(missingTaker.sid)} 去向为"取走分析"时，必须选择取走人。`;
     const missingProblem = payload.samples.find(x => x.fault === "有故障" && !x.problem && !(x.problemRecords || []).length);
     if (missingProblem) return `样机 ${this.taskSampleDisplayName(missingProblem.sid)} 标记为有故障时，必须填写本次失效/问题。`;
@@ -459,10 +493,10 @@ app.registerModule("workspace.taskResult", {
     document.querySelectorAll(".task-result-sample-row").forEach((row, idx) => {
       const item = payload.samples[idx];
       if (!item) return;
-      if (!item.destLocation) {
+      if (!item.currentEditLocked && !item.destLocation) {
         this.markTaskResultInvalid(row.querySelector(".task-result-sample-location"), "必须填写去向位置");
       }
-      if (item.destination === "取走分析" && !item.receiver) {
+      if (!item.currentEditLocked && item.destination === "取走分析" && !item.receiver) {
         this.markTaskResultInvalid(row.querySelector("select[id^='taskResultTaker_']"), "必须选择取走人");
       }
       if (item.fault === "有故障" && !item.problem && !(item.problemRecords || []).length) {
@@ -534,9 +568,11 @@ app.registerModule("workspace.taskResult", {
       );
       if (!exists) records.push(newRecord);
     }
-    sample.problemRecords = records;
-    sample.initialResults = records.map(record => record.description);
-    sample.initialResult = sample.initialResults.join("\n");
+    if (ctx.mutateSample !== false) {
+      sample.problemRecords = records;
+      sample.initialResults = records.map(record => record.description);
+      sample.initialResult = sample.initialResults.join("\n");
+    }
     return records;
   },
 
@@ -549,7 +585,10 @@ app.registerModule("workspace.taskResult", {
     };
     const samples = (payload.samples || []).map(item => {
       const found = this.findSample(item.sid);
-      const problemRecords = this.syncTaskResultSampleProblems(found?.sample, item, ctx);
+      const problemRecords = this.syncTaskResultSampleProblems(found?.sample, item, {
+        ...ctx,
+        mutateSample: !item.currentEditLocked
+      });
       return {
         ...item,
         problem: "",
@@ -570,16 +609,17 @@ app.registerModule("workspace.taskResult", {
     const reason = this.taskResultAutoReason({ ...payload, result }, finishTask, { projectId: project.id, stageId: stage.id, testItem: task.testItem });
     task.latestResult = result;
     task.resultDate = payload.resultDate;
-    // 任务已结束（追加结果模式）：只补录问题表/故障/图片，不再改写样机当前状态/去向/持有人/位置
-    const lockSampleStatus = !finishTask && this.isTaskCompleted(task);
+    // 结果保存始终同步样机档案；已结束任务只是不再改变任务完成状态。
 
+    const sampleIdsForMutation = new Set();
     payload.samples.forEach(item => {
       const found = this.findSample(item.sid);
       item.problemRecords = this.syncTaskResultSampleProblems(found?.sample, item, {
         projectId: project.id,
         stageId: stage.id,
         taskId: task.id,
-        testItem: task.testItem
+        testItem: task.testItem,
+        mutateSample: !item.currentEditLocked
       });
       const isFault = item.fault === "有故障";
       const status = item.destination || "闲置";
@@ -595,7 +635,9 @@ app.registerModule("workspace.taskResult", {
           photos: item.photos || []
         });
       }
-      if (lockSampleStatus) return;
+      if (item.currentEditLocked) return;
+      sampleIdsForMutation.add(item.sid);
+      if (!finishTask && !this.isTaskCompleted(task)) return;
       const photoIds = (item.photos || []).map(photo => photo.id).filter(Boolean);
       this.changeSampleStatus(item.sid, status, {
         user: payload.user,
@@ -630,6 +672,7 @@ app.registerModule("workspace.taskResult", {
       samples: payload.samples.map(item => ({
         sampleId: item.sid,
         state: item.state || "active",
+        currentEditLocked: !!item.currentEditLocked,
         fault: item.fault,
         destination: item.destination,
         destLocation: item.destLocation || "",
@@ -664,6 +707,7 @@ app.registerModule("workspace.taskResult", {
         detail: `结果：${result}`
       });
     }
+    return [...sampleIdsForMutation].filter(Boolean);
   },
 
   isTaskResultSamplesEqual(a, b) {
@@ -673,6 +717,7 @@ app.registerModule("workspace.taskResult", {
     return sa.every((item, i) => {
       const o = sb[i];
       if (!o) return false;
+      if (!!item.currentEditLocked !== !!o.currentEditLocked) return false;
       if (item.state !== o.state || item.fault !== o.fault || item.destination !== o.destination) return false;
       if (item.destLocation !== o.destLocation || item.accountOwner !== o.accountOwner || item.receiver !== o.receiver || item.problem !== o.problem) return false;
       const ra = (item.problemRecords || []).map(r => r.description || "").filter(Boolean).sort().join("|");
@@ -733,13 +778,15 @@ app.registerModule("workspace.taskResult", {
 
       const samplesChanged = !t.resultDraft || !this.isTaskResultSamplesEqual(t.resultDraft, payload);
       this.saveTaskResultDraft(p, s, t, payload);
+      let sampleIdsForMutation = [];
       if (samplesChanged) {
-        this.applyTaskResult(p, s, t, payload, false);
+        sampleIdsForMutation = this.applyTaskResult(p, s, t, payload, false);
       }
       const saved = await this.commitTaskMutation(p, s, t, {
         action: samplesChanged ? "upload_task_result" : "save_task_result_draft",
         remark: samplesChanged ? "保存测试结果" : "保存测试结果草稿",
-        user: payload.user
+        user: payload.user,
+        sampleIdsForMutation
       });
       if (!saved) return true;
       Utils.toast(samplesChanged ? "结果已保存，样机去向和人员已同步到样机档案。" : "结果已保存（样机无变化）。");
@@ -762,12 +809,13 @@ app.registerModule("workspace.taskResult", {
       baseData: this.cloneData(this._baseData || this.dataSnapshot())
     } : null;
     try {
-      this.applyTaskResult(p, s, t, payload, finishTask);
+      const sampleIdsForMutation = this.applyTaskResult(p, s, t, payload, finishTask);
       if (finishTask) delete t.resultDraft;
       const saved = await this.commitTaskMutation(p, s, t, {
         action: finishTask ? "finish_task_result" : "upload_task_result",
         remark: finishTask ? "结束任务并保存结果" : "保存测试结果",
-        user: payload.user
+        user: payload.user,
+        sampleIdsForMutation
       });
       if (!saved) {
         const mutationError = this._lastTaskMutationError;
@@ -838,7 +886,7 @@ app.registerModule("workspace.taskResult", {
     `, () => this.saveTaskResult(projectId, stageId, taskId, false), "保存", {
       className: "task-result-modal",
       headerHint: addOnly
-        ? `任务：${t.testItem || "-"}；任务已结束，仅追加新的样机结果、图片和失效记录，不改变任务结束状态。`
+        ? `任务：${t.testItem || "-"}；任务已结束，可追加结果并同步样机当前去向、位置和人员，不改变任务结束状态。`
         : `任务：${t.testItem || "-"}；可多次上传。本次新增失效会追加到样机档案的问题表中，临时变更退出过的样机也会保留在这里录入。`
     });
     document.querySelectorAll(".task-result-sample-row").forEach(row => this.renderTaskResultPhotoList(row));
