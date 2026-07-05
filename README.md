@@ -107,6 +107,21 @@ python --version
 C:\TestChamber
 ```
 
+如果使用 Git 管理源码，可以直接 clone 到本地：
+
+```powershell
+git clone https://github.com/LiZiqian/TestChamber.git
+cd TestChamber
+```
+
+以后别人更新了 GitHub 代码，本地进入项目目录后执行：
+
+```powershell
+git pull
+```
+
+正常使用不需要 `pip install` 或 `npm install`。拉取更新后重新运行 `start_server.bat` 即可；业务数据默认保存在项目内 `data/`，不要从 GitHub 覆盖或提交真实数据库、照片和公司测试数据。如果浏览器还显示旧界面，先关闭旧启动窗口，重新启动服务，再刷新浏览器页面。
+
 ### 3. 双击启动
 
 进入项目目录，双击：
