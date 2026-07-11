@@ -26,6 +26,61 @@ def _current_revision(conn: sqlite3.Connection) -> int:
     return int(row["revision"]) if row else 1
 
 
+def _task_scope_failure(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    project_id: str,
+    stage_id: str,
+) -> dict | None:
+    task_row = conn.execute(
+        """
+        SELECT project_id, stage_id
+        FROM project_tasks
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (task_id,),
+    ).fetchone()
+    if task_row and (
+        str(task_row["project_id"] or "") != project_id
+        or str(task_row["stage_id"] or "") != stage_id
+    ):
+        return {
+            "status": 409,
+            "error_code": "TASK_SCOPE_CONFLICT",
+            "error": "任务归属与请求中的项目或阶段不一致，已拒绝跨范围写入。",
+            "taskId": task_id,
+            "actualProjectId": str(task_row["project_id"] or ""),
+            "actualStageId": str(task_row["stage_id"] or ""),
+        }
+
+    stage_row = conn.execute(
+        """
+        SELECT project_id
+        FROM project_stages
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (stage_id,),
+    ).fetchone()
+    if not stage_row:
+        return {
+            "status": 404,
+            "error_code": "STAGE_NOT_FOUND",
+            "error": f"阶段不存在: {stage_id}",
+            "stageId": stage_id,
+        }
+    if str(stage_row["project_id"] or "") != project_id:
+        return {
+            "status": 409,
+            "error_code": "TASK_SCOPE_CONFLICT",
+            "error": "阶段不属于请求中的项目，已拒绝跨项目写入任务。",
+            "taskId": task_id,
+            "stageId": stage_id,
+            "actualProjectId": str(stage_row["project_id"] or ""),
+        }
+    return None
+
+
 def _bump_revision_and_audit(
     ctx: MutationServiceContext,
     conn: sqlite3.Connection,
@@ -74,6 +129,14 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        scope_failure = _task_scope_failure(
+            conn,
+            task_id=task_id,
+            project_id=project_id,
+            stage_id=stage_id,
+        )
+        if scope_failure:
+            return False, {**scope_failure, "server_revision": current_revision}
         is_delete = str(payload.get("deleteMode") or "") == "delete"
         action = str(payload.get("action") or "task_mutation")
         if action == "archive_task_delete" and status_normalization.normalize_task_flow_status(task) not in ("正常完成", "异常终止"):
@@ -147,7 +210,6 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
                     "server_revision": current_revision,
                 }
 
-        record_writers.update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
         for sample in payload.get("samples") or []:
             if isinstance(sample, dict):
                 record_writers.update_sample_record(conn, sample)
@@ -230,6 +292,33 @@ def commit_task_batch_mutation(ctx: MutationServiceContext, payload: dict, clien
         if not stage_row:
             return False, {"status": 404, "error": f"阶段不存在: {stage_id}"}
 
+        placeholders = ",".join("?" for _ in normalized_tasks)
+        existing_rows = conn.execute(
+            f"""
+            SELECT id, project_id, stage_id
+            FROM project_tasks
+            WHERE deleted_at IS NULL AND id IN ({placeholders})
+            """,
+            tuple(str(task.get("id") or "") for task in normalized_tasks),
+        ).fetchall()
+        scope_conflicts = [
+            {
+                "taskId": str(row["id"] or ""),
+                "actualProjectId": str(row["project_id"] or ""),
+                "actualStageId": str(row["stage_id"] or ""),
+            }
+            for row in existing_rows
+            if str(row["project_id"] or "") != project_id or str(row["stage_id"] or "") != stage_id
+        ]
+        if scope_conflicts:
+            return False, {
+                "status": 409,
+                "error_code": "TASK_SCOPE_CONFLICT",
+                "error": "批量任务中包含属于其他项目或阶段的任务，已拒绝跨范围写入。",
+                "tasks": scope_conflicts,
+                "server_revision": current_revision,
+            }
+
         status_blockers = task_mutation_rules.detect_task_mutation_sample_status_blockers(
             conn,
             [(str(task.get("id") or ""), task) for task in normalized_tasks],
@@ -243,7 +332,6 @@ def commit_task_batch_mutation(ctx: MutationServiceContext, payload: dict, clien
                 "server_revision": current_revision,
             }
 
-        record_writers.update_stage_record(conn, payload.get("stage") or {}, project_id, stage_id)
         create_if_missing = bool(payload.get("createIfMissing"))
         for task in normalized_tasks:
             record_writers.upsert_task_record(
