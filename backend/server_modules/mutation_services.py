@@ -325,6 +325,54 @@ def _sample_event_conflict_failure(conn: sqlite3.Connection, sample_events: obje
     return None
 
 
+def _task_sample_event_scope_failure(
+    conn: sqlite3.Connection,
+    sample_events: list[dict],
+    *,
+    project_id: str,
+    stage_id: str,
+    task_id: str,
+) -> dict | None:
+    """Bind newly created sample events to the task mutation that creates them."""
+    event_ids = {
+        str(event.get("id") or "")
+        for event in sample_events
+        if isinstance(event, dict) and str(event.get("id") or "")
+    }
+    existing_ids: set[str] = set()
+    if event_ids:
+        placeholders = ",".join("?" for _ in event_ids)
+        rows = conn.execute(
+            f"SELECT id FROM sample_events WHERE id IN ({placeholders})",
+            tuple(sorted(event_ids)),
+        ).fetchall()
+        existing_ids = {str(row["id"] or "") for row in rows}
+
+    expected = {
+        "projectId": project_id,
+        "stageId": stage_id,
+        "taskId": task_id,
+    }
+    for event in sample_events:
+        event_id = str(event.get("id") or "")
+        if event_id and event_id in existing_ids:
+            continue
+        for field, expected_id in expected.items():
+            supplied_id = str(event.get(field) or "")
+            if supplied_id and supplied_id != expected_id:
+                return {
+                    "status": 409,
+                    "error_code": "TASK_SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                    "error": "样机事件归属与当前任务不一致，已拒绝写入串线履历。",
+                    "eventId": event_id,
+                    "field": field,
+                    "expectedId": expected_id,
+                    "suppliedId": supplied_id,
+                }
+            event[field] = expected_id
+    return None
+
+
 def _task_scope_failure(
     conn: sqlite3.Connection,
     *,
@@ -681,6 +729,15 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
         event_failure = _sample_event_conflict_failure(conn, sample_events)
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
+        event_scope_failure = _task_sample_event_scope_failure(
+            conn,
+            sample_events,
+            project_id=project_id,
+            stage_id=stage_id,
+            task_id=task_id,
+        )
+        if event_scope_failure:
+            return False, {**event_scope_failure, "server_revision": current_revision}
         scope_failure = _task_scope_failure(
             conn,
             task_id=task_id,
