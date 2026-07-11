@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from server_modules import chamber_package, import_defaults, import_diff, import_preview_cache, migration_scope, zip_security
+from server_modules import chamber_package, import_defaults, import_diff, import_preview_cache, migration_scope, status_normalization, zip_security
 
 
 @dataclass(frozen=True)
@@ -350,6 +350,24 @@ def _prepare_sample_archive_import_state(incoming_state: dict, current_data: dic
     for category in (prepared.get("sampleLibrary") or {}).get("categories") or []:
         for sample in category.get("samples") or []:
             if isinstance(sample, dict):
+                source_fields = {
+                    "currentProjectId": "sourceProjectId",
+                    "currentStageId": "sourceStageId",
+                    "currentTaskId": "sourceTaskId",
+                    "currentTestItem": "sourceTestItem",
+                }
+                for current_field, source_field in source_fields.items():
+                    current_value = sample.get(current_field)
+                    if current_value not in (None, "") and sample.get(source_field) in (None, ""):
+                        sample[source_field] = current_value
+                sample["currentProjectId"] = None
+                sample["currentStageId"] = None
+                sample["currentTaskId"] = None
+                sample["currentTestItem"] = ""
+                if status_normalization.normalize_sample_usage_status(sample.get("status")) in ("测试中", "在位等待"):
+                    sample["status"] = "闲置"
+                    sample["borrower"] = ""
+                    sample["borrowDate"] = ""
                 samples.append(sample)
     prepared["projects"] = []
     prepared.setdefault("sampleLibrary", {})["categories"] = [{
