@@ -382,6 +382,12 @@ app.registerModule("workspace.samplePicker", {
       : selectable ? "" : (sample?.disabledReason || "");
     const missingReason = sample?._missing ? "样机资料未加载或已不存在，请取消后重新选择。" : "";
     const identity = this.taskSamplePickerIdentityText(sample);
+    const controlKey = `${this.taskSamplePickerSafeKey(state.inputName)}_${String(sid).replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const checkboxId = `taskSampleCheck_${controlKey}`;
+    const reasonId = `taskSampleReason_${controlKey}`;
+    const checkboxLabel = selectable
+      ? `${isSelected ? "取消选择" : "选择"}样机 ${identity}，当前状态 ${status}`
+      : `样机 ${identity} 不可选择：${disabledReason || missingReason || "当前状态不可用"}`;
     const stageName = String(sample?.sourceStageName || "").trim();
     const skuName = String(sample?.sourceSkuName || "").trim();
     const stageSku = stageName && skuName ? `${Utils.esc(stageName)}-${Utils.esc(skuName)}`
@@ -399,11 +405,11 @@ app.registerModule("workspace.samplePicker", {
         <div class="dispatch-sample-info">
           <div class="dispatch-sample-title-line">
             <span class="dispatch-sample-id" data-app-action="sample-readonly" data-id="${Utils.esc(sid)}" data-stop-propagation="1">${Utils.esc(identity)}</span>
-            <label class="dispatch-sample-check"><input type="checkbox" name="${state.inputName}" value="${Utils.esc(sid)}" data-sample-pick="${state.inputName}" ${isSelected ? "checked" : ""} ${selectable ? "" : "disabled"} ${selectable ? `data-app-action="task-sample-picker-checkbox" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}"` : ""}></label>
+            <label class="dispatch-sample-check" for="${Utils.esc(checkboxId)}"><input id="${Utils.esc(checkboxId)}" type="checkbox" name="${state.inputName}" value="${Utils.esc(sid)}" data-sample-pick="${state.inputName}" aria-label="${Utils.esc(checkboxLabel)}" ${disabledReason || missingReason ? `aria-describedby="${Utils.esc(reasonId)}"` : ""} ${isSelected ? "checked" : ""} ${selectable ? "" : "disabled"} ${selectable ? `data-app-action="task-sample-picker-checkbox" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}"` : ""}></label>
           </div>
           <span class="dispatch-sample-stage">${stageSku}</span>
           <span class="dispatch-sample-tested">已测：${testedText}</span>
-          ${disabledReason || missingReason ? `<span class="dispatch-sample-tested task-sample-disabled-reason">${Utils.esc(disabledReason || missingReason)}</span>` : ""}
+          ${disabledReason || missingReason ? `<span id="${Utils.esc(reasonId)}" class="dispatch-sample-tested task-sample-disabled-reason">${Utils.esc(disabledReason || missingReason)}</span>` : ""}
         </div>
         <div class="dispatch-sample-status"><span class="badge ${this.sampleHasProblem(sample) ? 's-有故障' : 's-无故障'}">${this.sampleHasProblem(sample) ? '有故障' : '无故障'}</span><span class="badge s-${Utils.esc(status)}">${Utils.esc(status)}</span></div>
       </div>`;
