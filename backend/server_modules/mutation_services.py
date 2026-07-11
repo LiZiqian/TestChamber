@@ -348,6 +348,152 @@ def _sample_event_conflict_failure(conn: sqlite3.Connection, sample_events: obje
     return None
 
 
+def _sample_event_scope_failure(
+    conn: sqlite3.Connection,
+    sample_events: object,
+    *,
+    allowed_sample_ids: set[str],
+    expected_project_id: str = "",
+    expected_stage_id: str = "",
+    allow_missing_sample_ids: set[str] | None = None,
+) -> dict | None:
+    """Validate new non-task sample events before they enter shared history."""
+    if sample_events is None:
+        return None
+    if not isinstance(sample_events, list):
+        return {"status": 400, "error": "sampleEvents 必须是数组"}
+    allow_missing_sample_ids = allow_missing_sample_ids or set()
+    event_ids = {
+        str(event.get("id") or "")
+        for event in sample_events
+        if isinstance(event, dict) and str(event.get("id") or "")
+    }
+    existing_event_ids: set[str] = set()
+    if event_ids:
+        placeholders = ",".join("?" for _ in event_ids)
+        rows = conn.execute(
+            f"SELECT id FROM sample_events WHERE id IN ({placeholders})",
+            tuple(sorted(event_ids)),
+        ).fetchall()
+        existing_event_ids = {str(row["id"] or "") for row in rows}
+
+    for event in sample_events:
+        if not isinstance(event, dict):
+            return {"status": 400, "error": "sampleEvents 中每一项都必须是 JSON 对象"}
+        event_id = str(event.get("id") or "")
+        if event_id and event_id in existing_event_ids:
+            continue
+        sample_id = str(event.get("sampleId") or "")
+        if not sample_id or sample_id not in allowed_sample_ids:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_EVENT_SCOPE_CONFLICT",
+                "error": "样机事件超出本次变更允许写入的样机范围，已拒绝保存。",
+                "eventId": event_id,
+                "sampleId": sample_id,
+            }
+        if sample_id not in allow_missing_sample_ids:
+            sample_row = conn.execute(
+                "SELECT 1 FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                (sample_id,),
+            ).fetchone()
+            if not sample_row:
+                return {
+                    "status": 409,
+                    "error_code": "SAMPLE_EVENT_SCOPE_CONFLICT",
+                    "error": "样机事件引用的样机档案不存在，已拒绝保存。",
+                    "eventId": event_id,
+                    "sampleId": sample_id,
+                }
+
+        project_id = str(event.get("projectId") or "")
+        stage_id = str(event.get("stageId") or "")
+        task_id = str(event.get("taskId") or "")
+        if task_id:
+            task_row = conn.execute(
+                "SELECT project_id, stage_id FROM project_tasks WHERE id = ? AND deleted_at IS NULL",
+                (task_id,),
+            ).fetchone()
+            if not task_row:
+                return {
+                    "status": 409,
+                    "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                    "error": "样机事件引用的任务不存在或已删除，已拒绝保存。",
+                    "eventId": event_id,
+                    "taskId": task_id,
+                }
+            actual_project_id = str(task_row["project_id"] or "")
+            actual_stage_id = str(task_row["stage_id"] or "")
+            if (project_id and project_id != actual_project_id) or (stage_id and stage_id != actual_stage_id):
+                return {
+                    "status": 409,
+                    "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                    "error": "样机事件的项目或阶段与任务归属不一致，已拒绝保存。",
+                    "eventId": event_id,
+                    "taskId": task_id,
+                }
+            project_id = actual_project_id
+            stage_id = actual_stage_id
+        elif stage_id:
+            stage_row = conn.execute(
+                "SELECT project_id FROM project_stages WHERE id = ? AND deleted_at IS NULL",
+                (stage_id,),
+            ).fetchone()
+            if not stage_row:
+                return {
+                    "status": 409,
+                    "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                    "error": "样机事件引用的阶段不存在或已删除，已拒绝保存。",
+                    "eventId": event_id,
+                    "stageId": stage_id,
+                }
+            actual_project_id = str(stage_row["project_id"] or "")
+            if project_id and project_id != actual_project_id:
+                return {
+                    "status": 409,
+                    "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                    "error": "样机事件的项目与阶段归属不一致，已拒绝保存。",
+                    "eventId": event_id,
+                    "stageId": stage_id,
+                }
+            project_id = actual_project_id
+
+        if expected_project_id and project_id and project_id != expected_project_id:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                "error": "样机事件不属于本次项目变更，已拒绝保存。",
+                "eventId": event_id,
+            }
+        if expected_stage_id and stage_id and stage_id != expected_stage_id:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                "error": "样机事件不属于本次阶段变更，已拒绝保存。",
+                "eventId": event_id,
+            }
+        if expected_project_id:
+            project_id = expected_project_id
+        if expected_stage_id:
+            stage_id = expected_stage_id
+        if project_id:
+            project_row = conn.execute(
+                "SELECT 1 FROM project_records WHERE id = ? AND deleted_at IS NULL",
+                (project_id,),
+            ).fetchone()
+            if not project_row:
+                return {
+                    "status": 409,
+                    "error_code": "SAMPLE_EVENT_OWNERSHIP_CONFLICT",
+                    "error": "样机事件引用的项目不存在或已删除，已拒绝保存。",
+                    "eventId": event_id,
+                    "projectId": project_id,
+                }
+        event["projectId"] = project_id
+        event["stageId"] = stage_id
+    return None
+
+
 def _task_sample_event_scope_failure(
     conn: sqlite3.Connection,
     sample_events: list[dict],
@@ -1073,6 +1219,21 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
         event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
+        allowed_event_sample_ids = {
+            sample_id,
+            *{
+                str(item.get("id") or "")
+                for item in (payload.get("samples") or [])
+                if isinstance(item, dict) and str(item.get("id") or "")
+            },
+        }
+        event_scope_failure = _sample_event_scope_failure(
+            conn,
+            payload.get("sampleEvents"),
+            allowed_sample_ids=allowed_event_sample_ids,
+        )
+        if event_scope_failure:
+            return False, {**event_scope_failure, "server_revision": current_revision}
 
         if delete_sample:
             exists = conn.execute(
@@ -1192,6 +1353,19 @@ def commit_project_mutation(ctx: MutationServiceContext, payload: dict, client_i
         event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
+        project_sample_ids = {
+            str(sample.get("id") or "")
+            for sample in (payload.get("samples") or [])
+            if isinstance(sample, dict) and str(sample.get("id") or "")
+        }
+        event_scope_failure = _sample_event_scope_failure(
+            conn,
+            payload.get("sampleEvents"),
+            allowed_sample_ids=project_sample_ids,
+            expected_project_id=project_id,
+        )
+        if event_scope_failure:
+            return False, {**event_scope_failure, "server_revision": current_revision}
 
         if delete_project:
             exists = conn.execute(
@@ -1269,6 +1443,20 @@ def commit_stage_mutation(ctx: MutationServiceContext, payload: dict, client_ip:
         event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
+        stage_sample_ids = {
+            str(sample.get("id") or "")
+            for sample in (payload.get("samples") or [])
+            if isinstance(sample, dict) and str(sample.get("id") or "")
+        }
+        event_scope_failure = _sample_event_scope_failure(
+            conn,
+            payload.get("sampleEvents"),
+            allowed_sample_ids=stage_sample_ids,
+            expected_project_id=project_id,
+            expected_stage_id=stage_id,
+        )
+        if event_scope_failure:
+            return False, {**event_scope_failure, "server_revision": current_revision}
 
         project = payload.get("project")
         if isinstance(project, dict):
@@ -1353,6 +1541,7 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
 
+        category_sample_ids: set[str] = set()
         if delete_category:
             exists = conn.execute(
                 "SELECT 1 FROM sample_categories WHERE id = ? AND deleted_at IS NULL",
@@ -1369,9 +1558,10 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
                 "SELECT id FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
                 (category_id,),
             ).fetchall()
+            category_sample_ids = {str(row["id"] or "") for row in sample_rows if str(row["id"] or "")}
             scope_failure = _sample_destroy_scope_failure(
                 conn,
-                sample_ids={str(row["id"] or "") for row in sample_rows if str(row["id"] or "")},
+                sample_ids=category_sample_ids,
                 task_mutations=payload.get("taskMutations"),
             )
             if scope_failure:
@@ -1379,9 +1569,23 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
                 return False, scope_failure
             _persist_destroyed_sample_snapshots(
                 conn,
-                sample_ids={str(row["id"] or "") for row in sample_rows if str(row["id"] or "")},
+                sample_ids=category_sample_ids,
                 destroyed_at=ctx.now_iso(),
             )
+
+        payload_sample_ids = {
+            str(sample.get("id") or "")
+            for sample in (payload.get("samples") or [])
+            if isinstance(sample, dict) and str(sample.get("id") or "")
+        }
+        event_scope_failure = _sample_event_scope_failure(
+            conn,
+            payload.get("sampleEvents"),
+            allowed_sample_ids=category_sample_ids | payload_sample_ids,
+            allow_missing_sample_ids=payload_sample_ids if payload.get("createSamples") else set(),
+        )
+        if event_scope_failure:
+            return False, {**event_scope_failure, "server_revision": current_revision}
 
         if not delete_category:
             category = payload.get("category")
