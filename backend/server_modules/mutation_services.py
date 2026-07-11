@@ -204,6 +204,86 @@ def _project_delete_sample_scope_failure(
     return None
 
 
+def _persist_destroyed_sample_snapshots(
+    conn: sqlite3.Connection,
+    *,
+    sample_ids: set[str],
+    destroyed_at: str,
+) -> None:
+    """Capture terminal-task sample identity before physical archive deletion."""
+    if not sample_ids:
+        return
+    placeholders = ",".join("?" for _ in sample_ids)
+    sample_rows = conn.execute(
+        f"""
+        SELECT r.id, r.category_id, r.sample_no, r.sn, r.imei, r.board_sn, r.data_json,
+               c.name AS category_name
+        FROM sample_records AS r
+        LEFT JOIN sample_categories AS c ON c.id = r.category_id
+        WHERE r.id IN ({placeholders}) AND r.deleted_at IS NULL
+        """,
+        tuple(sorted(sample_ids)),
+    ).fetchall()
+    snapshots: dict[str, dict] = {}
+    for row in sample_rows:
+        sample_id = str(row["id"] or "")
+        sample = record_writers.json_obj(row["data_json"], {})
+        sample_no = str(row["sample_no"] or sample.get("sampleNo") or "")
+        sn = str(row["sn"] or sample.get("sn") or "")
+        imei = str(row["imei"] or sample.get("imei") or "")
+        board_sn = str(row["board_sn"] or sample.get("boardSn") or "")
+        snapshots[sample_id] = {
+            "id": sample_id,
+            "categoryId": str(row["category_id"] or sample.get("categoryId") or ""),
+            "categoryName": str(row["category_name"] or ""),
+            "code": sample_no or sn or imei or board_sn or sample_id,
+            "sampleNo": sample_no or sn or imei or board_sn or sample_id,
+            "sn": sn,
+            "imei": imei,
+            "boardSn": board_sn,
+            "capturedAt": destroyed_at,
+            "destroyedAt": destroyed_at,
+        }
+
+    task_rows = conn.execute(
+        f"""
+        SELECT DISTINCT t.id, t.data_json, pts.sample_id
+        FROM project_task_samples AS pts
+        JOIN project_tasks AS t ON t.id = pts.task_id
+        WHERE pts.sample_id IN ({placeholders})
+          AND t.flow_status IN ('正常完成', '异常终止')
+        """,
+        tuple(sorted(sample_ids)),
+    ).fetchall()
+    tasks: dict[str, dict] = {}
+    for row in task_rows:
+        task_id = str(row["id"] or "")
+        sample_id = str(row["sample_id"] or "")
+        snapshot = snapshots.get(sample_id)
+        if not task_id or not snapshot:
+            continue
+        task = tasks.setdefault(task_id, record_writers.json_obj(row["data_json"], {}))
+        snapshot_map = task.get("sampleSnapshots")
+        if not isinstance(snapshot_map, dict):
+            snapshot_map = {}
+            task["sampleSnapshots"] = snapshot_map
+        existing = snapshot_map.get(sample_id)
+        if isinstance(existing, dict):
+            snapshot_map[sample_id] = {
+                **snapshot,
+                **existing,
+                "destroyedAt": existing.get("destroyedAt") or destroyed_at,
+            }
+        else:
+            snapshot_map[sample_id] = dict(snapshot)
+
+    for task_id, task in tasks.items():
+        conn.execute(
+            "UPDATE project_tasks SET data_json = ?, updated_at = ? WHERE id = ?",
+            (record_writers.json_dumps(task), destroyed_at, task_id),
+        )
+
+
 def _task_scope_failure(
     conn: sqlite3.Connection,
     *,
@@ -832,6 +912,11 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
             if scope_failure:
                 scope_failure["server_revision"] = current_revision
                 return False, scope_failure
+            _persist_destroyed_sample_snapshots(
+                conn,
+                sample_ids={sample_id},
+                destroyed_at=ctx.now_iso(),
+            )
 
         for item in payload.get("taskMutations") or []:
             if not isinstance(item, dict):
@@ -866,6 +951,7 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
             asset_paths_to_delete = sample_assets.sample_asset_relative_paths(conn, [sample_id])
             conn.execute("DELETE FROM sample_assets WHERE sample_id = ?", (sample_id,))
             conn.execute("DELETE FROM sample_events WHERE sample_id = ?", (sample_id,))
+            conn.execute("DELETE FROM project_task_samples WHERE sample_id = ?", (sample_id,))
             conn.execute("DELETE FROM sample_records WHERE id = ?", (sample_id,))
 
         action = str(payload.get("action") or ("destroy_sample" if delete_sample else "sample_mutation"))
@@ -1100,6 +1186,11 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
             if scope_failure:
                 scope_failure["server_revision"] = current_revision
                 return False, scope_failure
+            _persist_destroyed_sample_snapshots(
+                conn,
+                sample_ids={str(row["id"] or "") for row in sample_rows if str(row["id"] or "")},
+                destroyed_at=ctx.now_iso(),
+            )
 
         if not delete_category:
             category = payload.get("category")
