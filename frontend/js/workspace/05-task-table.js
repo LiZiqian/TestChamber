@@ -99,6 +99,31 @@ app.registerModule("workspace.taskTable", {
     return JSON.stringify({ stageId: stage?.id || "", ...params });
   },
 
+  beginTaskFlowPageRequest(stage, key) {
+    const request = {
+      sequence: (Number(this._taskFlowRequestSequence) || 0) + 1,
+      stageId: String(stage?.id || ""),
+      key
+    };
+    this._taskFlowRequestSequence = request.sequence;
+    this._taskFlowActiveRequest = request;
+    this._taskFlowLoadingKey = key;
+    return request;
+  },
+
+  isCurrentTaskFlowPageRequest(request, stage) {
+    if (!request || this._taskFlowActiveRequest?.sequence !== request.sequence) return false;
+    if (String(stage?.id || "") !== request.stageId) return false;
+    return this.taskFlowCacheKey(stage, this.taskFlowQueryParams(stage)) === request.key;
+  },
+
+  finishTaskFlowPageRequest(request) {
+    if (!request || this._taskFlowActiveRequest?.sequence !== request.sequence) return false;
+    this._taskFlowActiveRequest = null;
+    this._taskFlowLoadingKey = "";
+    return true;
+  },
+
   storeTaskFlowPageResult(project, stage, key, result = {}) {
     const rows = result.rows || [];
     const byId = new Map((stage.tasks || []).map(task => [String(task.id || ""), task]));
@@ -170,10 +195,11 @@ app.registerModule("workspace.taskTable", {
     if (!stage?.id || typeof this.fetchStageTasksPage !== "function") return false;
     const params = this.taskFlowQueryParams(stage);
     const key = this.taskFlowCacheKey(stage, params);
-    this._taskFlowLoadingKey = key;
+    const request = this.beginTaskFlowPageRequest(stage, key);
     try {
       const result = await this.fetchStageTasksPage(stage.id, params);
-      if (this._taskFlowLoadingKey === key) this._taskFlowLoadingKey = "";
+      if (!this.isCurrentTaskFlowPageRequest(request, stage)) return false;
+      this.finishTaskFlowPageRequest(request);
       this.storeTaskFlowPageResult(project, stage, key, result);
       if (this.isCurrentProjectWorkspaceStage(stage.id)) {
         if (!this.refreshTaskFlowRegion(project, stage)) {
@@ -183,7 +209,8 @@ app.registerModule("workspace.taskTable", {
       }
       return true;
     } catch (e) {
-      if (this._taskFlowLoadingKey === key) this._taskFlowLoadingKey = "";
+      if (!this.isCurrentTaskFlowPageRequest(request, stage)) return false;
+      this.finishTaskFlowPageRequest(request);
       this._taskFlowPageCache = { key, stageId: stage.id, error: e.message, rows: [], page: params.page, pageSize: params.pageSize, total: 0, totalPages: 1 };
       console.error("任务分页刷新失败：", e);
       if (this.isCurrentProjectWorkspaceStage(stage.id)) {
@@ -197,18 +224,20 @@ app.registerModule("workspace.taskTable", {
   },
 
   loadTaskFlowPage(project, stage, key, params) {
-    if (!stage?.id || this._taskFlowLoadingKey === key) return;
-    this._taskFlowLoadingKey = key;
+    if (!stage?.id || (this._taskFlowActiveRequest?.key === key && this._taskFlowActiveRequest?.stageId === String(stage.id))) return;
+    const request = this.beginTaskFlowPageRequest(stage, key);
     this.fetchStageTasksPage(stage.id, params)
       .then(result => {
-        this._taskFlowLoadingKey = "";
+        if (!this.isCurrentTaskFlowPageRequest(request, stage)) return;
+        this.finishTaskFlowPageRequest(request);
         this.storeTaskFlowPageResult(project, stage, key, result);
         if (this.isCurrentProjectWorkspaceStage(stage.id)) {
           this.refreshTaskFlowRegion(project, stage) || this.renderPreserveScroll();
         }
       })
       .catch(e => {
-        this._taskFlowLoadingKey = "";
+        if (!this.isCurrentTaskFlowPageRequest(request, stage)) return;
+        this.finishTaskFlowPageRequest(request);
         this._taskFlowPageCache = { key, stageId: stage.id, error: e.message, rows: [] };
         console.error("任务分页加载失败：", e);
         if (this.isCurrentProjectWorkspaceStage(stage.id)) {

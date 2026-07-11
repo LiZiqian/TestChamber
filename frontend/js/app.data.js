@@ -797,7 +797,17 @@ app.registerModule("app.data", {
     if (typeof clearTimeout === "function") clearTimeout(this._taskFlowTextFilterTimer);
     this._taskFlowTextFilterTimer = null;
     this._taskFlowPageCache = null;
+    this.cancelTaskFlowPageRequestState();
     return this.patchViewState({ taskFlowFilters: {}, taskFlowFilterDrafts: {}, taskFlowPage: 1 });
+  },
+
+  cancelTaskFlowPageRequestState(stageId = "") {
+    const activeStageId = String(this._taskFlowActiveRequest?.stageId || "");
+    if (stageId && activeStageId && activeStageId !== String(stageId)) return false;
+    this._taskFlowRequestSequence = (Number(this._taskFlowRequestSequence) || 0) + 1;
+    this._taskFlowActiveRequest = null;
+    this._taskFlowLoadingKey = "";
+    return true;
   },
 
   selectWorkspaceStageState(stageId) {

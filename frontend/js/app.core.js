@@ -60,6 +60,8 @@ const app = {
   _projectDetailPromises: {},
   _projectSelectionSequence: 0,
   _sampleCategoryDetailPromises: {},
+  _taskFlowRequestSequence: 0,
+  _taskFlowActiveRequest: null,
   _modalStack: [],
   _restoringModal: false,
   _currentModalOnOk: null,

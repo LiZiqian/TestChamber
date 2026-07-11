@@ -1251,6 +1251,7 @@ app.registerModule("app.server", {
   },
 
   invalidatePagedCaches({ stageId = "", categoryId = "" } = {}) {
+    this.cancelTaskFlowPageRequestState?.(stageId);
     if (stageId && this._taskFlowPageCache?.stageId === stageId) this._taskFlowPageCache = null;
     if (!stageId && this._taskFlowPageCache) this._taskFlowPageCache = null;
     const clearSampleCacheStore = (store) => {
