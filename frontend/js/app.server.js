@@ -1459,6 +1459,13 @@ app.registerModule("app.server", {
         json._refreshSucceeded = await this.refreshAfterTaskStateConflict(project.id, stage.id);
         return false;
       }
+      if (resp.status === 409 && json.error_code === "TASK_REVISION_CONFLICT") {
+        this._lastTaskMutationError = json;
+        this.updateServerStatus("页面数据已过期");
+        alert("操作已取消：平台数据已被其他页面更新。\n\n为避免旧页面覆盖新数据，平台将刷新当前项目；请核对最新任务和样机状态后重新操作。");
+        json._refreshSucceeded = await this.refreshAfterTaskStateConflict(project.id, stage.id);
+        return false;
+      }
       if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));
       this.serverRevision = json.revision || this.serverRevision;
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();

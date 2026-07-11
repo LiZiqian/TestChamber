@@ -26,6 +26,29 @@ def _current_revision(conn: sqlite3.Connection) -> int:
     return int(row["revision"]) if row else 1
 
 
+def _task_revision_failure(payload: dict, current_revision: int) -> dict | None:
+    """Reject a stale task page before it can overwrite a concurrent mutation."""
+    if "revision" not in payload or payload.get("revision") is None:
+        return None
+    try:
+        client_revision = int(payload.get("revision"))
+    except (TypeError, ValueError):
+        return {
+            "status": 400,
+            "error_code": "TASK_REVISION_INVALID",
+            "error": "任务保存版本号无效。",
+        }
+    if client_revision == current_revision:
+        return None
+    return {
+        "status": 409,
+        "error_code": "TASK_REVISION_CONFLICT",
+        "error": "平台数据已被其他页面更新；为避免旧任务页面覆盖新数据，本次保存已取消。",
+        "client_revision": client_revision,
+        "server_revision": current_revision,
+    }
+
+
 def _sample_destroy_scope_failure(
     conn: sqlite3.Connection,
     *,
@@ -726,6 +749,9 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        revision_failure = _task_revision_failure(payload, current_revision)
+        if revision_failure:
+            return False, revision_failure
         event_failure = _sample_event_conflict_failure(conn, sample_events)
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
