@@ -312,7 +312,8 @@ app.registerModule("workspace.taskConfig", {
         action: "set_task_plan",
         remark: "设置任务计划时间",
         user: owner,
-        createIfMissing: wasNew
+        createIfMissing: wasNew,
+        sampleIdsForMutation: []
       });
       if (!saved) {
         this.restoreFailedTaskMutation(mutationSnapshot);
@@ -567,7 +568,7 @@ app.registerModule("workspace.taskConfig", {
       remark: "保存任务配置",
       user: owner || t.owner || "管理员",
       createIfMissing: wasNew,
-      sampleIdsForMutation: [...new Set([...oldSampleIds, ...sampleIds])]
+      sampleIdsForMutation: sampleChanged ? [...new Set([...oldSampleIds, ...sampleIds])] : []
     });
     if (!saved) {
       this.restoreFailedTaskMutation(mutationSnapshot);

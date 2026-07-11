@@ -1323,11 +1323,10 @@ app.registerModule("app.server", {
   },
 
   sampleEventsForTaskMutation(task, sampleIds = []) {
-    const taskId = String(task?.id || "");
     const sampleSet = new Set((sampleIds || []).map(id => String(id || "")).filter(Boolean));
+    if (!sampleSet.size) return [];
     return (this.data?.sampleLibrary?.logs || []).filter(log => {
       if (!log) return false;
-      if (taskId && String(log.taskId || "") === taskId) return true;
       return sampleSet.has(String(log.sampleId || ""));
     });
   },

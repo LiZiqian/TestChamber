@@ -201,7 +201,8 @@ app.registerModule("workspace.dropdownIssue", {
       action: "update_issue_record",
       remark: "更新任务问题确认备注",
       user: "管理员",
-      render: false
+      render: false,
+      sampleIdsForMutation: []
     });
     if (!saved) this.restoreFailedIssueMutation(mutationSnapshot);
     return saved;
@@ -263,6 +264,7 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         action: "update_issue_record",
         remark: "录入任务问题单",
         user: "管理员",
+        sampleIdsForMutation: [],
       });
       if (!saved) {
         this.restoreFailedIssueMutation(snapshot);

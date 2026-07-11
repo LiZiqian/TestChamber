@@ -78,7 +78,8 @@ app.registerModule("workspace.taskActions", {
           action: executed ? "archive_task_delete" : "delete_task",
           remark: executed ? "任务归档删除" : "未执行任务删除",
           user: "管理员",
-          deleteMode: executed ? "" : "delete"
+          deleteMode: executed ? "" : "delete",
+          sampleIdsForMutation: completedBeforeArchive ? [] : [...(t.sampleIds || [])]
         });
         if (!saved) {
           this.restoreFailedTaskActionMutation(snapshot);
@@ -130,7 +131,8 @@ app.registerModule("workspace.taskActions", {
       const saved = await this.commitTaskMutation(p, s, t, {
         action: isRestart ? "restart_task" : "start_task",
         remark: reason,
-        user
+        user,
+        sampleIdsForMutation: [...(t.sampleIds || [])]
       });
       if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
     }, { title: "启动任务", okText: "开始测试", okClass: "btn btn-pass" });
@@ -500,7 +502,8 @@ app.registerModule("workspace.taskActions", {
       const saved = await this.commitTaskMutation(p, s, t, {
         action: "temp_change_task",
         remark: changeReason,
-        user
+        user,
+        sampleIdsForMutation: sampleChanged ? [...new Set([...beforeSampleIds, ...afterSampleIds])] : []
       });
       if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
       return false;
@@ -540,7 +543,8 @@ app.registerModule("workspace.taskActions", {
       const saved = await this.commitTaskMutation(p, s, t, {
         action: "block_task",
         remark: reason,
-        user
+        user,
+        sampleIdsForMutation: [...(t.sampleIds || [])]
       });
       if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
       return false;

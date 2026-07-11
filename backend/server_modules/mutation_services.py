@@ -81,6 +81,160 @@ def _task_scope_failure(
     return None
 
 
+def _task_related_sample_ids(task: dict) -> set[str]:
+    ids = set(task_mutation_rules.task_sample_ids(task))
+
+    def add_items(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sample_id = str(item.get("sampleId") or item.get("sid") or item.get("id") or "")
+            if sample_id:
+                ids.add(sample_id)
+
+    add_items(task.get("removedSampleRecords"))
+    add_items(task.get("sampleFaultRecords"))
+    result_draft = task.get("resultDraft")
+    if isinstance(result_draft, dict):
+        add_items(result_draft.get("samples"))
+    result_uploads = task.get("resultUploads")
+    if isinstance(result_uploads, list):
+        for upload in result_uploads:
+            if isinstance(upload, dict):
+                add_items(upload.get("samples"))
+    return ids
+
+
+def _task_sample_payload_failure(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    action: str,
+    task: dict,
+    sample_payloads: list[dict],
+    sample_events: list[dict],
+    is_delete: bool,
+) -> dict | None:
+    payload_ids: list[str] = []
+    for sample in sample_payloads:
+        sample_id = str(sample.get("id") or "")
+        if not sample_id:
+            return {"status": 400, "error": "samples 中每台样机都必须包含 id"}
+        payload_ids.append(sample_id)
+    if len(payload_ids) != len(set(payload_ids)):
+        return {"status": 400, "error": "samples 中存在重复样机 id"}
+
+    old_ids = task_mutation_rules.existing_task_sample_ids(conn, task_id)
+    new_ids = task_mutation_rules.task_sample_ids(task)
+    assignment_actions = {
+        "assign_task_samples",
+        "reassign_task_samples",
+        "create_task_config",
+        "save_task_config",
+        "temp_change_task",
+    }
+    fixed_assignment_actions = {
+        "set_task_plan",
+        "save_task_result_draft",
+        "update_issue_record",
+        "start_task",
+        "restart_task",
+        "block_task",
+        "task_start",
+        "finish_task_result",
+        "upload_task_result",
+        "archive_task_delete",
+        "delete_task",
+    }
+    if action in fixed_assignment_actions and old_ids != new_ids:
+        return {
+            "status": 409,
+            "error_code": "TASK_SAMPLE_ASSIGNMENT_CONFLICT",
+            "error": "该任务操作不允许同时改变样机分配，已拒绝保存。",
+            "missingSampleIds": sorted(old_ids - new_ids),
+            "unexpectedSampleIds": sorted(new_ids - old_ids),
+        }
+
+    payload_id_set = set(payload_ids)
+    if action in {"set_task_plan", "save_task_result_draft", "update_issue_record"}:
+        required_ids = set()
+        allowed_ids = set()
+    elif action in assignment_actions:
+        required_ids = old_ids | new_ids if old_ids != new_ids else set()
+        allowed_ids = set(required_ids)
+    elif action in {"start_task", "restart_task", "block_task", "task_start", "delete_task"} or is_delete:
+        required_ids = set(old_ids)
+        allowed_ids = set(old_ids)
+    elif action == "archive_task_delete":
+        current = task_mutation_rules.existing_task(conn, task_id) or {}
+        current_flow = status_normalization.normalize_task_flow_status(current)
+        required_ids = set() if current_flow in ("正常完成", "异常终止") else set(old_ids)
+        allowed_ids = set(required_ids)
+    elif action in {"finish_task_result", "upload_task_result"}:
+        allowed_ids = _task_related_sample_ids(task) | old_ids
+        required_ids = set()
+        if action == "finish_task_result" and old_ids:
+            placeholders = ",".join("?" for _ in old_ids)
+            locked_rows = conn.execute(
+                f"""
+                SELECT DISTINCT sample_id
+                FROM project_task_samples
+                WHERE sample_id IN ({placeholders})
+                  AND task_id != ?
+                  AND flow_status NOT IN ('正常完成', '异常终止')
+                """,
+                (*old_ids, task_id),
+            ).fetchall()
+            locked_ids = {str(row["sample_id"] or "") for row in locked_rows}
+            required_ids = old_ids - locked_ids
+    else:
+        required_ids = old_ids | new_ids if old_ids != new_ids else set()
+        allowed_ids = old_ids | new_ids
+
+    missing_ids = required_ids - payload_id_set
+    unexpected_ids = payload_id_set - allowed_ids
+    if missing_ids or unexpected_ids:
+        return {
+            "status": 409,
+            "error_code": "TASK_SAMPLE_PAYLOAD_MISMATCH",
+            "error": "任务与样机载荷不完整或包含无关样机，已拒绝部分写入。",
+            "missingSampleIds": sorted(missing_ids),
+            "unexpectedSampleIds": sorted(unexpected_ids),
+        }
+
+    if payload_id_set:
+        placeholders = ",".join("?" for _ in payload_id_set)
+        existing_rows = conn.execute(
+            f"SELECT id FROM sample_records WHERE deleted_at IS NULL AND id IN ({placeholders})",
+            tuple(payload_id_set),
+        ).fetchall()
+        existing_ids = {str(row["id"] or "") for row in existing_rows}
+        missing_records = payload_id_set - existing_ids
+        if missing_records:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_NOT_FOUND",
+                "error": "任务引用的样机档案不存在，已拒绝保存。",
+                "sampleIds": sorted(missing_records),
+            }
+
+    event_sample_ids = {
+        str(event.get("sampleId") or "")
+        for event in sample_events
+        if isinstance(event, dict)
+    }
+    if "" in event_sample_ids or not event_sample_ids.issubset(payload_id_set):
+        return {
+            "status": 409,
+            "error_code": "TASK_SAMPLE_EVENT_SCOPE_CONFLICT",
+            "error": "样机事件超出本次任务允许写入的样机范围，已拒绝保存。",
+            "unexpectedSampleIds": sorted(event_sample_ids - payload_id_set),
+        }
+    return None
+
+
 def _bump_revision_and_audit(
     ctx: MutationServiceContext,
     conn: sqlite3.Connection,
@@ -121,6 +275,18 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
     stage_id = str(payload.get("stageId") or task.get("stageId") or "")
     if not task_id or not project_id or not stage_id:
         return False, {"status": 400, "error": "缺少 projectId/stageId/taskId"}
+    samples_value = payload.get("samples")
+    sample_events_value = payload.get("sampleEvents")
+    if samples_value is not None and not isinstance(samples_value, list):
+        return False, {"status": 400, "error": "samples 必须是数组"}
+    if sample_events_value is not None and not isinstance(sample_events_value, list):
+        return False, {"status": 400, "error": "sampleEvents 必须是数组"}
+    sample_payloads = [sample for sample in (samples_value or []) if isinstance(sample, dict)]
+    if len(sample_payloads) != len(samples_value or []):
+        return False, {"status": 400, "error": "samples 中每一项都必须是 JSON 对象"}
+    sample_events = [event for event in (sample_events_value or []) if isinstance(event, dict)]
+    if len(sample_events) != len(sample_events_value or []):
+        return False, {"status": 400, "error": "sampleEvents 中每一项都必须是 JSON 对象"}
     task["id"] = task_id
     task["projectId"] = project_id
     task["stageId"] = stage_id
@@ -185,7 +351,6 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
                     "samples": status_blockers,
                     "server_revision": current_revision,
                 }
-            sample_payloads = [sample for sample in (payload.get("samples") or []) if isinstance(sample, dict)]
             if action == "upload_task_result" and task_mutation_rules.existing_finished_task(conn, task_id) and sample_payloads:
                 locked = task_mutation_rules.detect_completed_task_sample_current_state_locks(
                     conn,
@@ -210,10 +375,21 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
                     "server_revision": current_revision,
                 }
 
-        for sample in payload.get("samples") or []:
-            if isinstance(sample, dict):
-                record_writers.update_sample_record(conn, sample)
-        record_writers.upsert_sample_events(conn, payload.get("sampleEvents") or [])
+        sample_failure = _task_sample_payload_failure(
+            conn,
+            task_id=task_id,
+            action=action,
+            task=task,
+            sample_payloads=sample_payloads,
+            sample_events=sample_events,
+            is_delete=is_delete,
+        )
+        if sample_failure:
+            return False, {**sample_failure, "server_revision": current_revision}
+
+        for sample in sample_payloads:
+            record_writers.update_sample_record(conn, sample)
+        record_writers.upsert_sample_events(conn, sample_events)
         if is_delete:
             record_writers.delete_task_record(conn, task_id)
         else:
