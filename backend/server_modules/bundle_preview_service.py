@@ -374,10 +374,22 @@ def _prepare_sample_archive_import_state(incoming_state: dict, current_data: dic
         **target,
         "samples": samples,
     }]
-    prepared["sampleLibrary"]["logs"] = [
-        log for log in (prepared.get("sampleLibrary") or {}).get("logs") or []
-        if isinstance(log, dict)
-    ]
+    prepared_logs = []
+    for log in (prepared.get("sampleLibrary") or {}).get("logs") or []:
+        if not isinstance(log, dict):
+            continue
+        source_fields = {
+            "projectId": "sourceProjectId",
+            "stageId": "sourceStageId",
+            "taskId": "sourceTaskId",
+        }
+        for current_field, source_field in source_fields.items():
+            current_value = log.get(current_field)
+            if current_value not in (None, "") and log.get(source_field) in (None, ""):
+                log[source_field] = current_value
+            log[current_field] = ""
+        prepared_logs.append(log)
+    prepared["sampleLibrary"]["logs"] = prepared_logs
     return prepared
 
 
