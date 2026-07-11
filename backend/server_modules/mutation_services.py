@@ -372,6 +372,20 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
     sample_id = str(payload.get("sampleId") or (payload.get("sample") or {}).get("id") or "")
     if not sample_id:
         return False, {"status": 400, "error": "缺少 sampleId"}
+    sample = payload.get("sample")
+    if sample is not None and not isinstance(sample, dict):
+        return False, {"status": 400, "error": "sample 必须是 JSON 对象"}
+    body_sample_id = str((sample or {}).get("id") or "")
+    if body_sample_id and body_sample_id != sample_id:
+        return False, {
+            "status": 409,
+            "error_code": "SAMPLE_ID_MISMATCH",
+            "error": "请求路径中的样机与请求体样机不一致，已拒绝写入。",
+            "sampleId": sample_id,
+            "bodySampleId": body_sample_id,
+        }
+    if isinstance(sample, dict):
+        sample = {**sample, "id": sample_id}
     delete_sample = bool(payload.get("deleteSample"))
     affected = {}
     asset_paths_to_delete: list[str] = []
@@ -403,7 +417,6 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
             if isinstance(sample, dict) and str(sample.get("id") or "") != sample_id:
                 record_writers.update_sample_record(conn, sample)
 
-        sample = payload.get("sample")
         if isinstance(sample, dict) and not delete_sample:
             record_writers.update_sample_record(conn, sample)
 
