@@ -457,6 +457,7 @@ def commit_task_batch_mutation(ctx: MutationServiceContext, payload: dict, clien
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        action = str(payload.get("action") or "task_batch_mutation")
         stage_row = conn.execute(
             """
             SELECT id
@@ -495,6 +496,41 @@ def commit_task_batch_mutation(ctx: MutationServiceContext, payload: dict, clien
                 "server_revision": current_revision,
             }
 
+        if action != "create_tasks_batch" or not bool(payload.get("createIfMissing")):
+            return False, {
+                "status": 409,
+                "error_code": "TASK_BATCH_CREATE_ONLY",
+                "error": "批量任务接口仅允许一次性创建新的待下发空任务。",
+                "server_revision": current_revision,
+            }
+        if existing_rows:
+            return False, {
+                "status": 409,
+                "error_code": "TASK_ALREADY_EXISTS",
+                "error": "批量创建中包含已经存在的任务，已拒绝覆盖。",
+                "taskIds": sorted(str(row["id"] or "") for row in existing_rows),
+                "server_revision": current_revision,
+            }
+
+        invalid_tasks = []
+        for task in normalized_tasks:
+            sample_ids = task.get("sampleIds")
+            flow_status = status_normalization.normalize_task_flow_status(task)
+            if not isinstance(sample_ids, list) or sample_ids or flow_status != "待下发":
+                invalid_tasks.append({
+                    "taskId": str(task.get("id") or ""),
+                    "status": flow_status,
+                    "sampleIds": sample_ids if isinstance(sample_ids, list) else [],
+                })
+        if invalid_tasks:
+            return False, {
+                "status": 409,
+                "error_code": "TASK_BATCH_CREATE_ONLY",
+                "error": "批量创建只接受未分配样机的待下发任务。",
+                "tasks": invalid_tasks,
+                "server_revision": current_revision,
+            }
+
         status_blockers = task_mutation_rules.detect_task_mutation_sample_status_blockers(
             conn,
             [(str(task.get("id") or ""), task) for task in normalized_tasks],
@@ -508,17 +544,15 @@ def commit_task_batch_mutation(ctx: MutationServiceContext, payload: dict, clien
                 "server_revision": current_revision,
             }
 
-        create_if_missing = bool(payload.get("createIfMissing"))
         for task in normalized_tasks:
             record_writers.upsert_task_record(
                 conn,
                 task,
                 project_id,
                 stage_id,
-                create_if_missing=create_if_missing,
+                create_if_missing=True,
             )
 
-        action = str(payload.get("action") or "task_batch_mutation")
         new_revision, updated_at = _bump_revision_and_audit(
             ctx,
             conn,
