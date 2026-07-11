@@ -284,6 +284,47 @@ def _persist_destroyed_sample_snapshots(
         )
 
 
+def _sample_event_conflict_failure(conn: sqlite3.Connection, sample_events: object) -> dict | None:
+    """Allow idempotent event replay but never permit an event ID to change history."""
+    if not isinstance(sample_events, list):
+        return None
+    incoming_by_id: dict[str, dict] = {}
+    for event in sample_events:
+        if not isinstance(event, dict):
+            continue
+        event_id = str(event.get("id") or "")
+        if not event_id:
+            continue
+        normalized = status_normalization.normalize_business_value(event)
+        normalized["id"] = event_id
+        prior = incoming_by_id.get(event_id)
+        if prior is not None and prior != normalized:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_EVENT_IMMUTABLE",
+                "error": "同一批次包含内容不同的同 ID 样机事件，已拒绝写入。",
+                "eventId": event_id,
+            }
+        incoming_by_id[event_id] = normalized
+
+    for event_id, incoming in incoming_by_id.items():
+        row = conn.execute(
+            "SELECT data_json FROM sample_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        if not row:
+            continue
+        existing = record_writers.json_obj(row["data_json"], {})
+        if existing != incoming:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_EVENT_IMMUTABLE",
+                "error": "样机历史事件不可修改；检测到同 ID 事件内容发生变化。",
+                "eventId": event_id,
+            }
+    return None
+
+
 def _task_scope_failure(
     conn: sqlite3.Connection,
     *,
@@ -586,6 +627,9 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        event_failure = _sample_event_conflict_failure(conn, sample_events)
+        if event_failure:
+            return False, {**event_failure, "server_revision": current_revision}
         scope_failure = _task_scope_failure(
             conn,
             task_id=task_id,
@@ -891,6 +935,9 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
+        if event_failure:
+            return False, {**event_failure, "server_revision": current_revision}
 
         if delete_sample:
             exists = conn.execute(
@@ -1007,6 +1054,9 @@ def commit_project_mutation(ctx: MutationServiceContext, payload: dict, client_i
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
+        if event_failure:
+            return False, {**event_failure, "server_revision": current_revision}
 
         if delete_project:
             exists = conn.execute(
@@ -1081,6 +1131,9 @@ def commit_stage_mutation(ctx: MutationServiceContext, payload: dict, client_ip:
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
+        if event_failure:
+            return False, {**event_failure, "server_revision": current_revision}
 
         project = payload.get("project")
         if isinstance(project, dict):
@@ -1161,6 +1214,9 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
+        if event_failure:
+            return False, {**event_failure, "server_revision": current_revision}
 
         if delete_category:
             exists = conn.execute(

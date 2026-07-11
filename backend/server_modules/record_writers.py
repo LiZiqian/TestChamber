@@ -687,16 +687,7 @@ def upsert_sample_events(conn: sqlite3.Connection, sample_events: list[dict]) ->
             INSERT INTO sample_events
             (id, sample_id, time, event_type, project_id, stage_id, task_id, test_item, user, data_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                sample_id = excluded.sample_id,
-                time = excluded.time,
-                event_type = excluded.event_type,
-                project_id = excluded.project_id,
-                stage_id = excluded.stage_id,
-                task_id = excluded.task_id,
-                test_item = excluded.test_item,
-                user = excluded.user,
-                data_json = excluded.data_json
+            ON CONFLICT(id) DO NOTHING
             """,
             (
                 event_id,
