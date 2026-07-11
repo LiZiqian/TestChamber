@@ -16,3 +16,69 @@
     padding-top: 0;
   }
 }
+
+@media (max-width: 640px) {
+  .sidebar { width: 66px }
+  .sidebar #nav { padding-left: 7px; padding-right: 7px }
+  .sidebar .sidebar-header { padding: 14px 8px 10px; text-align: center }
+  .sidebar .logo {
+    justify-content: center;
+    padding-left: 8px;
+    padding-right: 8px;
+    font-size: 0;
+  }
+  .sidebar .logo::before {
+    content: "数";
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    background: var(--primary-bg);
+    color: var(--primary);
+    font-size: 16px;
+    font-weight: 900;
+  }
+  .sidebar .logo-text,
+  .sidebar .logo-sub,
+  .sidebar .nav-title,
+  .sidebar .nav-label,
+  .sidebar .nav-sub,
+  .sidebar .nav-toggle,
+  .sidebar .nav-tool-label,
+  .sidebar .save-state { display: none }
+  .sidebar .nav-item {
+    justify-content: center;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .sidebar .nav-item-main {
+    flex: 0 0 auto;
+    justify-content: center;
+    width: 100%;
+  }
+  .sidebar .nav-icon {
+    min-width: 0;
+    width: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sidebar .nav-tool-item {
+    justify-content: center;
+    padding: 5px 4px;
+  }
+  .sidebar .nav-tool-icon { width: auto; font-size: 15px }
+  .sidebar-toggle { display: none }
+  .header { padding: 10px 14px }
+  .content { padding: 14px 12px 12px }
+  .sample-pager { align-items: flex-start }
+  .sample-pager-row {
+    flex: 1 1 100%;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .sample-pager button,
+  .sample-pager .path { white-space: nowrap }
+  .sample-pager .sample-page-size-select { min-width: 96px }
+}
