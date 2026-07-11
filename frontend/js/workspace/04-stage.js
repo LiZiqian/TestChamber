@@ -279,7 +279,7 @@ app.registerModule("workspace.stage", {
     }
     const taskCount = tasks.length;
     const extraWarn = taskCount
-      ? `\n\n该阶段含 ${taskCount} 个任务及其测试履历/日志，删除后不可恢复。`
+      ? `\n\n该阶段含 ${taskCount} 个任务。删除后阶段将从项目工作台隐藏；已完成任务的测试履历继续保留，未完成任务数据将被清理。`
       : "";
     this.showConfirm(`确认删除阶段「${stage.name}」？${extraWarn}`, async () => {
       const snapshot = this.dataSnapshot();

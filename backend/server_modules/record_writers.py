@@ -526,14 +526,29 @@ def delete_stage_record(conn: sqlite3.Connection, stage_id: str) -> None:
     ).fetchone()
     if not row:
         raise KeyError(f"阶段不存在: {stage_id}")
-    task_rows = conn.execute("SELECT id FROM project_tasks WHERE stage_id = ?", (stage_id,)).fetchall()
-    task_ids = [str(row["id"] or "") for row in task_rows if row["id"]]
-    if task_ids:
-        placeholders = ",".join("?" for _ in task_ids)
-        conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({placeholders})", task_ids)
-        conn.execute(f"DELETE FROM project_task_samples WHERE task_id IN ({placeholders})", task_ids)
-    conn.execute("DELETE FROM project_tasks WHERE stage_id = ?", (stage_id,))
-    conn.execute("DELETE FROM project_stages WHERE id = ?", (stage_id,))
+    task_rows = conn.execute(
+        "SELECT id, flow_status FROM project_tasks WHERE stage_id = ?",
+        (stage_id,),
+    ).fetchall()
+    unfinished_task_ids = [
+        str(task_row["id"] or "")
+        for task_row in task_rows
+        if task_row["id"] and str(task_row["flow_status"] or "") not in ("正常完成", "异常终止")
+    ]
+    if unfinished_task_ids:
+        placeholders = ",".join("?" for _ in unfinished_task_ids)
+        conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({placeholders})", unfinished_task_ids)
+        conn.execute(f"DELETE FROM project_task_samples WHERE task_id IN ({placeholders})", unfinished_task_ids)
+
+    deleted_at = now_iso()
+    conn.execute(
+        "UPDATE project_tasks SET deleted_at = ?, updated_at = ? WHERE stage_id = ?",
+        (deleted_at, deleted_at, stage_id),
+    )
+    conn.execute(
+        "UPDATE project_stages SET deleted_at = ?, updated_at = ? WHERE id = ?",
+        (deleted_at, deleted_at, stage_id),
+    )
     prune_orphan_operational_logs(conn, clear_empty_platform_audit=True)
 
 
