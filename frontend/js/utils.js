@@ -168,8 +168,12 @@ const Utils = {
   sampleImportAliases() {
     return {
       '带入时间': ['带入时间', '入库时间', '录入时间', '日期', 'date'],
+      '借用时间': ['借用时间', '借出时间', '领用时间', 'borrow date', 'borrowed at'],
       '阶段': ['阶段', 'stage', '版本'],
       '方案': ['方案', '方案(制式/配置/型号/SKU/厂家)', '方案(制式/配置/型号/sku/厂家)', '制式', '平台方案', 'platform', '芯片方案', '型号', '标准'],
+      '型号/方案': ['型号/方案', '型号 / 方案', 'model / platform'],
+      '配置/制式': ['配置/制式', '配置 / 制式', 'config / standard'],
+      'SKU/版本': ['SKU/版本', 'SKU / 版本', 'sku / version'],
       '方案编号': ['方案编号', '方案号', '编号', 'scheme no', 'scheme'],
       '初检问题': ['初检问题录入', '初检结果', '初检', '检查结果', '样机问题表', 'initial result', '初检问题录入（无问题不填写或写"/"）'],
       'IMEI': ['imei', 'imei号', 'imei1', 'IMEI号'],
@@ -321,12 +325,17 @@ const Utils = {
       const borrowerParsed = Utils.parsePersonField(borrowerField);
       const borrowerText = borrowerParsed.ok ? Utils.personText(borrowerParsed.name, borrowerParsed.employeeNo) : "";
       if (borrowerField && !borrowerParsed.ok) invalidPersonCount++;
+      const legacyScheme = get('方案');
+      const exportedConfig = get('配置/制式');
+      const exportedSkuName = get('SKU/版本');
 
       rows.push({
         importDate: Utils.parseSampleDateField(get('带入时间')),
+        borrowDate: Utils.parseSampleDateField(get('借用时间')),
         stage: get('阶段') || 'Unknown',
-        standard: get('方案') || '',
-        platform: '',
+        standard: exportedConfig || legacyScheme || '',
+        platform: get('型号/方案') || '',
+        skuName: exportedSkuName || legacyScheme || exportedConfig || '',
         schemeNo: get('方案编号') || '',
         initialResult: Utils.parseSampleIssueText(get('初检问题')).join("\n"),
         imei: imei,
