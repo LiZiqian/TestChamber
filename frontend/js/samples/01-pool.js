@@ -767,9 +767,10 @@ app.registerModule("samples.pool", {
     const reassemblyText = isReassembled ? "重组" : "非重组";
     const problemText = this.sampleProblemSummaryText(s);
     const stageText = [s.sourceStageName || "-", s.sourceSkuName || "-"].filter(Boolean).join(" · ");
+    const displayCode = this.sampleDisplayCode(s);
     return `<div class="card sample-card sample-archive-card status-${usageClass} ${hasProblem ? "has-problem" : "is-ok"}" data-usage-status="${Utils.esc(usageStatus)}" data-quality-status="${hasProblem ? "fault" : "ok"}" data-reassembly-status="${isReassembled ? "reassembled" : "normal"}" data-app-action="sample-open" data-id="${Utils.esc(s.id)}">
       <div class="sample-card-top">
-        <b class="sample-card-code">${Utils.esc(this.sampleDisplayCode(s))}</b>
+        <button type="button" class="sample-card-code sample-card-open-btn" data-app-action="sample-open" data-id="${Utils.esc(s.id)}" aria-label="查看样机 ${Utils.esc(displayCode)}">${Utils.esc(displayCode)}</button>
         <button type="button" class="sample-card-destroy-btn" data-app-action="sample-destroy" data-id="${Utils.esc(s.id)}" data-stop-propagation="1" title="档案销毁" aria-label="档案销毁">🗑</button>
       </div>
       <div class="sample-card-content">
