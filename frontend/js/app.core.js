@@ -296,6 +296,9 @@ const app = {
       case "task-flow-clear":
         this.clearTaskFlowFilters();
         break;
+      case "task-flow-retry":
+        this.retryTaskFlowPage();
+        break;
       case "task-show-samples":
         {
           const pending = this.showTaskSamples(projectId, stageId, taskId);

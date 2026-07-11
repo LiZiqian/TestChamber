@@ -246,6 +246,19 @@ app.registerModule("workspace.taskTable", {
       });
   },
 
+  retryTaskFlowPage() {
+    const project = this.currentProject();
+    const stage = this.currentStage();
+    if (!project || !stage?.id) return false;
+    const params = this.taskFlowQueryParams(stage);
+    const key = this.taskFlowCacheKey(stage, params);
+    this._taskFlowPageCache = null;
+    this.cancelTaskFlowPageRequestState?.(stage.id);
+    this.loadTaskFlowPage(project, stage, key, params);
+    this.refreshTaskFlowRegion(project, stage) || this.renderPreserveScroll();
+    return true;
+  },
+
   workspaceTaskFlowHtml(project, stage) {
     const params = this.taskFlowQueryParams(stage);
     return `<div id="taskFlowShell" class="task-flow-shell" data-stage-id="${Utils.esc(stage?.id || "")}" data-page-key="${Utils.esc(this.taskFlowCacheKey(stage, params))}">
@@ -298,7 +311,7 @@ app.registerModule("workspace.taskTable", {
     }).join("");
     const loadingRow = !cached
       ? `<tr><td colspan="10" class="empty">正在加载服务器分页数据...</td></tr>`
-      : (cached.error ? `<tr><td colspan="10" class="empty">任务分页加载失败：${Utils.esc(cached.error)}</td></tr>` : "");
+      : (cached.error ? `<tr><td colspan="10" class="empty">任务分页加载失败：${Utils.esc(cached.error)} <button type="button" class="btn btn-sm btn-outline" data-app-action="task-flow-retry">重新加载</button></td></tr>` : "");
 
     return `
       <div class="section-head">
