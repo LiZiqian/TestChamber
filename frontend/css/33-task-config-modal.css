@@ -12,6 +12,9 @@
   flex-direction: column;
   overflow: hidden;
 }
+.task-config-modal.modal:has(#tcPanelPlan.active) {
+  height: min(620px, 92vh);
+}
 .task-config-modal .modal-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -451,6 +454,9 @@
     width: calc(100vw - 24px);
     height: calc(100vh - 24px);
     max-height: calc(100vh - 24px);
+  }
+  .task-config-modal.modal:has(#tcPanelPlan.active) {
+    height: min(560px, calc(100vh - 24px));
   }
   .task-config-modal .modal-body {
     overflow: hidden;
