@@ -26,6 +26,86 @@ def _current_revision(conn: sqlite3.Connection) -> int:
     return int(row["revision"]) if row else 1
 
 
+def _sample_destroy_scope_failure(
+    conn: sqlite3.Connection,
+    *,
+    sample_ids: set[str],
+    task_mutations: object,
+) -> dict | None:
+    """Reject destructive writes unless every live task reference is removed."""
+    if not sample_ids:
+        return None
+
+    placeholders = ",".join("?" for _ in sample_ids)
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT t.id, t.project_id, t.stage_id
+        FROM project_task_samples AS pts
+        JOIN project_tasks AS t ON t.id = pts.task_id
+        WHERE pts.sample_id IN ({placeholders})
+          AND t.deleted_at IS NULL
+          AND t.flow_status NOT IN ('正常完成', '异常终止')
+        """,
+        tuple(sorted(sample_ids)),
+    ).fetchall()
+    expected = {
+        str(row["id"] or ""): (
+            str(row["project_id"] or ""),
+            str(row["stage_id"] or ""),
+        )
+        for row in rows
+        if str(row["id"] or "")
+    }
+
+    supplied: dict[str, dict] = {}
+    if not isinstance(task_mutations, list):
+        task_mutations = []
+    for item in task_mutations:
+        if not isinstance(item, dict) or not isinstance(item.get("task"), dict):
+            continue
+        task = item["task"]
+        task_id = str(item.get("taskId") or task.get("id") or "")
+        if not task_id or task_id in supplied:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_DESTROY_SCOPE_CHANGED",
+                "error": "样机占用关系已变化或任务联动载荷不完整，已拒绝销毁。",
+            }
+        supplied[task_id] = item
+
+    if set(supplied) != set(expected):
+        return {
+            "status": 409,
+            "error_code": "SAMPLE_DESTROY_SCOPE_CHANGED",
+            "error": "样机占用关系已变化或任务联动载荷不完整，已拒绝销毁。",
+            "missingTaskIds": sorted(set(expected) - set(supplied)),
+            "unexpectedTaskIds": sorted(set(supplied) - set(expected)),
+        }
+
+    for task_id, item in supplied.items():
+        task = item["task"]
+        project_id = str(item.get("projectId") or task.get("projectId") or "")
+        stage_id = str(item.get("stageId") or task.get("stageId") or "")
+        if (project_id, stage_id) != expected[task_id]:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_DESTROY_SCOPE_CHANGED",
+                "error": "任务归属与当前样机占用关系不一致，已拒绝销毁。",
+                "taskId": task_id,
+            }
+        remaining_ids = set(task_mutation_rules.task_sample_ids(task))
+        dangling_ids = remaining_ids & sample_ids
+        if dangling_ids:
+            return {
+                "status": 409,
+                "error_code": "SAMPLE_DESTROY_SCOPE_CHANGED",
+                "error": "任务联动结果仍引用待销毁样机，已拒绝销毁。",
+                "taskId": task_id,
+                "sampleIds": sorted(dangling_ids),
+            }
+    return None
+
+
 def _task_scope_failure(
     conn: sqlite3.Connection,
     *,
@@ -634,6 +714,27 @@ def commit_sample_mutation(ctx: MutationServiceContext, payload: dict, client_ip
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
 
+        if delete_sample:
+            exists = conn.execute(
+                "SELECT 1 FROM sample_records WHERE id = ? AND deleted_at IS NULL",
+                (sample_id,),
+            ).fetchone()
+            if not exists:
+                return False, {
+                    "status": 404,
+                    "error_code": "SAMPLE_NOT_FOUND",
+                    "error": "待销毁的样机档案不存在。",
+                    "sampleId": sample_id,
+                }
+            scope_failure = _sample_destroy_scope_failure(
+                conn,
+                sample_ids={sample_id},
+                task_mutations=payload.get("taskMutations"),
+            )
+            if scope_failure:
+                scope_failure["server_revision"] = current_revision
+                return False, scope_failure
+
         for item in payload.get("taskMutations") or []:
             if not isinstance(item, dict):
                 continue
@@ -855,6 +956,31 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+
+        if delete_category:
+            exists = conn.execute(
+                "SELECT 1 FROM sample_categories WHERE id = ? AND deleted_at IS NULL",
+                (category_id,),
+            ).fetchone()
+            if not exists:
+                return False, {
+                    "status": 404,
+                    "error_code": "SAMPLE_CATEGORY_NOT_FOUND",
+                    "error": "待销毁的样机池档案不存在。",
+                    "categoryId": category_id,
+                }
+            sample_rows = conn.execute(
+                "SELECT id FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
+                (category_id,),
+            ).fetchall()
+            scope_failure = _sample_destroy_scope_failure(
+                conn,
+                sample_ids={str(row["id"] or "") for row in sample_rows if str(row["id"] or "")},
+                task_mutations=payload.get("taskMutations"),
+            )
+            if scope_failure:
+                scope_failure["server_revision"] = current_revision
+                return False, scope_failure
 
         if not delete_category:
             category = payload.get("category")
