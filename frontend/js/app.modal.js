@@ -15,7 +15,7 @@ app.registerModule("app.modal", {
     if (!root) return;
     const target = preferred && preferred.isConnected && !preferred.disabled
       ? preferred
-      : root.querySelector("[autofocus]") || this.dialogFocusableElements(root)[0] || root;
+      : root.querySelector("[autofocus]") || root;
     if (!target.hasAttribute("tabindex") && target === root) target.setAttribute("tabindex", "-1");
     setTimeout(() => target?.focus?.({ preventScroll: true }), 0);
   },
