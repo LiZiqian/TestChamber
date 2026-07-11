@@ -82,6 +82,10 @@ const app = {
     }
   },
 
+  isImeCompositionEvent(event) {
+    return !!(event?.isComposing || event?.keyCode === 229 || event?.which === 229);
+  },
+
   registerModule(name, members) {
     const moduleName = String(name || "").trim() || "anonymous";
     if (!members || typeof members !== "object") {
@@ -173,7 +177,7 @@ const app = {
     if (!action) return;
     const supportedEvents = (target.dataset.appEvents || "click").split(/\s+/).filter(Boolean);
     const keyboardButton = eventType === "keydown" && target.getAttribute?.("role") === "button";
-    const keyboardActivation = keyboardButton && (event.key === "Enter" || event.key === " ");
+    const keyboardActivation = keyboardButton && !this.isImeCompositionEvent(event) && (event.key === "Enter" || event.key === " ");
     if (keyboardButton && !keyboardActivation) return;
     if (!supportedEvents.includes(eventType) && !keyboardActivation) return;
     if (keyboardActivation) event.preventDefault();
@@ -266,7 +270,7 @@ const app = {
         break;
       case "sample-filter-search":
         if (eventType === "input") this.updateSamplePoolFilter("keyword", target.value, { render: false });
-        if (eventType === "keydown" && event.key === "Enter") this.updateSamplePoolFilter("keyword", target.value, { render: true });
+        if (eventType === "keydown" && event.key === "Enter" && !this.isImeCompositionEvent(event)) this.updateSamplePoolFilter("keyword", target.value, { render: true });
         break;
       case "sample-filters-clear":
         this.clearSamplePoolFilters();
@@ -518,7 +522,7 @@ const app = {
           this.updateTaskSamplePickerSearchDraft(id, field, target.value);
           return;
         }
-        if (eventType === "keydown" && event.key !== "Enter") return;
+        if (eventType === "keydown" && (event.key !== "Enter" || this.isImeCompositionEvent(event))) return;
         this.applyTaskSamplePickerSearch(id);
         break;
       case "task-sample-picker-row":

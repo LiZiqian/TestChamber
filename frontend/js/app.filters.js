@@ -41,7 +41,7 @@ app.registerModule("app.filters", {
     this.renderPreserveScroll();
   },
   handleTaskFlowTextFilterKeydown(event, field, value) {
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && !this.isImeCompositionEvent(event)) {
       event.preventDefault();
       this.commitTaskFlowTextFilter(field, value);
     }

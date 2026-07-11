@@ -219,6 +219,7 @@ app.registerModule("workspace.taskResult", {
 
   handleTaskResultLocationKey(input, event) {
     if (!input || !event) return;
+    if (this.isImeCompositionEvent?.(event)) return;
     if (event.key === "Escape") {
       this.closeTaskResultLocationComboboxes();
       return;

@@ -320,6 +320,7 @@ app.registerModule("workspace.shared", {
 
   handleProjectMemberComboboxKey(input, event) {
     if (!input || !event) return;
+    if (this.isImeCompositionEvent?.(event)) return;
     if (event.key === "Escape") {
       this.closeProjectMemberComboboxes();
       return;
