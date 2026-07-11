@@ -872,7 +872,24 @@ def commit_sample_archive(ctx: ImportBundleCommitContext, payload: dict) -> dict
     entry = ctx.import_previews.get(preview_id)
     if not entry:
         return {"ok": False, "error": "previewId 无效或已过期", "status": 400}
-    _incoming, result = ctx.load_import_preview_payload(entry)
+    incoming, result = ctx.load_import_preview_payload(entry)
+    package_kind = str((result or {}).get("packageKind") or "")
+    scope = str((result or {}).get("scope") or "")
+    projects = incoming.get("projects") if isinstance(incoming, dict) else None
+    categories = ((incoming.get("sampleLibrary") or {}).get("categories") or []) if isinstance(incoming, dict) else []
+    samples = [
+        sample
+        for category in categories
+        if isinstance(category, dict)
+        for sample in (category.get("samples") or [])
+        if isinstance(sample, dict)
+    ]
+    if package_kind != "sample-archive" or scope != "selected-samples" or projects != [] or len(samples) != 1:
+        return {
+            "ok": False,
+            "error": "previewId 不属于有效的单台样机档案预览",
+            "status": 400,
+        }
     decisions = payload.get("decisions")
     if not isinstance(decisions, dict) or not decisions:
         decisions = sample_archive_default_decisions(result or {})
