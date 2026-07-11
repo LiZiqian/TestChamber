@@ -1291,6 +1291,27 @@ app.registerModule("app.server", {
     }).join("\n");
   },
 
+  async refreshAfterTaskStateConflict(projectId, stageId) {
+    try {
+      this.updateServerStatus("刷新任务状态");
+      const project = await this.fetchProjectDetail(projectId, { includeTasks: true });
+      if (project) {
+        this.mergeProjectDetail(project, { includeTasks: true });
+        this._baseData = this.dataSnapshot();
+        this.invalidatePagedCaches({ stageId });
+        if (Array.isArray(this._modalStack)) this._modalStack.length = 0;
+        this.closeModal?.();
+        this.closeConfirm?.();
+        this.render();
+      }
+      this.updateServerStatus("已同步");
+    } catch (e) {
+      console.error("任务状态冲突后刷新失败：", e);
+      this.updateServerStatus("刷新失败");
+      alert("任务状态已被其他操作修改，但刷新最新状态失败：" + e.message);
+    }
+  },
+
   async commitTaskMutation(project, stage, task, { action = "task_mutation", remark = "任务增量变更", user = "", render = true, createIfMissing = false, deleteMode = "", sampleIdsForMutation = null } = {}) {
     if (!project || !stage || !task) return false;
     this._lastTaskMutationError = null;
@@ -1358,6 +1379,13 @@ app.registerModule("app.server", {
         this._lastTaskMutationError = json;
         this.updateServerStatus("任务已结束");
         Utils.toast("任务已经结束，已同步服务器状态。");
+        return false;
+      }
+      if (resp.status === 409 && json.error_code === "TASK_STATE_CONFLICT") {
+        this._lastTaskMutationError = json;
+        this.updateServerStatus("任务状态已变化");
+        alert(`操作已取消：任务当前状态已变为「${json.taskStatus || "未知"}」。\n\n平台将刷新最新任务和样机状态，请重新确认后再操作。`);
+        await this.refreshAfterTaskStateConflict(project.id, stage.id);
         return false;
       }
       if (!resp.ok || !json.ok) throw new Error(json.error || ("HTTP " + resp.status));

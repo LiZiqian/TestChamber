@@ -97,6 +97,21 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
                     "taskStatus": str(finished.get("status") or ""),
                     "server_revision": current_revision,
                 }
+        state_conflict = task_mutation_rules.task_action_state_conflict(
+            conn,
+            task_id,
+            action,
+            task,
+            is_delete=is_delete,
+        )
+        if state_conflict:
+            return False, {
+                "status": 409,
+                "error_code": "TASK_STATE_CONFLICT",
+                "error": state_conflict["reason"],
+                **state_conflict,
+                "server_revision": current_revision,
+            }
         if not is_delete:
             status_blockers = task_mutation_rules.detect_task_mutation_sample_status_blockers(conn, [(task_id, task)])
             if status_blockers:

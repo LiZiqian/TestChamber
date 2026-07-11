@@ -136,6 +136,92 @@ def existing_finished_task(conn: sqlite3.Connection, task_id: str) -> dict | Non
     return None
 
 
+def existing_task(conn: sqlite3.Connection, task_id: str) -> dict | None:
+    row = conn.execute(
+        """
+        SELECT id, status, flow_status, updated_at, data_json
+        FROM project_tasks
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (task_id,),
+    ).fetchone()
+    if not row:
+        return None
+    task = json_obj(row["data_json"], {}) or {}
+    task["id"] = str(row["id"] or task_id)
+    task["status"] = str(row["status"] or task.get("status") or "")
+    task["updatedAt"] = str(row["updated_at"] or task.get("updatedAt") or "")
+    task["flowStatus"] = str(row["flow_status"] or task_queries.task_flow_status(task))
+    return task
+
+
+def task_action_state_conflict(
+    conn: sqlite3.Connection,
+    task_id: str,
+    action: str,
+    incoming_task: dict,
+    *,
+    is_delete: bool = False,
+) -> dict | None:
+    current = existing_task(conn, task_id)
+    if not current:
+        return None
+
+    current_flow = task_queries.task_flow_status(current)
+    incoming_flow = task_queries.task_flow_status(incoming_task)
+    terminal = {"正常完成", "异常终止"}
+
+    def conflict(reason: str) -> dict:
+        return {
+            "taskId": task_id,
+            "taskStatus": current_flow,
+            "incomingStatus": incoming_flow,
+            "taskUpdatedAt": str(current.get("updatedAt") or ""),
+            "reason": reason,
+        }
+
+    if is_delete:
+        if current_flow != "待下发":
+            return conflict("只有服务器当前仍为待下发的任务才允许物理删除。")
+        return None
+
+    same_state_actions = {
+        "create_task_config": {"待下发"},
+        "save_task_config": {"待下发"},
+        "assign_task_samples": {"待下发"},
+        "reassign_task_samples": {"待下发"},
+        "set_task_plan": {"待下发"},
+        "temp_change_task": {"进行中", "阻塞中"},
+        "save_task_result_draft": {"进行中", "阻塞中"},
+        "update_issue_record": {"待下发", "进行中", "阻塞中", *terminal},
+        "upload_task_result": terminal,
+    }
+    if action in same_state_actions:
+        if current_flow not in same_state_actions[action]:
+            return conflict("服务器当前任务状态不允许执行该操作。")
+        if incoming_flow != current_flow:
+            return conflict("请求中的任务状态已落后于服务器。")
+        return None
+
+    transitions = {
+        "start_task": ({"待下发"}, {"进行中"}),
+        "restart_task": ({"阻塞中"}, {"进行中"}),
+        "block_task": ({"进行中"}, {"阻塞中"}),
+        "finish_task_result": ({"进行中", "阻塞中"}, terminal),
+        "archive_task_delete": ({"进行中", "阻塞中", *terminal}, terminal),
+    }
+    if action in transitions:
+        allowed_current, allowed_incoming = transitions[action]
+        if current_flow not in allowed_current or incoming_flow not in allowed_incoming:
+            return conflict("任务状态转换与服务器当前状态不一致。")
+        return None
+
+    # 兼容旧客户端的通用 mutation，但绝不允许它把服务器终态重新打开。
+    if current_flow in terminal and incoming_flow != current_flow:
+        return conflict("已结束任务不能被旧请求重新打开。")
+    return None
+
+
 def sample_record_status(sample: dict) -> str:
     return status_normalization.normalize_sample_usage_status(sample.get("status") if isinstance(sample, dict) else "")
 
