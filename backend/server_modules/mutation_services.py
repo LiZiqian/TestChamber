@@ -106,6 +106,104 @@ def _sample_destroy_scope_failure(
     return None
 
 
+def _project_delete_sample_scope_failure(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    samples: object,
+) -> dict | None:
+    """Require a complete, current sample-release payload before deleting a project."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT pts.sample_id
+        FROM project_task_samples AS pts
+        JOIN project_tasks AS t ON t.id = pts.task_id
+        WHERE t.project_id = ?
+          AND t.deleted_at IS NULL
+          AND t.flow_status NOT IN ('正常完成', '异常终止')
+        """,
+        (project_id,),
+    ).fetchall()
+    expected_ids = {str(row["sample_id"] or "") for row in rows if str(row["sample_id"] or "")}
+
+    supplied: dict[str, dict] = {}
+    if not isinstance(samples, list):
+        samples = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        sample_id = str(sample.get("id") or "")
+        if not sample_id or sample_id in supplied:
+            return {
+                "status": 409,
+                "error_code": "PROJECT_DELETE_SAMPLE_SCOPE_CHANGED",
+                "error": "项目关联样机已变化或释放载荷不完整，已拒绝删除项目。",
+            }
+        supplied[sample_id] = sample
+
+    if set(supplied) != expected_ids:
+        return {
+            "status": 409,
+            "error_code": "PROJECT_DELETE_SAMPLE_SCOPE_CHANGED",
+            "error": "项目关联样机已变化或释放载荷不完整，已拒绝删除项目。",
+            "missingSampleIds": sorted(expected_ids - set(supplied)),
+            "unexpectedSampleIds": sorted(set(supplied) - expected_ids),
+        }
+
+    if not expected_ids:
+        return None
+
+    placeholders = ",".join("?" for _ in expected_ids)
+    existing_rows = conn.execute(
+        f"SELECT id FROM sample_records WHERE id IN ({placeholders}) AND deleted_at IS NULL",
+        tuple(sorted(expected_ids)),
+    ).fetchall()
+    existing_ids = {str(row["id"] or "") for row in existing_rows}
+    if existing_ids != expected_ids:
+        return {
+            "status": 409,
+            "error_code": "PROJECT_DELETE_SAMPLE_SCOPE_CHANGED",
+            "error": "项目关联的样机档案不存在或已变化，已拒绝删除项目。",
+            "missingSampleIds": sorted(expected_ids - existing_ids),
+        }
+
+    other_rows = conn.execute(
+        f"""
+        SELECT pts.sample_id, t.flow_status
+        FROM project_task_samples AS pts
+        JOIN project_tasks AS t ON t.id = pts.task_id
+        WHERE pts.sample_id IN ({placeholders})
+          AND t.project_id != ?
+          AND t.deleted_at IS NULL
+          AND t.flow_status NOT IN ('正常完成', '异常终止')
+        """,
+        (*sorted(expected_ids), project_id),
+    ).fetchall()
+    other_flows: dict[str, set[str]] = {}
+    for row in other_rows:
+        other_flows.setdefault(str(row["sample_id"] or ""), set()).add(str(row["flow_status"] or ""))
+
+    invalid_statuses = []
+    for sample_id, sample in supplied.items():
+        flows = other_flows.get(sample_id, set())
+        expected_status = "测试中" if "进行中" in flows else ("在位等待" if flows else "闲置")
+        actual_status = status_normalization.normalize_sample_usage_status(sample.get("status"))
+        if actual_status != expected_status:
+            invalid_statuses.append({
+                "sampleId": sample_id,
+                "expectedStatus": expected_status,
+                "actualStatus": actual_status,
+            })
+    if invalid_statuses:
+        return {
+            "status": 409,
+            "error_code": "PROJECT_DELETE_SAMPLE_SCOPE_CHANGED",
+            "error": "项目删除后的样机状态与当前任务占用关系不一致，已拒绝删除项目。",
+            "samples": invalid_statuses,
+        }
+    return None
+
+
 def _task_scope_failure(
     conn: sqlite3.Connection,
     *,
@@ -823,6 +921,27 @@ def commit_project_mutation(ctx: MutationServiceContext, payload: dict, client_i
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+
+        if delete_project:
+            exists = conn.execute(
+                "SELECT 1 FROM project_records WHERE id = ? AND deleted_at IS NULL",
+                (project_id,),
+            ).fetchone()
+            if not exists:
+                return False, {
+                    "status": 404,
+                    "error_code": "PROJECT_NOT_FOUND",
+                    "error": "待删除的项目不存在。",
+                    "projectId": project_id,
+                }
+            scope_failure = _project_delete_sample_scope_failure(
+                conn,
+                project_id=project_id,
+                samples=payload.get("samples"),
+            )
+            if scope_failure:
+                scope_failure["server_revision"] = current_revision
+                return False, scope_failure
 
         for sample in payload.get("samples") or []:
             if isinstance(sample, dict):
