@@ -32,6 +32,7 @@ from server_modules import app_metadata, bundle_preview_service, chamber_package
 
 APP_VERSION = version.APP_VERSION
 SERVER_VERSION = version.SERVER_VERSION
+ThreadingHTTPServer = server_runner.ThreadingHTTPServer
 ROOT_DIR = PROJECT_ROOT
 FRONTEND_DIR = ROOT_DIR / "frontend"
 DATA_ROOT_ENV_VAR = runtime_paths.DATA_ROOT_ENV_VAR
