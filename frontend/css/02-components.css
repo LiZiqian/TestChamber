@@ -66,7 +66,9 @@
 .s-进行中 { background: var(--status-task-running-bg); color: var(--status-task-running-text) }
 .s-通过, .s-无故障 { background: var(--status-result-pass-bg); color: var(--status-result-pass-text) }
 .s-不通过, .s-有故障 { background: var(--status-result-fail-bg); color: var(--status-result-fail-text) }
-.s-已退库, .s-取走分析, .s-退出测试, .s-待确认 { background: var(--status-display-neutral-bg); color: var(--status-display-neutral-text) }
+.s-已退库 { background: var(--status-sample-retired-bg); color: var(--status-sample-retired-text) }
+.s-取走分析 { background: var(--status-sample-analysis-bg); color: var(--status-sample-analysis-text) }
+.s-退出测试, .s-待确认 { background: var(--status-display-neutral-bg); color: var(--status-display-neutral-text) }
 .s-阻塞中 { background: var(--status-task-blocked-bg); color: var(--status-task-blocked-text); border: 1px solid var(--status-task-blocked-border) }
 .s-正常完成 { background: var(--status-task-done-soft-bg); color: var(--status-task-done-soft-text); border: 1px solid var(--status-task-done-soft-border) }
 .s-异常终止 { background: var(--status-task-aborted-bg); color: var(--status-task-aborted-text); border: 1px solid var(--status-task-aborted-border) }

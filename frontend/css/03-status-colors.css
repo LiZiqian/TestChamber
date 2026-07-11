@@ -68,19 +68,19 @@
   --status-sample-waiting-bar: #8b5cf6;                    /* 在位等待：样机卡片左侧色条、样机池状态分布圆点 */
 
   /* 样机使用状态：已退库 */
-  --status-sample-retired-bg: #f1f5f9;                     /* 当前未被其它 CSS 引用；已退库 pill 现在走 display-neutral 背景 */
-  --status-sample-retired-text: #475569;                   /* 当前未被其它 CSS 引用；已退库 pill 现在走 display-neutral 文字 */
-  --status-sample-retired-bar: #94a3b8;                    /* 已退库：样机池顶部状态分布圆点；样机卡片已退库左条当前走 unknown-bar */
+  --status-sample-retired-bg: #f1f5f9;                     /* 已退库：样机状态 pill 背景 */
+  --status-sample-retired-text: #475569;                   /* 已退库：样机状态 pill 文字 */
+  --status-sample-retired-bar: #94a3b8;                    /* 已退库：样机池状态分布圆点、样机卡片左侧色条 */
 
   /* 样机使用状态：取走分析 */
-  --status-sample-analysis-bg: #e5e7eb;                    /* 当前未被其它 CSS 引用；取走分析 pill 现在走 display-neutral 背景 */
-  --status-sample-analysis-text: #374151;                  /* 当前未被其它 CSS 引用；取走分析 pill 现在走 display-neutral 文字 */
-  --status-sample-analysis-bar: #b91c1c;                   /* 取走分析：样机池顶部状态分布圆点；样机卡片取走分析左条当前走 unknown-bar */
+  --status-sample-analysis-bg: #fef2f2;                    /* 取走分析：样机状态 pill 背景 */
+  --status-sample-analysis-text: #b91c1c;                  /* 取走分析：样机状态 pill 文字 */
+  --status-sample-analysis-bar: #b91c1c;                   /* 取走分析：样机池状态分布圆点、样机卡片左侧色条 */
 
   /* 样机使用状态：未知 / 兜底 */
   --status-sample-unknown-bg: #e5e7eb;                     /* 当前未被其它 CSS 引用；未知状态背景预留 */
   --status-sample-unknown-text: #374151;                   /* 当前未被其它 CSS 引用；未知状态文字预留 */
-  --status-sample-unknown-bar: #94a3b8;                    /* 未知/已退库/取走分析：样机卡片左侧兜底色条；也是状态分布圆点默认色 */
+  --status-sample-unknown-bar: #94a3b8;                    /* 未知状态：样机卡片左侧兜底色条、状态分布圆点默认色 */
 
   /* 样机质量：无故障、有故障 */
   --status-sample-quality-ok-bg: #ecfdf5;                  /* 无故障：样机池顶部质量统计 chip、样机卡片质量 badge 背景色 */

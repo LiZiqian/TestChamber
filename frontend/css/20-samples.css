@@ -20,8 +20,8 @@
 .sample-card.status-bad:before { background: var(--status-sample-quality-fault-bar) }
 .sample-card.status-testing:before { background: var(--status-sample-testing-bar) }
 .sample-card.status-waiting:before { background: var(--status-sample-waiting-bar) }
-.sample-card.status-retired:before,
-.sample-card.status-analysis:before,
+.sample-card.status-retired:before { background: var(--status-sample-retired-bar) }
+.sample-card.status-analysis:before { background: var(--status-sample-analysis-bar) }
 .sample-card.status-unknown:before { background: var(--status-sample-unknown-bar) }
 
 /* 垃圾桶基础样式 */
