@@ -287,6 +287,39 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
     sample_events = [event for event in (sample_events_value or []) if isinstance(event, dict)]
     if len(sample_events) != len(sample_events_value or []):
         return False, {"status": 400, "error": "sampleEvents 中每一项都必须是 JSON 对象"}
+    action_aliases = {"task_start": "start_task"}
+    raw_action = str(payload.get("action") or "")
+    action = action_aliases.get(raw_action, raw_action)
+    allowed_actions = {
+        "create_task_config",
+        "save_task_config",
+        "assign_task_samples",
+        "reassign_task_samples",
+        "set_task_plan",
+        "temp_change_task",
+        "save_task_result_draft",
+        "update_issue_record",
+        "upload_task_result",
+        "start_task",
+        "restart_task",
+        "block_task",
+        "finish_task_result",
+        "archive_task_delete",
+        "delete_task",
+    }
+    if action not in allowed_actions:
+        return False, {
+            "status": 400,
+            "error_code": "TASK_ACTION_NOT_ALLOWED",
+            "error": f"不支持的任务操作: {raw_action or '(空)'}",
+        }
+    is_delete = str(payload.get("deleteMode") or "") == "delete"
+    if (action == "delete_task") != is_delete:
+        return False, {
+            "status": 400,
+            "error_code": "TASK_ACTION_NOT_ALLOWED",
+            "error": "delete_task 操作与物理删除模式不一致。",
+        }
     task["id"] = task_id
     task["projectId"] = project_id
     task["stageId"] = stage_id
@@ -303,8 +336,6 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
         )
         if scope_failure:
             return False, {**scope_failure, "server_revision": current_revision}
-        is_delete = str(payload.get("deleteMode") or "") == "delete"
-        action = str(payload.get("action") or "task_mutation")
         if action == "archive_task_delete" and status_normalization.normalize_task_flow_status(task) not in ("正常完成", "异常终止"):
             archived_at = ctx.now_iso()
             task.update({
