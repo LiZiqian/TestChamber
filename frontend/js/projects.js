@@ -369,6 +369,7 @@ app.registerModule("projects", {
   },
 
   async selectProject(id) {
+    const selectionSequence = ++this._projectSelectionSequence;
     this.selectProjectWorkspaceState(id, { selectedStageId: null });
     const current = this.findProjectRecord(id);
     if (current?._detailLoaded) {
@@ -380,6 +381,8 @@ app.registerModule("projects", {
       this.renderProjectLoading(current);
     }
     const p = await this.ensureProjectLoaded(id, { includeTasks: false, render: false });
+    // 详情请求可能晚于下一次项目/样机池导航返回；过期响应只进入缓存，不得改写当前页面。
+    if (selectionSequence !== this._projectSelectionSequence || !this.isProjectNavActive(id)) return;
     if (!p) {
       this.patchViewState({ module: "projects" });
       this.render();

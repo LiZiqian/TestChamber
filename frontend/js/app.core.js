@@ -57,6 +57,7 @@ const app = {
   _baseData: null,
   _statePartial: false,
   _projectDetailPromises: {},
+  _projectSelectionSequence: 0,
   _sampleCategoryDetailPromises: {},
   _modalStack: [],
   _restoringModal: false,
