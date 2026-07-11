@@ -1313,7 +1313,7 @@ app.registerModule("app.server", {
       stage: this.compactStageForMutation(stage),
       task,
       samples,
-      sampleEvents: this.sampleEventsForTaskMutation(task, sampleIds),
+      sampleEvents: this.sampleEventsForTaskMutation(task, mutationSampleIds),
       createIfMissing,
       deleteMode,
     };
@@ -1365,7 +1365,7 @@ app.registerModule("app.server", {
       this.serverUpdatedAt = json.updated_at || new Date().toISOString();
       this.serverOnline = true;
       this.applyMutationAffected(json.affected);
-      this.invalidateSampleHistoryCache(sampleIds);
+      this.invalidateSampleHistoryCache(mutationSampleIds);
       await this.refreshTaskListAfterMutation(project, stage, { render, affected: json.affected });
       this.markDataSynced();
       this.updateServerStatus("已保存");

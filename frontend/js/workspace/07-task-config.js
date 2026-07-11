@@ -222,7 +222,7 @@ app.registerModule("workspace.taskConfig", {
       if (!t.status) this.repairTaskStatus(t, "待下发");
       removed.forEach(id => {
         if (!this.isSampleUsedByAnotherOpenTask(id, t.id)) {
-          this.changeSampleStatus(id, "闲置", { user: operator, source: "任务样机重新分配", reason: "未下发任务调整样机", projectId: p.id, stageId: s.id });
+          this.changeSampleStatus(id, "闲置", { user: operator, source: "任务样机重新分配", reason: "未下发任务调整样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem });
         }
       });
       added.forEach(id => this.changeSampleStatus(id, "在位等待", { user: operator, source: "任务样机分配", reason: "未下发任务分配样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
@@ -231,7 +231,8 @@ app.registerModule("workspace.taskConfig", {
         action: oldSampleIds.length ? "reassign_task_samples" : "assign_task_samples",
         remark: "未下发任务样机配置",
         user: operator,
-        createIfMissing: wasNew
+        createIfMissing: wasNew,
+        sampleIdsForMutation: [...new Set([...oldSampleIds, ...sampleIds])]
       });
       if (saved) Utils.toast(oldSampleIds.length ? "样机已重新分配" : "样机已分配");
       return !saved;
@@ -513,7 +514,7 @@ app.registerModule("workspace.taskConfig", {
       t.requiredSampleCount = check.required;
       removed.forEach(id => {
         if (!this.isSampleUsedByAnotherOpenTask(id, t.id)) {
-          this.changeSampleStatus(id, "闲置", { user: operator, source: "任务样机重新分配", reason: "未下发任务调整样机", projectId: p.id, stageId: s.id });
+          this.changeSampleStatus(id, "闲置", { user: operator, source: "任务样机重新分配", reason: "未下发任务调整样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem });
         }
       });
       added.forEach(id => this.changeSampleStatus(id, "在位等待", { user: operator, source: "任务样机分配", reason: "未下发任务分配样机", projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
@@ -535,7 +536,8 @@ app.registerModule("workspace.taskConfig", {
       action: wasNew ? "create_task_config" : "save_task_config",
       remark: "保存任务配置",
       user: owner || t.owner || "管理员",
-      createIfMissing: wasNew
+      createIfMissing: wasNew,
+      sampleIdsForMutation: [...new Set([...oldSampleIds, ...sampleIds])]
     });
     if (!saved) return true;
     if (planChanged && sampleChanged) Utils.toast("任务配置已保存");
