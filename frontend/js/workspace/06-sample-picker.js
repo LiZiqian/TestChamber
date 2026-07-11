@@ -47,6 +47,8 @@ app.registerModule("workspace.samplePicker", {
       status: "",
       keyword: "",
       excludeKeyword: "",
+      keywordDraft: "",
+      excludeKeywordDraft: "",
       categories: [],
       lastResult: null,
       sampleCache: new Map(),
@@ -309,8 +311,8 @@ app.registerModule("workspace.samplePicker", {
       <div class="task-sample-picker-toolbar">
         <select id="${categoryId}" data-app-action="task-sample-picker-filter" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-field="categoryId">${categoryOptions}</select>
         <select id="${statusId}" data-app-action="task-sample-picker-filter" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-field="status">${statusOptions}</select>
-        <input id="${keywordId}" class="dispatch-search-input task-sample-picker-search" value="${Utils.esc(state.keyword || "")}" placeholder="包含搜索" data-app-action="task-sample-picker-search" data-app-events="keydown" data-id="${Utils.esc(state.inputName)}">
-        <input id="${excludeId}" class="dispatch-search-input dispatch-search-exclude task-sample-picker-search" value="${Utils.esc(state.excludeKeyword || "")}" placeholder="排除搜索" data-app-action="task-sample-picker-search" data-app-events="keydown" data-id="${Utils.esc(state.inputName)}">
+        <input id="${keywordId}" class="dispatch-search-input task-sample-picker-search" value="${Utils.esc(state.keywordDraft || "")}" placeholder="包含搜索" data-app-action="task-sample-picker-search" data-app-events="input keydown" data-id="${Utils.esc(state.inputName)}" data-field="keyword">
+        <input id="${excludeId}" class="dispatch-search-input dispatch-search-exclude task-sample-picker-search" value="${Utils.esc(state.excludeKeywordDraft || "")}" placeholder="排除搜索" data-app-action="task-sample-picker-search" data-app-events="input keydown" data-id="${Utils.esc(state.inputName)}" data-field="excludeKeyword">
         <button type="button" class="dispatch-search-btn" data-app-action="task-sample-picker-search" data-id="${Utils.esc(state.inputName)}" title="搜索">🔍</button>
         <span class="dispatch-match-count">${state.loading ? "加载中" : `候选 ${total} 台`}</span>
       </div>
@@ -427,11 +429,22 @@ app.registerModule("workspace.samplePicker", {
     this.loadTaskSamplePickerPage(inputName, { page: 1 });
   },
 
+  updateTaskSamplePickerSearchDraft(inputName, key, value) {
+    const state = this.taskSamplePickerState(inputName);
+    if (!state) return;
+    if (key === "excludeKeyword") state.excludeKeywordDraft = String(value || "");
+    else state.keywordDraft = String(value || "");
+  },
+
   applyTaskSamplePickerSearch(inputName) {
     const state = this.taskSamplePickerState(inputName);
     if (!state) return;
-    state.keyword = document.getElementById?.(this.taskSamplePickerControlId(inputName, "keyword"))?.value.trim() || "";
-    state.excludeKeyword = document.getElementById?.(this.taskSamplePickerControlId(inputName, "exclude"))?.value.trim() || "";
+    const keywordInput = document.getElementById?.(this.taskSamplePickerControlId(inputName, "keyword"));
+    const excludeInput = document.getElementById?.(this.taskSamplePickerControlId(inputName, "exclude"));
+    if (keywordInput) state.keywordDraft = keywordInput.value;
+    if (excludeInput) state.excludeKeywordDraft = excludeInput.value;
+    state.keyword = String(state.keywordDraft || "").trim();
+    state.excludeKeyword = String(state.excludeKeywordDraft || "").trim();
     state.page = 1;
     this.loadTaskSamplePickerPage(inputName, { page: 1 });
   },

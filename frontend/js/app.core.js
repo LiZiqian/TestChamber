@@ -509,6 +509,10 @@ const app = {
         this.onTaskSamplePickerFilterChange(id, field, target.value);
         break;
       case "task-sample-picker-search":
+        if (eventType === "input") {
+          this.updateTaskSamplePickerSearchDraft(id, field, target.value);
+          return;
+        }
         if (eventType === "keydown" && event.key !== "Enter") return;
         this.applyTaskSamplePickerSearch(id);
         break;
