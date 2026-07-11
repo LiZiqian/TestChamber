@@ -8,8 +8,8 @@ app.registerModule("workspace.strategy", {
   // ==================== 阶段策略配置页 ====================
   openStageStrategy(stageId) {
     if (this.stageStrategyId() && this.stageStrategyId() !== stageId) this.prepareStageStrategyNavigation();
+    this.selectWorkspaceStageState(stageId);
     this.patchViewState({
-      selectedStageId: stageId,
       stageStrategyId: stageId,
       module: "projectWorkspace"
     });
@@ -75,7 +75,7 @@ app.registerModule("workspace.strategy", {
     const p = this.currentProject();
     const s = p?.stages.find(st => st.id === this.stageStrategyId()) || this.currentStage();
     if (!p || !s) { this.clearStageStrategyState(); this.render(); return; }
-    this.patchViewState({ selectedStageId: s.id });
+    this.selectWorkspaceStageState(s.id);
     this.replaceStageStrategyContentNodes(document.getElementById("content"), this.stageStrategyPageNodes(s));
   },
 

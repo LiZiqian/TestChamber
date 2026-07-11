@@ -355,7 +355,7 @@ const app = {
         this.switchTaskConfigTab(value || target.dataset.tab || "plan");
         break;
       case "stage-select":
-        this.view.selectedStageId = id;
+        this.selectWorkspaceStageState(id);
         this.render();
         break;
       case "stage-strategy-open":

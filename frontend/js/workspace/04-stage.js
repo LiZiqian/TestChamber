@@ -4,6 +4,11 @@
 
 app.registerModule("workspace.stage", {
 
+  selectStageAfterMutation(stageId) {
+    if (typeof this.selectWorkspaceStageState === "function") return this.selectWorkspaceStageState(stageId);
+    return this.patchViewState({ selectedStageId: stageId || null });
+  },
+
   // ==================== 阶段 CRUD ====================
   inlineStageEditorHtml(stage) {
     const skuNames = stage.skuNames?.length ? stage.skuNames : ["SKU1"];
@@ -213,7 +218,7 @@ app.registerModule("workspace.stage", {
       }
       const s = { id: Utils.id("stage_"), name, skuNames, bom: [], strategy: [], progress: [], tasks: [] };
       p.stages.push(s);
-      this.patchViewState({ selectedStageId: s.id });
+      this.selectStageAfterMutation(s.id);
       const saved = await this.commitStageMutation(p, s, {
         action: "create_stage",
         remark: "新建阶段",
@@ -282,7 +287,7 @@ app.registerModule("workspace.stage", {
       const affectedSampleIds = new Set();
       activeTasks.forEach(t => (t.sampleIds || []).forEach(id => affectedSampleIds.add(id)));
       p.stages = p.stages.filter(s => s.id !== id);
-      this.patchViewState({ selectedStageId: p.stages[0]?.id || null });
+      this.selectStageAfterMutation(p.stages[0]?.id || null);
       affectedSampleIds.forEach(id => {
         if (typeof this.isSampleUsedByAnotherOpenTask === "function"
             && !this.isSampleUsedByAnotherOpenTask(id, null)
@@ -348,7 +353,7 @@ app.registerModule("workspace.stage", {
 
       const sourceIdx = p.stages.findIndex(s => s.id === id);
       p.stages.splice(sourceIdx + 1, 0, cloned);
-      this.patchViewState({ selectedStageId: cloned.id });
+      this.selectStageAfterMutation(cloned.id);
       const saved = await this.commitStageMutation(p, cloned, {
         action: "copy_stage",
         remark: "复制阶段",

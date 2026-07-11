@@ -710,6 +710,9 @@ app.registerModule("app.data", {
   },
 
   selectProjectWorkspaceState(projectId, { selectedStageId = null } = {}) {
+    const contextChanged = this.viewModule() !== "projectWorkspace"
+      || String(this.selectedProjectId() || "") !== String(projectId || "");
+    if (contextChanged) this.resetTaskFlowContextState();
     return this.patchViewState({
       selectedProjectId: projectId || null,
       selectedStageId,
@@ -790,6 +793,19 @@ app.registerModule("app.data", {
     return this.patchViewState({ taskFlowPage: 1 });
   },
 
+  resetTaskFlowContextState() {
+    if (typeof clearTimeout === "function") clearTimeout(this._taskFlowTextFilterTimer);
+    this._taskFlowTextFilterTimer = null;
+    this._taskFlowPageCache = null;
+    return this.patchViewState({ taskFlowFilters: {}, taskFlowPage: 1 });
+  },
+
+  selectWorkspaceStageState(stageId) {
+    const changed = String(this.selectedStageId() || "") !== String(stageId || "");
+    if (changed) this.resetTaskFlowContextState();
+    return this.patchViewState({ selectedStageId: stageId || null });
+  },
+
   boundedViewPageSize(value, fallback = 100) {
     const n = Number.parseInt(value, 10);
     if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -824,7 +840,7 @@ app.registerModule("app.data", {
     if (!project?.stages?.length) return null;
     const selectedId = this.selectedStageId();
     if (!selectedId || !project.stages.some(stage => String(stage.id || "") === String(selectedId))) {
-      this.patchViewState({ selectedStageId: project.stages[0].id });
+      this.selectWorkspaceStageState(project.stages[0].id);
     }
     return this.selectedStageId();
   },

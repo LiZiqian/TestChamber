@@ -46,10 +46,7 @@ app.registerModule("app.filters", {
     }
   },
   clearTaskFlowFilters() {
-    this.resetViewMap("taskFlowFilters");
-    this.resetTaskFlowPage();
-    clearTimeout(this._taskFlowTextFilterTimer);
-    this._taskFlowTextFilterTimer = null;
+    this.resetTaskFlowContextState();
     this.renderPreserveScroll();
   }
 
