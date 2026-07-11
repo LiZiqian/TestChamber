@@ -1108,7 +1108,7 @@ app.registerModule("workspace.taskResult", {
       taskLabel: [p?.name, s?.name, t.testItem].filter(Boolean).join(" - ")
     };
 
-    const resultModalId = this.showModal(addOnly ? "添加结果" : "上传测试结果", `
+    const resultModalId = this.showModal(addOnly ? "追加测试结果" : "测试结果录入", `
       <div class="task-result-layout">
         <section class="task-result-fixed-panel">
           <div class="task-result-form-grid">
@@ -1124,17 +1124,17 @@ app.registerModule("workspace.taskResult", {
           <div class="task-result-section-title">
             <div>
               <b>每台样机结果与去向</b>
-              <span>先确认样机结果，再填写去向和接收人；问题表会和样机档案同步。</span>
+              <span>先确认样机结果，再填写去向和接收人；结束任务或向已结束任务追加结果后，问题表才会同步到样机档案。</span>
             </div>
           </div>
           <div class="task-result-sample-list">${this.taskResultSampleRowsHtml(t, draft)}</div>
         </section>
       </div>
-    `, () => this.saveTaskResult(projectId, stageId, taskId, false), "保存", {
+    `, () => this.saveTaskResult(projectId, stageId, taskId, false), addOnly ? "保存并同步" : "保存草稿", {
       className: "task-result-modal",
       headerHint: addOnly
         ? `任务：${t.testItem || "-"}；任务已结束，可追加结果并同步样机当前去向、位置和人员，不改变任务结束状态。`
-        : `任务：${t.testItem || "-"}；可多次上传。本次新增失效会追加到样机档案的问题表中，临时变更退出过的样机也会保留在这里录入。`
+        : `任务：${t.testItem || "-"}；“保存草稿”只保存本任务录入，不改变样机档案；“结束任务并同步”会结束任务，并把本次样机去向、人员和新增问题同步到样机档案。`
     });
     document.querySelectorAll(".task-result-sample-row").forEach(row => this.renderTaskResultPhotoList(row));
     this.syncTaskResultFinishType();
@@ -1147,7 +1147,7 @@ app.registerModule("workspace.taskResult", {
       const endBtn = document.createElement("button");
       endBtn.type = "button";
       endBtn.className = "btn btn-purple modal-extra-action";
-      endBtn.innerText = "结束任务";
+      endBtn.innerText = "结束任务并同步";
       endBtn.addEventListener("click", async () => {
         // 父弹窗从样机详情返回时，基础 OK 按钮会按当前 modal 实例重建；点击时再取，避免持有旧节点。
         const ok = document.getElementById("modalOk");
@@ -1158,7 +1158,7 @@ app.registerModule("workspace.taskResult", {
         const ownsModalInstance = !!resultModalId && typeof this.setModalBusy === "function";
         if (ownsModalInstance) this.setModalBusy(resultModalId, true);
         endBtn.disabled = true;
-        endBtn.innerText = "结束中...";
+        endBtn.innerText = "结束并同步中...";
         if (ok) ok.disabled = true;
         try {
           keepOpen = await this.saveTaskResult(projectId, stageId, taskId, true);
