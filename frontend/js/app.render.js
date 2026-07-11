@@ -217,6 +217,9 @@ app.registerModule("app.render", {
     const sep = subId.indexOf("_");
     const type = subId.slice(0, sep);
     const id = subId.slice(sep + 1);
+    if (this.stageStrategyId() && typeof this.prepareStageStrategyNavigation === "function") {
+      this.prepareStageStrategyNavigation();
+    }
     if (type === "proj") {
       await this.selectProject(id);
       return;
@@ -273,9 +276,8 @@ app.registerModule("app.render", {
   },
 
   go(module) {
-    if (this.stageStrategyId() && typeof this.autoSyncProgress === "function") {
-      this.autoSyncProgress();
-      this.clearStageStrategyState();
+    if (this.stageStrategyId() && typeof this.prepareStageStrategyNavigation === "function") {
+      this.prepareStageStrategyNavigation();
     }
     this.navigateModuleState(module);
     this.render();

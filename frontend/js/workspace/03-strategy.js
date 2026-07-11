@@ -7,6 +7,7 @@ app.registerModule("workspace.strategy", {
 
   // ==================== 阶段策略配置页 ====================
   openStageStrategy(stageId) {
+    if (this.stageStrategyId() && this.stageStrategyId() !== stageId) this.prepareStageStrategyNavigation();
     this.patchViewState({
       selectedStageId: stageId,
       stageStrategyId: stageId,
@@ -16,37 +17,58 @@ app.registerModule("workspace.strategy", {
   },
 
   closeStageStrategy() {
-    // 自动同步策略进展
-    this.autoSyncProgress();
-    this.clearStageStrategyState();
+    this.prepareStageStrategyNavigation();
     this.render();
   },
 
   leaveStageStrategy(targetModule = "projectWorkspace") {
-    this.autoSyncProgress();
-    this.patchViewState({
-      stageStrategyId: null,
-      module: targetModule,
-      ...(targetModule !== "projectWorkspace" ? { selectedCategoryId: null } : {})
-    });
-    this.persistStageStrategyMutation("leave_stage_strategy", "离开阶段策略页保存", { render: false });
+    this.prepareStageStrategyNavigation();
+    this.navigateModuleState(targetModule);
     this.render();
   },
 
-  async persistStageStrategyMutation(action = "update_stage_strategy", remark = "阶段策略增量保存", { render = false } = {}) {
-    const p = this.currentProject();
-    const s = this.currentStage();
+  stageStrategyContext() {
+    const project = this.currentProject();
+    const strategyId = this.stageStrategyId();
+    const stage = project?.stages?.find(item => String(item.id || "") === String(strategyId || "")) || this.currentStage();
+    return { project, stage };
+  },
+
+  async persistStageStrategyMutation(action = "update_stage_strategy", remark = "阶段策略增量保存", { render = false, project = null, stage = null } = {}) {
+    const p = project || this.currentProject();
+    const s = stage || this.currentStage();
     if (!p || !s) return false;
     return this.commitStageMutation(p, s, { action, remark, user: "管理员", render });
   },
 
   scheduleStageStrategySave(delay = 450, action = "update_stage_strategy", remark = "阶段策略编辑") {
     clearTimeout(this._stageStrategySaveTimer);
+    const { project, stage } = this.stageStrategyContext();
+    if (!project || !stage) return;
     this.updateServerStatus("待同步");
     this._stageStrategySaveTimer = setTimeout(() => {
       this._stageStrategySaveTimer = null;
-      this.persistStageStrategyMutation(action, remark, { render: false });
+      this.persistStageStrategyMutation(action, remark, { render: false, project, stage });
     }, delay);
+  },
+
+  prepareStageStrategyNavigation() {
+    if (!this.stageStrategyId()) return false;
+    const { project, stage } = this.stageStrategyContext();
+    clearTimeout(this._stageStrategySaveTimer);
+    clearTimeout(this._strategySyncTimer);
+    this._stageStrategySaveTimer = null;
+    this._strategySyncTimer = null;
+    if (project && stage) {
+      this.autoSyncProgress({ project, stage, persist: false });
+      this.persistStageStrategyMutation("leave_stage_strategy", "离开阶段策略页保存", {
+        render: false,
+        project,
+        stage
+      });
+    }
+    this.clearStageStrategyState();
+    return true;
   },
 
   renderStageStrategyPage() {
@@ -318,10 +340,12 @@ app.registerModule("workspace.strategy", {
   /** P1.6：方案输入实时静默同步到 progress（节流），避免离开页面/关闭浏览器时丢同步。 */
   scheduleStrategySync(delay = 800) {
     clearTimeout(this._strategySyncTimer);
+    const { project, stage } = this.stageStrategyContext();
+    const strategyId = this.stageStrategyId();
     this._strategySyncTimer = setTimeout(() => {
       this._strategySyncTimer = null;
-      if (!this.stageStrategyId()) return;
-      try { this.autoSyncProgress(); } catch (e) { console.warn("autoSyncProgress 静默同步失败：", e); }
+      if (!strategyId || this.stageStrategyId() !== strategyId || this.currentProject()?.id !== project?.id) return;
+      try { this.autoSyncProgress({ project, stage }); } catch (e) { console.warn("autoSyncProgress 静默同步失败：", e); }
     }, delay);
   },
   deleteStrategyRow(idx) {
@@ -338,8 +362,8 @@ app.registerModule("workspace.strategy", {
     }, { title: "删除测试策略", okText: "删除", okClass: "btn btn-danger" });
   },
 
-  syncStrategyFromDom() {
-    const s = this.currentStage();
+  syncStrategyFromDom(stage = null) {
+    const s = stage || this.currentStage();
     if (!s) return;
     document.querySelectorAll('tr[data-strategy-row]').forEach(tr => {
       const idx = Number(tr.dataset.strategyRow);
@@ -362,10 +386,11 @@ app.registerModule("workspace.strategy", {
   },
 
   /** 自动同步进展（返回工作台时调用，静默执行）*/
-  autoSyncProgress() {
-    const s = this.currentStage();
+  autoSyncProgress({ project = null, stage = null, persist = true } = {}) {
+    const p = project || this.currentProject();
+    const s = stage || this.currentStage();
     if (!s) return;
-    this.syncStrategyFromDom();
+    this.syncStrategyFromDom(s);
 
     const expected = new Map();
     s.strategy.forEach(r => {
@@ -391,7 +416,7 @@ app.registerModule("workspace.strategy", {
     s.progress = kept;
 
     if (addedCount || removedCount) {
-      this.persistStageStrategyMutation("sync_strategy_progress", "策略自动同步进度", { render: false });
+      if (persist) this.persistStageStrategyMutation("sync_strategy_progress", "策略自动同步进度", { render: false, project: p, stage: s });
       Utils.toast(`进展已自动同步：新增 ${addedCount}，移除 ${removedCount}，当前 ${s.progress.length} 条。`);
     }
   },
