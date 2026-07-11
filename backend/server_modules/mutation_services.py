@@ -1512,11 +1512,6 @@ def commit_stage_mutation(ctx: MutationServiceContext, payload: dict, client_ip:
         if event_scope_failure:
             return False, {**event_scope_failure, "server_revision": current_revision}
 
-        project = payload.get("project")
-        if isinstance(project, dict):
-            project["id"] = project_id
-            record_writers.update_project_record(conn, project)
-
         sample_payloads = [sample for sample in (payload.get("samples") or []) if isinstance(sample, dict)]
         for sample in _operational_sample_write_payloads(conn, sample_payloads):
             record_writers.update_sample_record(conn, sample)
