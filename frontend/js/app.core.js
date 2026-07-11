@@ -28,6 +28,7 @@ const app = {
       progressFilters: {},
       stageStrategyFilters: { includeKeyword: "", excludeKeyword: "" },
       taskFlowFilters: {},
+      taskFlowFilterDrafts: {},
       taskFlowPage: 1,
       taskFlowPageSize: 25,
       sidebarCollapsed: false

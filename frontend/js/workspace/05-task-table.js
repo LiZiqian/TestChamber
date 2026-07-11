@@ -226,6 +226,10 @@ app.registerModule("workspace.taskTable", {
 
   workspaceTaskFlowContentHtml(project, stage) {
     const f = this.taskFlowPageState(25).filters || {};
+    const filterDrafts = this.ensureViewMap("taskFlowFilterDrafts");
+    const textFilterValue = field => Object.prototype.hasOwnProperty.call(filterDrafts, field)
+      ? filterDrafts[field]
+      : (f[field] || "");
     const params = this.taskFlowQueryParams(stage);
     const cacheKey = this.taskFlowCacheKey(stage, params);
     const cached = this._taskFlowPageCache?.key === cacheKey ? this._taskFlowPageCache : null;
@@ -291,11 +295,11 @@ app.registerModule("workspace.taskTable", {
           </div>
           <div class="task-filter-item filter-keyword">
             <label for="taskFlowFilterCategory">测试类别搜索</label>
-            <input id="taskFlowFilterCategory" type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="categoryKeyword">
+            <input id="taskFlowFilterCategory" type="text" value="${Utils.esc(textFilterValue("categoryKeyword"))}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="categoryKeyword">
           </div>
           <div class="task-filter-item filter-keyword">
             <label for="taskFlowFilterCase">测试用例搜索</label>
-            <input id="taskFlowFilterCase" type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="caseKeyword">
+            <input id="taskFlowFilterCase" type="text" value="${Utils.esc(textFilterValue("caseKeyword"))}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="caseKeyword">
           </div>
           <div class="task-filter-item filter-person">
             <label for="taskFlowFilterOwner">执行人筛选</label>
@@ -307,11 +311,11 @@ app.registerModule("workspace.taskTable", {
           </div>
           <div class="task-filter-item filter-short">
             <label for="taskFlowFilterDts">DTS单号搜索</label>
-            <input id="taskFlowFilterDts" type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="dtsKeyword">
+            <input id="taskFlowFilterDts" type="text" value="${Utils.esc(textFilterValue("dtsKeyword"))}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="dtsKeyword">
           </div>
           <div class="task-filter-item filter-result">
             <label for="taskFlowFilterResult">测试结果搜索</label>
-            <input id="taskFlowFilterResult" type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="resultKeyword">
+            <input id="taskFlowFilterResult" type="text" value="${Utils.esc(textFilterValue("resultKeyword"))}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="resultKeyword">
           </div>
           <div class="task-filter-actions">
             <button class="btn btn-sm btn-outline" data-app-action="task-flow-clear">清空筛选</button>

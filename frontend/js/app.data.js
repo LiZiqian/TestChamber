@@ -797,7 +797,7 @@ app.registerModule("app.data", {
     if (typeof clearTimeout === "function") clearTimeout(this._taskFlowTextFilterTimer);
     this._taskFlowTextFilterTimer = null;
     this._taskFlowPageCache = null;
-    return this.patchViewState({ taskFlowFilters: {}, taskFlowPage: 1 });
+    return this.patchViewState({ taskFlowFilters: {}, taskFlowFilterDrafts: {}, taskFlowPage: 1 });
   },
 
   selectWorkspaceStageState(stageId) {

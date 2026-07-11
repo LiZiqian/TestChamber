@@ -30,9 +30,10 @@ app.registerModule("app.filters", {
     this.renderPreserveScroll();
   },
   setTaskFlowTextFilter(field, value) {
-    this.setViewMapValue("taskFlowFilters", field, value);
+    this.setViewMapValue("taskFlowFilterDrafts", field, value, { removeEmpty: false });
   },
   commitTaskFlowTextFilter(field, value) {
+    this.setViewMapValue("taskFlowFilterDrafts", field, value, { removeEmpty: false });
     this.setViewMapValue("taskFlowFilters", field, value);
     clearTimeout(this._taskFlowTextFilterTimer);
     this._taskFlowTextFilterTimer = null;
