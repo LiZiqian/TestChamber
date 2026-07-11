@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Callable
 
 
+STATIC_ASSET_CACHE = "public, max-age=0, must-revalidate"
+
+
 def send_json(handler, payload: dict, *, status: int = 200, json_dumps: Callable[[object], str]) -> None:
     data = json_dumps(payload).encode("utf-8")
     handler.send_response(status)
@@ -23,7 +26,7 @@ def send_bytes(handler, data: bytes, content_type: str, *, status: int = 200, ca
     handler.wfile.write(data)
 
 
-def send_file(handler, target: Path, content_type: str, *, cache: str = "public, max-age=86400, must-revalidate") -> None:
+def send_file(handler, target: Path, content_type: str, *, cache: str = STATIC_ASSET_CACHE) -> None:
     stat = target.stat()
     etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
     if handler.headers.get("If-None-Match") == etag:

@@ -29,7 +29,7 @@ def create_handler(
         def _send_bytes(self, data: bytes, content_type: str, status: int = 200, cache: str = "no-store") -> None:
             http_helpers.send_bytes(self, data, content_type, status=status, cache=cache)
 
-        def _send_file(self, target: Path, content_type: str, *, cache: str = "public, max-age=86400, must-revalidate") -> None:
+        def _send_file(self, target: Path, content_type: str, *, cache: str = http_helpers.STATIC_ASSET_CACHE) -> None:
             http_helpers.send_file(self, target, content_type, cache=cache)
 
         def _read_body(self, max_bytes: int = max_upload_bytes) -> bytes:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import mimetypes
 import re
 import shutil
 import traceback
 import uuid
 from urllib.parse import parse_qs, quote, unquote, urlparse
+
+from server_modules.http_helpers import STATIC_ASSET_CACHE
 
 
 VERSION_TEMPLATE_TOKEN = "__APP_VERSION__"
@@ -18,8 +21,21 @@ def _content_disposition_attachment(filename: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(raw, safe='')}"
 
 
+def _frontend_asset_version(ctx) -> str:
+    digest = hashlib.sha256()
+    for asset in sorted(path for path in ctx.FRONTEND_DIR.rglob("*") if path.is_file()):
+        digest.update(asset.relative_to(ctx.FRONTEND_DIR).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        with asset.open("rb") as src:
+            for chunk in iter(lambda: src.read(128 * 1024), b""):
+                digest.update(chunk)
+    return f"{ctx.APP_VERSION}-{digest.hexdigest()[:12]}"
+
+
 def _send_versioned_text(handler, ctx, target, content_type: str, *, cache: str) -> None:
-    text = target.read_text(encoding="utf-8").replace(VERSION_TEMPLATE_TOKEN, ctx.APP_VERSION)
+    text = target.read_text(encoding="utf-8")
+    text = text.replace(f'content="{VERSION_TEMPLATE_TOKEN}"', f'content="{ctx.APP_VERSION}"')
+    text = text.replace(VERSION_TEMPLATE_TOKEN, _frontend_asset_version(ctx))
     handler._send_bytes(text.encode("utf-8"), content_type, cache=cache)
 
 
@@ -307,7 +323,7 @@ def handle_get(handler, ctx) -> None:
     if target.is_file():
         content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if path == "/css/style.css":
-            _send_versioned_text(handler, ctx, target, content_type, cache="public, max-age=86400, must-revalidate")
+            _send_versioned_text(handler, ctx, target, content_type, cache=STATIC_ASSET_CACHE)
             return
         handler._send_file(target, content_type)
         return
