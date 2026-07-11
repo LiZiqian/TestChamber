@@ -158,9 +158,9 @@ def sample_reassembly_state(query: dict[str, list[str]]) -> str:
     return ""
 
 
-def sample_matches_query(sample: dict, query: dict[str, list[str]]) -> bool:
+def sample_matches_query(sample: dict, query: dict[str, list[str]], *, history_matched: bool = False) -> bool:
     keyword = first_query_value(query, "keyword", "").strip().lower()
-    if keyword and keyword not in sample_search_text(sample):
+    if keyword and keyword not in sample_search_text(sample) and not history_matched:
         return False
     status = first_query_value(query, "status", "")
     if status and sample_effective_status(sample) != status_normalization.normalize_sample_usage_status(status):
@@ -186,6 +186,33 @@ def sample_matches_query(sample: dict, query: dict[str, list[str]]) -> bool:
 
 def sample_query_requires_python_scan(query: dict[str, list[str]]) -> bool:
     return query_value_present(query, "keyword")
+
+
+def sample_history_search_cte(keyword: str) -> tuple[str, list[object]]:
+    like = f"%{str(keyword or '').strip().lower()}%"
+    sql = """
+        WITH history_matches(sample_id) AS (
+            SELECT DISTINCT e.sample_id
+            FROM sample_events e
+            WHERE LOWER(e.event_type) LIKE ?
+               OR LOWER(e.test_item) LIKE ?
+               OR LOWER(e.user) LIKE ?
+               OR LOWER(e.data_json) LIKE ?
+            UNION
+            SELECT DISTINCT pts.sample_id
+            FROM project_task_samples pts
+            JOIN project_tasks t ON t.id = pts.task_id
+            WHERE t.deleted_at IS NULL
+              AND (
+                    LOWER(pts.test_item) LIKE ?
+                 OR LOWER(t.category) LIKE ?
+                 OR LOWER(t.test_item) LIKE ?
+                 OR LOWER(t.owner) LIKE ?
+                 OR LOWER(t.data_json) LIKE ?
+              )
+        )
+    """
+    return sql, [like] * 9
 
 
 def sample_sql_filter_parts(category_id: str, query: dict[str, list[str]], *, include_status: bool = True, include_problem: bool = True) -> tuple[list[str], list[object]]:
@@ -386,12 +413,15 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
     where = ["category_id = ?", "deleted_at IS NULL"]
     args: list[object] = [category_id]
     keyword = first_query_value(query, "keyword", "").strip().lower()
+    history_cte = ""
+    history_args: list[object] = []
     if keyword:
+        history_cte, history_args = sample_history_search_cte(keyword)
         where.append(
             """
             (LOWER(sample_no) LIKE ? OR LOWER(sn) LIKE ? OR LOWER(imei) LIKE ?
              OR LOWER(owner) LIKE ? OR LOWER(borrower) LIKE ? OR LOWER(location) LIKE ?
-             OR LOWER(data_json) LIKE ?)
+             OR LOWER(data_json) LIKE ? OR history_matches.sample_id IS NOT NULL)
             """
         )
         like = f"%{keyword}%"
@@ -417,12 +447,16 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
 
     rows = conn.execute(
         f"""
-        SELECT id, category_id, sample_no, sn, imei, board_sn, is_reassembled, status, has_problem, effective_status, location, owner, borrower, data_json
+        {history_cte}
+        SELECT sample_records.id, category_id, sample_no, sn, imei, board_sn, is_reassembled,
+               status, has_problem, effective_status, location, owner, borrower, data_json,
+               CASE WHEN history_matches.sample_id IS NULL THEN 0 ELSE 1 END AS history_match
         FROM sample_records
+        LEFT JOIN history_matches ON history_matches.sample_id = sample_records.id
         WHERE {" AND ".join(where)}
         ORDER BY created_at, id
         """,
-        args,
+        [*history_args, *args],
     ).fetchall()
 
     all_items: list[dict] = []
@@ -436,7 +470,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
             problem_counts["fault"] = problem_counts.get("fault", 0) + 1
         else:
             problem_counts["ok"] = problem_counts.get("ok", 0) + 1
-        if not sample_matches_query(sample, query):
+        if not sample_matches_query(sample, query, history_matched=bool(row["history_match"])):
             continue
         sample["effectiveStatus"] = effective
         all_items.append(sample)
