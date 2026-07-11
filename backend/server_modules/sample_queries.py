@@ -208,11 +208,38 @@ def sample_history_search_cte(keyword: str) -> tuple[str, list[object]]:
                  OR LOWER(t.category) LIKE ?
                  OR LOWER(t.test_item) LIKE ?
                  OR LOWER(t.owner) LIKE ?
-                 OR LOWER(t.data_json) LIKE ?
+                 OR EXISTS (
+                        SELECT 1
+                        FROM json_each(t.data_json, '$.removedSampleRecords') removed
+                        WHERE COALESCE(
+                                  json_extract(removed.value, '$.sampleId'),
+                                  json_extract(removed.value, '$.sid')
+                              ) = pts.sample_id
+                          AND LOWER(removed.value) LIKE ?
+                    )
+                 OR EXISTS (
+                        SELECT 1
+                        FROM json_each(t.data_json, '$.sampleFaultRecords') fault
+                        WHERE COALESCE(
+                                  json_extract(fault.value, '$.sampleId'),
+                                  json_extract(fault.value, '$.sid')
+                              ) = pts.sample_id
+                          AND LOWER(fault.value) LIKE ?
+                    )
+                 OR EXISTS (
+                        SELECT 1
+                        FROM json_each(t.data_json, '$.resultUploads') upload
+                        JOIN json_each(upload.value, '$.samples') result_sample
+                        WHERE COALESCE(
+                                  json_extract(result_sample.value, '$.sampleId'),
+                                  json_extract(result_sample.value, '$.sid')
+                              ) = pts.sample_id
+                          AND LOWER(result_sample.value) LIKE ?
+                    )
               )
         )
     """
-    return sql, [like] * 9
+    return sql, [like] * 11
 
 
 def sample_sql_filter_parts(category_id: str, query: dict[str, list[str]], *, include_status: bool = True, include_problem: bool = True) -> tuple[list[str], list[object]]:
