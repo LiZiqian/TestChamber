@@ -428,7 +428,7 @@ app.registerModule("app.server", {
   },
 
   samplePageQueryHasFilters(params = {}) {
-    return ["keyword", "status", "problemState", "owner", "borrower"]
+    return ["keyword", "status", "problemState", "reassembled", "owner", "borrower"]
       .some(key => String(params?.[key] || "").trim());
   },
 
