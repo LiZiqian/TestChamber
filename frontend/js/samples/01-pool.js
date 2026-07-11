@@ -947,6 +947,7 @@ app.registerModule("samples.pool", {
     ).length;
     const runningOrBlocked = [];
     const pending = [];
+    const defaultProjects = this.projectRecords().filter(project => String(project?.defaultSampleCategoryId || "") === String(category?.id || ""));
     this.projectRecords().forEach(project => (project.stages || []).forEach(stage => (stage.tasks || []).forEach(task => {
       if (!task || task.archived || this.isTaskCompleted(task)) return;
       const matchedIds = (task.sampleIds || []).filter(id => sampleIds.has(id));
@@ -966,6 +967,7 @@ app.registerModule("samples.pool", {
       categoryName: category?.name || "未命名样机池",
       sampleCount: samples.length,
       archiveCount: hasArchive,
+      defaultProjects,
       runningOrBlocked,
       pending
     };
@@ -984,6 +986,7 @@ app.registerModule("samples.pool", {
         <li><b>档案数据：</b><span>${impact.archiveCount} 台样机含履历/照片/CT/问题表，销毁后会一起物理删除。</span></li>
         <li><b>进行中/阻塞中任务：</b><span>${impact.runningOrBlocked.length} 个任务会被自动设置为"异常终止"，任务样机列表会被清空。</span></li>
         <li><b>未启动任务：</b><span>${impact.pending.length} 个未启动任务会移除被销毁样机，并保留任务等待重新分配。</span></li>
+        <li><b>项目默认样机池：</b><span>${(impact.defaultProjects || []).length} 个项目会清除该默认设置，后续分配前需重新选择默认样机池。</span></li>
       </ul>
       ${impact.runningOrBlocked.length ? `<div class="destroy-impact-subtitle">会异常终止的任务</div><ul>${impact.runningOrBlocked.map(taskLine).join("")}</ul>` : ""}
       ${impact.pending.length ? `<div class="destroy-impact-subtitle">会移除样机的未启动任务</div><ul>${impact.pending.map(taskLine).join("")}</ul>` : ""}
@@ -1049,6 +1052,11 @@ app.registerModule("samples.pool", {
         toStatus: this.taskFlowStatus(task),
         detail: `任务样机：${before.map(sampleName).join("、") || "-"} → ${(task.sampleIds || []).map(sampleName).join("、") || "空"}`
       });
+    });
+    (impact.defaultProjects || []).forEach(project => {
+      if (String(project?.defaultSampleCategoryId || "") === String(category?.id || "")) {
+        project.defaultSampleCategoryId = "";
+      }
     });
   },
 

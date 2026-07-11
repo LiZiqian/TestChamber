@@ -716,3 +716,21 @@ def delete_sample_category_record(conn: sqlite3.Connection, category_id: str) ->
     conn.execute("DELETE FROM sample_categories WHERE id = ?", (category_id,))
     prune_orphan_operational_logs(conn, clear_empty_platform_audit=True)
     return asset_paths_to_delete
+
+
+def clear_project_default_sample_category(conn: sqlite3.Connection, category_id: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT id, data_json FROM project_records WHERE deleted_at IS NULL"
+    ).fetchall()
+    affected_project_ids: list[str] = []
+    for row in rows:
+        project = json_obj(row["data_json"], {})
+        if str(project.get("defaultSampleCategoryId") or "") != category_id:
+            continue
+        project["defaultSampleCategoryId"] = ""
+        conn.execute(
+            "UPDATE project_records SET data_json = ?, updated_at = ? WHERE id = ?",
+            (json_dumps(project), now_iso(), str(row["id"] or "")),
+        )
+        affected_project_ids.append(str(row["id"] or ""))
+    return affected_project_ids

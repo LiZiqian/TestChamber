@@ -851,6 +851,7 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
     delete_category = bool(payload.get("deleteCategory"))
     affected = {}
     asset_paths_to_delete: list[str] = []
+    default_project_ids: list[str] = []
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
@@ -897,6 +898,7 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
         record_writers.upsert_sample_events(conn, payload.get("sampleEvents") or [])
 
         if delete_category:
+            default_project_ids = record_writers.clear_project_default_sample_category(conn, category_id)
             asset_paths_to_delete = delete_sample_category_record(conn, category_id)
 
         new_revision, updated_at = _bump_revision_and_audit(
@@ -917,6 +919,7 @@ def commit_sample_category_mutation(ctx: MutationServiceContext, payload: dict, 
             affected_task_ids.append(item.get("taskId") or (item.get("task") or {}).get("id"))
             affected_project_ids.append(item.get("projectId") or (item.get("task") or {}).get("projectId"))
             affected_stage_ids.append(item.get("stageId") or (item.get("task") or {}).get("stageId"))
+        affected_project_ids.extend(default_project_ids)
         affected = mutation_summary.build_mutation_affected_summary(
             conn,
             project_ids=affected_project_ids,

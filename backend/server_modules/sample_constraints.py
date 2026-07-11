@@ -76,6 +76,15 @@ def list_sample_destroy_impact_scope(conn: sqlite3.Connection, query: dict[str, 
     task_ids: set[str] = set()
     related_sample_ids: set[str] = set(sample_ids)
 
+    if category_id:
+        project_rows = conn.execute(
+            "SELECT id, data_json FROM project_records WHERE deleted_at IS NULL"
+        ).fetchall()
+        for row in project_rows:
+            project = json_obj(row["data_json"], {}) or {}
+            if str(project.get("defaultSampleCategoryId") or "") == category_id:
+                project_ids.add(str(row["id"] or ""))
+
     if sample_ids:
         ids = sorted(sample_ids)
         placeholders = ",".join("?" for _ in ids)
