@@ -309,11 +309,13 @@ app.registerModule("app.render", {
   },
   collapseButton(sectionId) {
     const collapsed = this.isCollapsed(sectionId);
-    return `<button class="btn btn-sm collapse-btn" data-app-action="toggle-section" data-id="${Utils.esc(sectionId)}">${collapsed ? '展开' : '折叠'} ${collapsed ? '▾' : '▴'}</button>`;
+    const actionLabel = collapsed ? "展开" : "折叠";
+    return `<button type="button" class="btn btn-sm collapse-btn" data-app-action="toggle-section" data-id="${Utils.esc(sectionId)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${actionLabel}此区域">${actionLabel} ${collapsed ? '▾' : '▴'}</button>`;
   },
   sectionToggleTriangle(sectionId) {
     const collapsed = this.isCollapsed(sectionId);
-    return `<button type="button" class="section-toggle-triangle" title="${collapsed ? '展开' : '收起'}" data-collapsed="${collapsed ? '1' : '0'}" data-app-action="toggle-section" data-id="${Utils.esc(sectionId)}"></button>`;
+    const actionLabel = collapsed ? "展开" : "收起";
+    return `<button type="button" class="section-toggle-triangle" title="${actionLabel}" aria-label="${actionLabel}此区域" aria-expanded="${collapsed ? 'false' : 'true'}" data-collapsed="${collapsed ? '1' : '0'}" data-app-action="toggle-section" data-id="${Utils.esc(sectionId)}"></button>`;
   },
   toggleSection(sectionId) {
     this.toggleSectionState(sectionId);
