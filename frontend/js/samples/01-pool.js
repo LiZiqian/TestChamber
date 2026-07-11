@@ -497,23 +497,24 @@ app.registerModule("samples.pool", {
     const search = document.createElement("input");
     search.className = "sample-pool-search";
     search.placeholder = "样机详情 / 问题 / 履历搜索（回车搜索）";
+    search.setAttribute("aria-label", "搜索样机详情、问题和履历");
     search.value = filters.keyword || "";
     search.dataset.appAction = "sample-filter-search";
     search.dataset.appEvents = "input keydown";
     filterBar.append(search);
-    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-status", "status", "全部使用状态", this.constants.sampleStatuses, filters.status));
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-status", "status", "全部使用状态", this.constants.sampleStatuses, filters.status, "使用状态筛选"));
     filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-result", "problemState", "全部故障状态", [
       { value: "fault", label: "有故障" },
       { value: "ok", label: "无故障" }
-    ], filters.problemState));
+    ], filters.problemState, "故障状态筛选"));
     filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-reassembly", "reassembled", "全部重组状态", [
       { value: "normal", label: "非重组" },
       { value: "reassembled", label: "重组" }
-    ], filters.reassembled));
+    ], filters.reassembled, "重组状态筛选"));
     const owners = [...new Set((cat.samples || []).map(s => s.owner).filter(Boolean))].sort();
     const borrowers = [...new Set((cat.samples || []).map(s => s.borrower).filter(Boolean))].sort();
-    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-person", "owner", "全部挂账人", owners, filters.owner));
-    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-person", "borrower", "全部持有人", borrowers, filters.borrower));
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-person", "owner", "全部挂账人", owners, filters.owner, "挂账人筛选"));
+    filterBar.append(this.sampleFilterSelectNode("sample-pool-filter-person", "borrower", "全部持有人", borrowers, filters.borrower, "持有人筛选"));
     const clear = document.createElement("button");
     clear.type = "button";
     clear.className = "btn btn-sm btn-outline sample-pool-clear-btn";
@@ -545,9 +546,10 @@ app.registerModule("samples.pool", {
     return toolbar;
   },
 
-  sampleFilterSelectNode(className, filterName, placeholder, options, currentValue) {
+  sampleFilterSelectNode(className, filterName, placeholder, options, currentValue, accessibleLabel = placeholder) {
     const select = document.createElement("select");
     select.className = className;
+    select.setAttribute("aria-label", accessibleLabel);
     select.dataset.appAction = "sample-filter";
     select.dataset.appEvents = "change";
     select.dataset.sampleFilter = filterName;
