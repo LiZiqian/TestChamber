@@ -391,19 +391,19 @@ app.registerModule("workspace.taskConfig", {
     const planActive = activeTab === "plan" ? "active" : "";
     const sampleActive = activeTab === "sample" ? "active" : "";
     return `<div class="task-config-shell">
-      <div class="task-config-nav">
-        <div class="task-config-nav-card ${planActive}" data-app-action="task-config-tab" data-value="plan">
+      <div class="task-config-nav" role="tablist" aria-label="任务配置步骤">
+        <button type="button" id="tcTabPlan" class="task-config-nav-card ${planActive}" role="tab" aria-controls="tcPanelPlan" aria-selected="${activeTab === "plan"}" tabindex="${activeTab === "plan" ? "0" : "-1"}" data-app-action="task-config-tab" data-value="plan">
           <b>计划配置</b>
-        </div>
-        <div class="task-config-nav-card ${sampleActive}" data-app-action="task-config-tab" data-value="sample">
+        </button>
+        <button type="button" id="tcTabSample" class="task-config-nav-card ${sampleActive}" role="tab" aria-controls="tcPanelSample" aria-selected="${activeTab === "sample"}" tabindex="${activeTab === "sample" ? "0" : "-1"}" data-app-action="task-config-tab" data-value="sample">
           <b>样机配置</b>
-        </div>
+        </button>
       </div>
       <div class="task-config-main">
-        <div class="task-config-panel ${planActive}" id="tcPanelPlan">
+        <div class="task-config-panel ${planActive}" id="tcPanelPlan" role="tabpanel" aria-labelledby="tcTabPlan" aria-hidden="${activeTab !== "plan"}">
           ${this.taskPlanConfigPanelHtml(project, stage, progress, task)}
         </div>
-        <div class="task-config-panel ${sampleActive}" id="tcPanelSample">
+        <div class="task-config-panel ${sampleActive}" id="tcPanelSample" role="tabpanel" aria-labelledby="tcTabSample" aria-hidden="${activeTab !== "sample"}">
           ${this.taskSampleConfigPanelHtml(project, stage, progress, task)}
         </div>
       </div>
@@ -612,13 +612,27 @@ app.registerModule("workspace.taskConfig", {
   },
 
   switchTaskConfigTab(tab) {
-    document.querySelectorAll(".task-config-nav-card").forEach(el => el.classList.toggle("active", false));
-    document.querySelectorAll(".task-config-panel").forEach(el => el.classList.toggle("active", false));
+    document.querySelectorAll(".task-config-nav-card").forEach(el => {
+      el.classList.remove("active");
+      el.setAttribute("aria-selected", "false");
+      el.tabIndex = -1;
+    });
+    document.querySelectorAll(".task-config-panel").forEach(el => {
+      el.classList.remove("active");
+      el.setAttribute("aria-hidden", "true");
+    });
     const navCards = document.querySelectorAll(".task-config-nav-card");
-    if (tab === "plan" && navCards[0]) navCards[0].classList.add("active");
-    if (tab === "sample" && navCards[1]) navCards[1].classList.add("active");
+    const activeNav = tab === "plan" ? navCards[0] : navCards[1];
+    if (activeNav) {
+      activeNav.classList.add("active");
+      activeNav.setAttribute("aria-selected", "true");
+      activeNav.tabIndex = 0;
+    }
     const panel = document.getElementById(tab === "plan" ? "tcPanelPlan" : "tcPanelSample");
-    if (panel) panel.classList.add("active");
+    if (panel) {
+      panel.classList.add("active");
+      panel.setAttribute("aria-hidden", "false");
+    }
     if (tab === "sample") {
       this.updateTaskSampleLimitUI("tcSampleProgress", "tcSamplePick", "tcSampleLimitHint");
     }

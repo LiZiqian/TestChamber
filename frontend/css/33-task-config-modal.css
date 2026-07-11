@@ -71,6 +71,10 @@
   padding: 14px 10px;
 }
 .task-config-nav-card {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  color: inherit;
   border: 1px solid transparent;
   border-radius: 9px;
   background: transparent;
