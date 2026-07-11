@@ -286,32 +286,32 @@ app.registerModule("workspace.taskTable", {
         </div>
         <div class="task-filter-bar">
           <div class="task-filter-item filter-sku">
-            <label>方案筛选</label>
-            <select data-app-action="task-flow-filter" data-app-events="change" data-field="sku">${skuOptions}</select>
+            <label for="taskFlowFilterSku">方案筛选</label>
+            <select id="taskFlowFilterSku" data-app-action="task-flow-filter" data-app-events="change" data-field="sku">${skuOptions}</select>
           </div>
           <div class="task-filter-item filter-keyword">
-            <label>测试类别搜索</label>
-            <input type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="categoryKeyword">
+            <label for="taskFlowFilterCategory">测试类别搜索</label>
+            <input id="taskFlowFilterCategory" type="text" value="${Utils.esc(f.categoryKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="categoryKeyword">
           </div>
           <div class="task-filter-item filter-keyword">
-            <label>测试用例搜索</label>
-            <input type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="caseKeyword">
+            <label for="taskFlowFilterCase">测试用例搜索</label>
+            <input id="taskFlowFilterCase" type="text" value="${Utils.esc(f.caseKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="caseKeyword">
           </div>
           <div class="task-filter-item filter-person">
-            <label>执行人筛选</label>
-            <select data-app-action="task-flow-filter" data-app-events="change" data-field="ownerName">${optHtml(ownerNames.length ? ownerNames : infos.map(i => i.ownerName), f.ownerName)}</select>
+            <label for="taskFlowFilterOwner">执行人筛选</label>
+            <select id="taskFlowFilterOwner" data-app-action="task-flow-filter" data-app-events="change" data-field="ownerName">${optHtml(ownerNames.length ? ownerNames : infos.map(i => i.ownerName), f.ownerName)}</select>
           </div>
           <div class="task-filter-item filter-status">
-            <label>状态筛选</label>
-            <select data-app-action="task-flow-filter" data-app-events="change" data-field="flowStatus">${optHtml(["待下发", "进行中", "阻塞中", "异常终止", "正常完成"], f.flowStatus)}</select>
+            <label for="taskFlowFilterStatus">状态筛选</label>
+            <select id="taskFlowFilterStatus" data-app-action="task-flow-filter" data-app-events="change" data-field="flowStatus">${optHtml(["待下发", "进行中", "阻塞中", "异常终止", "正常完成"], f.flowStatus)}</select>
           </div>
           <div class="task-filter-item filter-short">
-            <label>DTS单号搜索</label>
-            <input type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="dtsKeyword">
+            <label for="taskFlowFilterDts">DTS单号搜索</label>
+            <input id="taskFlowFilterDts" type="text" value="${Utils.esc(f.dtsKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="dtsKeyword">
           </div>
           <div class="task-filter-item filter-result">
-            <label>测试结果搜索</label>
-            <input type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="resultKeyword">
+            <label for="taskFlowFilterResult">测试结果搜索</label>
+            <input id="taskFlowFilterResult" type="text" value="${Utils.esc(f.resultKeyword || "")}" placeholder="回车搜索" data-app-action="task-flow-text-filter" data-app-events="input keydown" data-field="resultKeyword">
           </div>
           <div class="task-filter-actions">
             <button class="btn btn-sm btn-outline" data-app-action="task-flow-clear">清空筛选</button>
