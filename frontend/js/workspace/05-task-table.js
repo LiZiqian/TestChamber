@@ -653,7 +653,7 @@ app.registerModule("workspace.taskTable", {
     this.showModal("任务样机清单", `
       <div class="task-sample-context">项目：${Utils.esc(p?.name || "-")}；阶段：${Utils.esc(s?.name || "-")}；任务：${Utils.esc(t.testItem || "-")}；当前 ${activeCount} 台${removedCount ? `；退出测试 ${removedCount} 台` : ""}</div>
       <div class="task-sample-row-list">${rows || `<div class="empty">暂无关联样机。</div>`}</div>
-    `, () => false, "关闭", { className: "task-sample-modal" });
+    `, () => false, "关闭", { className: "task-sample-modal", hideCancel: true });
   },
 
 

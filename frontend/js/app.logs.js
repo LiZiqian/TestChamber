@@ -383,7 +383,8 @@ app.registerModule("app.logs", {
     const logs = this.ensureTaskLogs(t);
     const taskLabel = [p?.name, s?.name, t.testItem].filter(Boolean).join(" - ");
     this.showModal(`任务日志 · ${taskLabel}`, "", () => false, "关闭", {
-      bodyNodes: [this.taskLogListNode(logs, t)]
+      bodyNodes: [this.taskLogListNode(logs, t)],
+      hideCancel: true
     });
   }
 
