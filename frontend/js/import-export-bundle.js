@@ -144,20 +144,14 @@ app.registerModule("import-export-bundle", {
     };
 
     const body = this._renderImportPreviewBody(preview);
-    this.showModal("导入数据包", body, () => {
-      void this._onImportCommit();
-      return true;
-    }, "确认导入已处理项目", {
+    this.showModal("导入数据包", body, () => this._onImportCommit(), "确认导入已处理项目", {
       className: "import-bundle-modal",
       cancelText: "取消",
-    });
-    const cancelBtn = this.resetEventTarget(document.getElementById("modalCancel"));
-    if (cancelBtn) {
-      cancelBtn.addEventListener("click", () => {
+      onCancel: () => {
         this._importState = null;
-        this.closeModal();
-      });
-    }
+        return false;
+      },
+    });
 
     // 插入「仅导入无冲突数据」按钮
     this._injectQuickImportButton();
@@ -732,6 +726,8 @@ app.registerModule("import-export-bundle", {
   async _onQuickImport() {
     // 跳过所有冲突项，只提交 autoApply
     if (!this._importState) return;
+    const modalId = this._currentModalId;
+    if (modalId) this.setModalBusy?.(modalId, true);
     const conflicts = this._importState.preview.conflicts || [];
     this._importState.decisions = {};
     this._importState.processedConflicts = new Set();
@@ -740,15 +736,19 @@ app.registerModule("import-export-bundle", {
       this._importState.processedConflicts.add(c.conflictId);
     }
     // 直接提交，跳过 DOM 重新收集
-    const shouldClose = await this._onImportCommit({ skipCollect: true });
-    if (shouldClose === false || shouldClose === undefined) {
-      // 弹窗已关闭
+    try {
+      const shouldClose = await this._onImportCommit({ skipCollect: true, modalId });
+      if (shouldClose === false || shouldClose === undefined) {
+        // 弹窗已关闭
+      }
+    } finally {
+      if (modalId && this._currentModalId === modalId) this.setModalBusy?.(modalId, false);
     }
   },
 
   // ── 提交导入 ──
 
-  async _onImportCommit({ skipCollect = false } = {}) {
+  async _onImportCommit({ skipCollect = false, modalId = this._currentModalId } = {}) {
     if (!this._importState) return true;
     // 先收集决策（quick import 可跳过）
     if (!skipCollect) this._collectImportDecisions();
@@ -788,7 +788,7 @@ app.registerModule("import-export-bundle", {
     }
 
     this._importState = null;
-    this.closeModal();
+    this.closeModal(modalId || null);
     return false;
   },
 

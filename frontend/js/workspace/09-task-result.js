@@ -1101,7 +1101,7 @@ app.registerModule("workspace.taskResult", {
       taskLabel: [p?.name, s?.name, t.testItem].filter(Boolean).join(" - ")
     };
 
-    this.showModal(addOnly ? "添加结果" : "上传测试结果", `
+    const resultModalId = this.showModal(addOnly ? "添加结果" : "上传测试结果", `
       <div class="task-result-layout">
         <section class="task-result-fixed-panel">
           <div class="task-result-form-grid">
@@ -1137,33 +1137,38 @@ app.registerModule("workspace.taskResult", {
     this._taskResultBaseline = this.collectTaskResultForm();
 
     if (!addOnly) {
-      const ok = document.getElementById("modalOk");
       const endBtn = document.createElement("button");
       endBtn.type = "button";
       endBtn.className = "btn btn-purple modal-extra-action";
       endBtn.innerText = "结束任务";
       endBtn.addEventListener("click", async () => {
+        // 父弹窗从样机详情返回时，基础 OK 按钮会按当前 modal 实例重建；点击时再取，避免持有旧节点。
+        const ok = document.getElementById("modalOk");
         if (endBtn.disabled || ok?.disabled) return;
         const oldText = endBtn.innerText;
         const okWasDisabled = !!ok?.disabled;
         let keepOpen = true;
+        const ownsModalInstance = !!resultModalId && typeof this.setModalBusy === "function";
+        if (ownsModalInstance) this.setModalBusy(resultModalId, true);
         endBtn.disabled = true;
         endBtn.innerText = "结束中...";
         if (ok) ok.disabled = true;
         try {
           keepOpen = await this.saveTaskResult(projectId, stageId, taskId, true);
           if (!keepOpen) {
-            this.closeModal();
+            this.closeModal(resultModalId || null);
             return;
           }
         } finally {
           if (keepOpen) {
+            if (ownsModalInstance) this.setModalBusy(resultModalId, false);
             endBtn.disabled = false;
             endBtn.innerText = oldText;
             if (ok) ok.disabled = okWasDisabled;
           }
         }
       });
+      const ok = document.getElementById("modalOk");
       ok?.insertAdjacentElement("afterend", endBtn);
     }
   },

@@ -5,37 +5,26 @@
 app.registerModule("app.modal", {
 
   // ---- 模态框 ----
-  _syncModalInputsToAttributes() {
-    const body = document.getElementById("modalBody");
-    if (!body) return;
-    body.querySelectorAll("input[type='checkbox'], input[type='radio']").forEach(el => {
-      if (el.checked) el.setAttribute("checked", "");
-      else el.removeAttribute("checked");
-    });
-    body.querySelectorAll("input:not([type='checkbox']):not([type='radio']), textarea").forEach(el => {
-      el.setAttribute("value", el.value);
-    });
-    body.querySelectorAll("select").forEach(el => {
-      Array.from(el.options).forEach(opt => {
-        if (opt.selected) opt.setAttribute("selected", "");
-        else opt.removeAttribute("selected");
-      });
-    });
-  },
-
   showModal(title, bodyHtml, onOk, okText = "确认", options = {}) {
     // 模态框堆栈：当前已显示时，保存当前状态
     if (!this._restoringModal && document.getElementById("modalMask").style.display === "flex") {
-      this._syncModalInputsToAttributes();
       const modalEl = document.querySelector(".modal");
       const modalBody = document.getElementById("modalBody");
+      const modalTitle = document.getElementById("modalTitle");
+      const footer = document.querySelector(".modal-footer");
       this._modalStack.push({
-        title: document.getElementById("modalTitle").innerText,
-        bodyNodes: this.cloneChildNodes(modalBody),
-        footerExtraNodes: Array.from(document.querySelectorAll(".modal-footer > .modal-extra-action"))
-          .map(node => node?.cloneNode ? node.cloneNode(true) : null)
-          .filter(Boolean),
+        modalId: this._currentModalId,
+        title: modalTitle.innerText,
+        titleNodes: Array.from(modalTitle.childNodes || []),
+        bodyNodes: Array.from(modalBody.childNodes || []),
+        bodyScrollTop: modalBody.scrollTop || 0,
+        footerOrder: Array.from(footer?.children || []).map(node => {
+          if (node.id === "modalCancel") return { kind: "cancel" };
+          if (node.id === "modalOk") return { kind: "ok" };
+          return { kind: "node", node };
+        }),
         onOk: this._currentModalOnOk,
+        onCancel: this._currentModalOnCancel,
         okText: document.getElementById("modalOk").innerText,
         okClass: document.getElementById("modalOk").className,
         hideCancel: document.getElementById("modalCancel").style.display === "none",
@@ -46,34 +35,65 @@ app.registerModule("app.modal", {
     }
     this._restoringModal = false;
     this._currentModalOnOk = onOk;
+    this._currentModalOnCancel = typeof options.onCancel === "function" ? options.onCancel : null;
+    const modalId = options.modalId || `modal_${++this._modalSequence}`;
+    this._currentModalId = modalId;
+    this._modalBusy = false;
 
     const modal = document.querySelector(".modal");
-    if (modal) modal.className = `modal${options.className ? " " + options.className : ""}`;
-    document.getElementById("modalTitle").innerText = title;
+    if (modal) {
+      modal.className = `modal${options.className ? " " + options.className : ""}`;
+      modal.setAttribute("aria-busy", "false");
+    }
+    const modalTitle = document.getElementById("modalTitle");
+    if (options.titleNodes) modalTitle.replaceChildren(...options.titleNodes);
+    else modalTitle.innerText = title;
     const hint = document.getElementById("modalHeaderHint");
     if (hint) {
       hint.innerText = options.headerHint || "";
       hint.style.display = options.headerHint ? "" : "none";
     }
     const modalBody = document.getElementById("modalBody");
-    if (options.bodyNodes) this.replaceWithClonedNodes(modalBody, options.bodyNodes);
+    modalBody.removeAttribute("inert");
+    if (options.bodyNodes) modalBody.replaceChildren(...options.bodyNodes);
     else this.replaceHtml(modalBody, bodyHtml);
-    document.querySelectorAll(".modal-extra-action").forEach(btn => btn.remove());
-    document.querySelectorAll(".modal-footer > #sampleArchiveExportBtn").forEach(btn => btn.remove());
     const footer = document.querySelector(".modal-footer");
-    if (footer && options.footerExtraNodes) {
-      const footerExtraNodes = (options.footerExtraNodes || [])
-        .map(node => node?.cloneNode ? node.cloneNode(true) : node)
-        .filter(Boolean);
-      footer.prepend(...footerExtraNodes);
+    if (footer) {
+      footer.removeAttribute("inert");
+      Array.from(footer.children).forEach(node => {
+        if (node.id !== "modalCancel" && node.id !== "modalOk") node.remove();
+      });
+      const baseCancel = document.getElementById("modalCancel");
+      const baseOk = document.getElementById("modalOk");
+      if (baseCancel && baseOk) footer.append(baseCancel, baseOk);
     }
     const cancel = this.resetEventTarget(document.getElementById("modalCancel"));
     if (cancel) {
+      // 取消按钮由当前 modal 实例独立管理，避免 document 级 data-app-action 再次关闭父弹窗。
+      cancel.removeAttribute("data-app-action");
       cancel.disabled = false;
       cancel.style.display = options.hideCancel ? "none" : "";
       cancel.innerText = options.cancelText || "取消";
       cancel.className = "btn btn-outline";
-      cancel.addEventListener("click", () => this.closeModal());
+      cancel.addEventListener("click", async () => {
+        if (cancel.disabled || this._currentModalId !== modalId) return;
+        try {
+          const result = this._currentModalOnCancel ? this._currentModalOnCancel() : false;
+          if (result && typeof result.then === "function") {
+            this.setModalBusy(modalId, true);
+            const resolved = await result;
+            if (this._currentModalId !== modalId) return;
+            this.setModalBusy(modalId, false);
+            if (!resolved) this.closeModal(modalId);
+            return;
+          }
+          if (!result) this.closeModal(modalId);
+        } catch (e) {
+          if (this._currentModalId === modalId) this.setModalBusy(modalId, false);
+          console.error("[showModal] onCancel 异常：", e);
+          alert("操作失败：" + (e.message || e));
+        }
+      });
     }
     const ok = this.resetEventTarget(document.getElementById("modalOk"));
     if (!ok) { console.error("modalOk not found in DOM"); return; }
@@ -84,21 +104,54 @@ app.registerModule("app.modal", {
       try {
         const keepOpen = onOk && onOk();
         if (keepOpen && typeof keepOpen.then === "function") {
-          ok.disabled = true;
+          this.setModalBusy(modalId, true);
           const resolved = await keepOpen;
-          ok.disabled = false;
-          if (!resolved) this.closeModal();
+          if (this._currentModalId !== modalId) return;
+          this.setModalBusy(modalId, false);
+          if (!resolved) this.closeModal(modalId);
           return;
         }
-        if (!keepOpen) this.closeModal();
+        if (!keepOpen) this.closeModal(modalId);
       } catch (e) {
-        ok.disabled = false;
+        if (this._currentModalId === modalId) this.setModalBusy(modalId, false);
         console.error("[showModal] onOk 异常：", e);
         alert("操作失败：" + (e.message || e));
       }
     });
+    if (footer && options.footerOrder) {
+      const restoredOrder = options.footerOrder.map(item => {
+        if (item.kind === "cancel") return cancel;
+        if (item.kind === "ok") return ok;
+        return item.node || null;
+      }).filter(Boolean);
+      if (!restoredOrder.includes(cancel)) restoredOrder.push(cancel);
+      if (!restoredOrder.includes(ok)) restoredOrder.push(ok);
+      footer.replaceChildren(...restoredOrder);
+    } else if (footer && options.footerExtraNodes) {
+      footer.prepend(...options.footerExtraNodes.filter(Boolean));
+    }
     document.getElementById("modalMask").style.display = "flex";
+    modalBody.scrollTop = Number(options.bodyScrollTop || 0);
     this.updateSelectPlaceholderState(document.getElementById("modalBody"));
+    return modalId;
+  },
+
+  setModalBusy(modalId, busy) {
+    if (this._currentModalId !== modalId) return false;
+    this._modalBusy = !!busy;
+    const modal = document.querySelector(".modal");
+    const body = document.getElementById("modalBody");
+    const footer = document.querySelector(".modal-footer");
+    if (modal) modal.setAttribute("aria-busy", busy ? "true" : "false");
+    if (body) {
+      if (busy) body.setAttribute("inert", "");
+      else body.removeAttribute("inert");
+    }
+    if (footer) {
+      if (busy) footer.setAttribute("inert", "");
+      else footer.removeAttribute("inert");
+    }
+    return true;
   },
 
   showConfirm(message, onOk, options = {}) {
@@ -167,21 +220,27 @@ app.registerModule("app.modal", {
     if (box) box.className = "confirm-box";
   },
 
-  closeModal() {
+  closeModal(expectedModalId = null) {
+    if (expectedModalId && this._currentModalId !== expectedModalId) return false;
+    if (this._currentModalId) this.setModalBusy(this._currentModalId, false);
     // 模态框堆栈：有上一级则恢复
     if (this._modalStack.length > 0) {
       const prev = this._modalStack.pop();
       this._restoringModal = true;
       this.showModal(prev.title, "", prev.onOk, prev.okText, {
+        modalId: prev.modalId,
         okClass: prev.okClass || "btn",
         hideCancel: prev.hideCancel,
         cancelText: prev.cancelText,
+        onCancel: prev.onCancel,
         headerHint: prev.headerHint || "",
         className: prev.className || "",
+        titleNodes: prev.titleNodes || [],
         bodyNodes: prev.bodyNodes || [],
-        footerExtraNodes: prev.footerExtraNodes || []
+        bodyScrollTop: prev.bodyScrollTop || 0,
+        footerOrder: prev.footerOrder || []
       });
-      return;
+      return true;
     }
     document.getElementById("modalMask").style.display = "none";
     const modal = document.querySelector(".modal");
@@ -191,6 +250,11 @@ app.registerModule("app.modal", {
       hint.innerText = "";
       hint.style.display = "none";
     }
+    this._currentModalId = null;
+    this._currentModalOnOk = null;
+    this._currentModalOnCancel = null;
+    this._modalBusy = false;
+    return true;
   },
 
   // ---- 内联表单校验工具 ----

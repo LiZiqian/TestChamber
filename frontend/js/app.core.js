@@ -61,6 +61,10 @@ const app = {
   _modalStack: [],
   _restoringModal: false,
   _currentModalOnOk: null,
+  _currentModalOnCancel: null,
+  _modalSequence: 0,
+  _currentModalId: null,
+  _modalBusy: false,
 
   constants: {
     sampleStatuses: ["测试中", "闲置", "在位等待", "已退库", "取走分析"],

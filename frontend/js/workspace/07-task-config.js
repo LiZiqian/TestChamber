@@ -356,7 +356,18 @@ app.registerModule("workspace.taskConfig", {
     this.showModal("任务配置", html,
       () => this.saveTaskConfigAll(projectId, stageId, progressId, taskId),
       "保存并关闭",
-      { className: "task-config-modal", hideCancel: false, cancelText: "取消" }
+      {
+        className: "task-config-modal",
+        hideCancel: false,
+        cancelText: "取消",
+        onCancel: () => {
+          if (!this.hasUnsavedTaskConfigChanges(projectId, stageId, progressId, taskId)) return false;
+          this.showConfirm("有未保存的修改，确定放弃吗？", () => this.closeModal(), {
+            title: "放弃修改", okText: "放弃", okClass: "btn btn-danger", cancelText: "继续编辑"
+          });
+          return true;
+        }
+      }
     );
     // 标题栏替换为左右布局
     setTimeout(() => {
@@ -364,21 +375,6 @@ app.registerModule("workspace.taskConfig", {
       if (titleEl) {
         titleEl.textContent = "";
         titleEl.append(this.taskConfigTitlebarNode(s, progress, t));
-      }
-    }, 0);
-    // 覆盖取消按钮：检查未保存修改
-    setTimeout(() => {
-      const cancelBtn = this.resetEventTarget(document.getElementById("modalCancel"));
-      if (cancelBtn) {
-        cancelBtn.addEventListener("click", () => {
-          if (this.hasUnsavedTaskConfigChanges(projectId, stageId, progressId, taskId)) {
-            this.showConfirm("有未保存的修改，确定放弃吗？", () => this.closeModal(), {
-              title: "放弃修改", okText: "放弃", okClass: "btn btn-danger", cancelText: "继续编辑"
-            });
-          } else {
-            this.closeModal();
-          }
-        });
       }
     }, 0);
     // 若默认进入样机配置页，初始化数量提示
