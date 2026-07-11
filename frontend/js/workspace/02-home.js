@@ -4,6 +4,13 @@
 
 app.registerModule("workspace.home", {
 
+  stageProgressPercent(executedTasks, plannedItems) {
+    const executed = Math.max(0, Number(executedTasks) || 0);
+    const planned = Math.max(0, Number(plannedItems) || 0);
+    if (!planned) return 0;
+    return Math.min(100, Math.max(0, Math.round((executed / planned) * 100)));
+  },
+
   // ==================== 项目工作台主页 ====================
   renderProjectWorkspace() {
     const p = this.currentProject();
@@ -55,7 +62,7 @@ app.registerModule("workspace.home", {
 
     // 阶段卡片（融合进度看板信息）
     const stageCards = stageStats.map(x => {
-      const pct = x.total ? ((x.pass / x.total) * 100).toFixed(0) : 0;
+      const pct = this.stageProgressPercent(x.executedTasks, x.total);
       const cardAttrs = sortMode
         ? `data-stage-id="${Utils.esc(x.stage.id)}" draggable="true" data-app-action="stage-drag" data-app-events="dragstart dragover dragleave drop dragend" data-id="${Utils.esc(x.stage.id)}"`
         : `data-app-action="stage-select" data-id="${Utils.esc(x.stage.id)}"`;
