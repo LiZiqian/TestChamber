@@ -76,6 +76,16 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
         current_revision = _current_revision(conn)
         is_delete = str(payload.get("deleteMode") or "") == "delete"
         action = str(payload.get("action") or "task_mutation")
+        if action == "archive_task_delete" and status_normalization.normalize_task_flow_status(task) not in ("正常完成", "异常终止"):
+            archived_at = ctx.now_iso()
+            task.update({
+                "status": "异常终止",
+                "completed": True,
+                "completionType": "异常终止",
+                "completedAt": str(task.get("completedAt") or archived_at),
+                "endDate": str(task.get("endDate") or archived_at[:10]),
+            })
+            task = status_normalization.normalize_task_payload(task)
         if action == "finish_task_result":
             finished = task_mutation_rules.existing_finished_task(conn, task_id)
             if finished:

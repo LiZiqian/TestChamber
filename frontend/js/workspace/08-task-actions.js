@@ -19,18 +19,36 @@ app.registerModule("workspace.taskActions", {
         : "该任务尚未执行，删除后会从任务管理中物理移除。",
       async () => {
         const snapshot = this.dataSnapshot();
-        this.releaseTaskSamples(t, {
-          user: "管理员",
-          source: executed ? "任务归档删除" : "任务删除",
-          reason: executed ? "任务从任务管理中删除并归档" : "未执行任务被删除",
-          projectId: p.id,
-          stageId: s.id,
-          forceLog: executed
-        });
+        const completedBeforeArchive = this.isTaskCompleted(t);
+        let archiveTransition = null;
+        if (executed && !completedBeforeArchive) {
+          archiveTransition = this.transitionTaskStatus(s, t, "异常终止", {
+            issue: "任务被归档删除",
+            completedAt: Utils.now(),
+            endDate: Utils.today()
+          });
+        }
+        // 已完成任务的样机去向已经由结束结果确定。归档历史任务不能把
+        // “取走分析/已退库”等最终状态重新改成闲置，也不能清空取走人。
+        if (!completedBeforeArchive) {
+          this.releaseTaskSamples(t, {
+            user: "管理员",
+            source: executed ? "任务归档删除" : "任务删除",
+            reason: executed ? "任务从任务管理中删除并归档" : "未执行任务被删除",
+            projectId: p.id,
+            stageId: s.id,
+            forceLog: executed
+          });
+        }
         if (executed) {
           t.archived = true;
           t.deletedAt = Utils.now();
-          this.addTaskLog(t, "任务归档删除", { user: "管理员", reason: "任务从任务管理中删除，样机履历保留" });
+          this.addTaskLog(t, "任务归档删除", {
+            user: "管理员",
+            reason: "任务从任务管理中删除，样机履历保留",
+            fromStatus: archiveTransition?.fromStatus || this.taskFlowStatus(t),
+            toStatus: archiveTransition?.toStatus || this.taskFlowStatus(t)
+          });
         } else {
           s.tasks = s.tasks.filter(x => x.id !== taskId);
         }
