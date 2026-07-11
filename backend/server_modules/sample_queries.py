@@ -359,15 +359,15 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
     ).fetchone()
     if not category_row:
         raise KeyError("样机池不存在")
+    total_in_category = int(conn.execute(
+        "SELECT COUNT(*) AS count FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
+        (category_id,),
+    ).fetchone()["count"] or 0)
 
     if not sample_query_requires_python_scan(query):
         where, args = sample_sql_filter_parts(category_id, query, include_status=True)
         status_where, status_args = sample_sql_filter_parts(category_id, query, include_status=False)
         problem_where, problem_args = sample_sql_filter_parts(category_id, query, include_problem=False)
-        total_in_category = int(conn.execute(
-            "SELECT COUNT(*) AS count FROM sample_records WHERE category_id = ? AND deleted_at IS NULL",
-            (category_id,),
-        ).fetchone()["count"] or 0)
         total = int(conn.execute(
             f"SELECT COUNT(*) AS count FROM sample_records WHERE {' AND '.join(where)}",
             args,
@@ -443,16 +443,34 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
     history_cte = ""
     history_args: list[object] = []
     if keyword:
-        history_cte, history_args = sample_history_search_cte(keyword)
-        where.append(
+        like = f"%{keyword}%"
+        direct_match = conn.execute(
             """
+            SELECT 1
+            FROM sample_records
+            WHERE category_id = ? AND deleted_at IS NULL
+              AND (
+                    LOWER(sample_no) LIKE ? OR LOWER(sn) LIKE ? OR LOWER(imei) LIKE ?
+                 OR LOWER(board_sn) LIKE ? OR LOWER(owner) LIKE ? OR LOWER(borrower) LIKE ?
+                 OR LOWER(location) LIKE ? OR LOWER(data_json) LIKE ?
+              )
+            LIMIT 1
+            """,
+            [category_id, *([like] * 8)],
+        ).fetchone()
+        if direct_match:
+            history_cte = "WITH history_matches(sample_id) AS (SELECT NULL AS sample_id WHERE 0)"
+        else:
+            history_cte, history_args = sample_history_search_cte(keyword)
+        history_clause = "" if direct_match else " OR history_matches.sample_id IS NOT NULL"
+        where.append(
+            f"""
             (LOWER(sample_no) LIKE ? OR LOWER(sn) LIKE ? OR LOWER(imei) LIKE ?
-             OR LOWER(owner) LIKE ? OR LOWER(borrower) LIKE ? OR LOWER(location) LIKE ?
-             OR LOWER(data_json) LIKE ? OR history_matches.sample_id IS NOT NULL)
+             OR LOWER(board_sn) LIKE ? OR LOWER(owner) LIKE ? OR LOWER(borrower) LIKE ?
+             OR LOWER(location) LIKE ? OR LOWER(data_json) LIKE ?{history_clause})
             """
         )
-        like = f"%{keyword}%"
-        args.extend([like, like, like, like, like, like, like])
+        args.extend([like] * 8)
     owner = first_query_value(query, "owner", "").strip().lower()
     if owner:
         where.append("LOWER(owner) LIKE ?")
@@ -516,7 +534,7 @@ def list_samples_page(conn: sqlite3.Connection, category_id: str, query: dict[st
             "description": category_row["description"] or cat.get("description") or "",
         },
         "stats": {
-            "totalInCategory": len(rows),
+            "totalInCategory": total_in_category,
             "filtered": len(all_items),
             "statusCounts": status_counts,
             "problemCounts": problem_counts,
