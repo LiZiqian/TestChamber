@@ -213,6 +213,7 @@ app.registerModule("workspace.taskConfig", {
         Utils.toast("未检测到变更");
         return false;
       }
+      const mutationSnapshot = this.taskMutationSnapshot();
       const wasNew = !t;
       t = t || this.ensurePlanTask(s, progress);
       const removed = oldSampleIds.filter(id => !sampleIds.includes(id));
@@ -234,8 +235,12 @@ app.registerModule("workspace.taskConfig", {
         createIfMissing: wasNew,
         sampleIdsForMutation: [...new Set([...oldSampleIds, ...sampleIds])]
       });
-      if (saved) Utils.toast(oldSampleIds.length ? "样机已重新分配" : "样机已分配");
-      return !saved;
+      if (!saved) {
+        this.restoreFailedTaskMutation(mutationSnapshot);
+        return false;
+      }
+      Utils.toast(oldSampleIds.length ? "样机已重新分配" : "样机已分配");
+      return false;
     }, "确认", { className: "assign-sample-modal" });
     setTimeout(() => {
       this.initTaskSamplePicker("assignSamplePick");
@@ -292,6 +297,7 @@ app.registerModule("workspace.taskConfig", {
         Utils.toast("未检测到变更");
         return false;
       }
+      const mutationSnapshot = this.taskMutationSnapshot();
       const wasNew = !t;
       t = t || this.ensurePlanTask(s, progress, { owner, planStartDate: start, planEndDate: end });
       t.owner = owner;
@@ -306,8 +312,12 @@ app.registerModule("workspace.taskConfig", {
         user: owner,
         createIfMissing: wasNew
       });
-      if (saved) Utils.toast("计划配置已保存");
-      return !saved;
+      if (!saved) {
+        this.restoreFailedTaskMutation(mutationSnapshot);
+        return false;
+      }
+      Utils.toast("计划配置已保存");
+      return false;
     });
   },
 
@@ -489,6 +499,7 @@ app.registerModule("workspace.taskConfig", {
       Utils.toast("未检测到变更");
       return false;
     }
+    const mutationSnapshot = this.taskMutationSnapshot();
     // ensure（task 已存在，仅防御）
     const wasNew = !t;
     t = t || this.ensurePlanTask(s, progress);
@@ -539,7 +550,10 @@ app.registerModule("workspace.taskConfig", {
       createIfMissing: wasNew,
       sampleIdsForMutation: [...new Set([...oldSampleIds, ...sampleIds])]
     });
-    if (!saved) return true;
+    if (!saved) {
+      this.restoreFailedTaskMutation(mutationSnapshot);
+      return false;
+    }
     if (planChanged && sampleChanged) Utils.toast("任务配置已保存");
     else if (planChanged) Utils.toast("计划配置已保存");
     else Utils.toast("样机配置已保存");

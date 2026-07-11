@@ -4,6 +4,15 @@
 
 app.registerModule("workspace.dropdownIssue", {
 
+  restoreFailedIssueMutation(snapshot, options = {}) {
+    if (typeof this.restoreFailedTaskMutation === "function") {
+      return this.restoreFailedTaskMutation(snapshot, options);
+    }
+    this.restoreDataSnapshot(snapshot?.data || snapshot);
+    if (options.render !== false) this.render();
+    return true;
+  },
+
   // ==================== 用例下拉 ====================
   openCaseDropdown(rowIdx, field, inputEl) {
     let dd = document.getElementById('caseDropdown');
@@ -180,19 +189,22 @@ app.registerModule("workspace.dropdownIssue", {
   },
 
   // ==================== 问题单 ====================
-  updateIssueRecordRemark(projectId, stageId, taskId, value) {
+  async updateIssueRecordRemark(projectId, stageId, taskId, value) {
     const p = this.findProjectRecord(projectId);
     const s = p?.stages.find(x => x.id === stageId);
     const t = s?.tasks.find(x => x.id === taskId);
     if (!t) return;
+    const mutationSnapshot = this.taskMutationSnapshot();
     if (!t.issueRecord) t.issueRecord = { dtsNo: "", isIssue: "", issueNote: "" };
     t.issueRecord.issueNote = String(value || "").trim();
-    this.commitTaskMutation(p, s, t, {
+    const saved = await this.commitTaskMutation(p, s, t, {
       action: "update_issue_record",
       remark: "更新任务问题确认备注",
       user: "管理员",
       render: false
     });
+    if (!saved) this.restoreFailedIssueMutation(mutationSnapshot);
+    return saved;
   },
 
   taskIssueRecordHtml(task, project = null, stage = null) {
@@ -241,7 +253,7 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         <textarea id="issueRecordNote" rows="4" placeholder="填写问题确认说明">${Utils.esc(r.issueNote || "")}</textarea>
       </div>
     `, async () => {
-      const snapshot = this.dataSnapshot();
+      const snapshot = this.taskMutationSnapshot();
       t.issueRecord = {
         dtsNo: document.getElementById("issueRecordDtsNo").value.trim(),
         isIssue: document.getElementById("issueRecordIsIssue").value,
@@ -252,7 +264,10 @@ hasIssue ? `<div class="task-issue-record-line"><span class="task-issue-record-l
         remark: "录入任务问题单",
         user: "管理员",
       });
-      if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
+      if (!saved) {
+        this.restoreFailedIssueMutation(snapshot);
+        return false;
+      }
       return false;
     }, "保存");
   }

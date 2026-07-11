@@ -5,6 +5,23 @@
 
 app.registerModule("workspace.taskActions", {
 
+  taskActionMutationSnapshot() {
+    if (typeof this.taskMutationSnapshot === "function") return this.taskMutationSnapshot();
+    return {
+      data: this.dataSnapshot(),
+      baseData: this.cloneData(this._baseData || this.dataSnapshot())
+    };
+  },
+
+  restoreFailedTaskActionMutation(snapshot, options = {}) {
+    if (typeof this.restoreFailedTaskMutation === "function") {
+      return this.restoreFailedTaskMutation(snapshot, options);
+    }
+    this.restoreDataSnapshot(snapshot?.data || snapshot);
+    if (options.render !== false) this.render();
+    return true;
+  },
+
   deleteTask(taskId) {
     const p = this.currentProject();
     const s = this.currentStage();
@@ -18,7 +35,7 @@ app.registerModule("workspace.taskActions", {
         ? "该任务已经执行过，删除后会从任务管理中隐藏并归档，历史数据继续保留。"
         : "该任务尚未执行，删除后会从任务管理中物理移除。",
       async () => {
-        const snapshot = this.dataSnapshot();
+        const snapshot = this.taskActionMutationSnapshot();
         const completedBeforeArchive = this.isTaskCompleted(t);
         let archiveTransition = null;
         if (executed && !completedBeforeArchive) {
@@ -59,8 +76,8 @@ app.registerModule("workspace.taskActions", {
           deleteMode: executed ? "" : "delete"
         });
         if (!saved) {
-          this.restoreDataSnapshot(snapshot);
-          return true;
+          this.restoreFailedTaskActionMutation(snapshot);
+          return false;
         }
         Utils.toast(executed ? "任务已归档隐藏，样机履历已保留。" : "任务已删除。");
         return false;
@@ -91,6 +108,7 @@ app.registerModule("workspace.taskActions", {
       return;
     }
     this.showConfirm("开始测试？", async () => {
+      const mutationSnapshot = this.taskActionMutationSnapshot();
       const user = t.owner;
       const reason = isRestart ? "恢复测试" : "开始测试";
       const transition = this.transitionTaskStatus(s, t, "进行中", {
@@ -100,11 +118,12 @@ app.registerModule("workspace.taskActions", {
       });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "测试中", { user, source: isRestart ? "任务重启" : "任务启动", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
       this.addTaskLog(t, isRestart ? "重启任务" : "启动任务", { user, reason, fromStatus: transition.fromStatus, toStatus: transition.toStatus });
-      await this.commitTaskMutation(p, s, t, {
+      const saved = await this.commitTaskMutation(p, s, t, {
         action: isRestart ? "restart_task" : "start_task",
         remark: reason,
         user
       });
+      if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
     }, { title: "启动任务", okText: "开始测试", okClass: "btn btn-pass" });
   },
 
@@ -393,6 +412,7 @@ app.registerModule("workspace.taskActions", {
         return;
       }
 
+      const mutationSnapshot = this.taskActionMutationSnapshot();
       // 写入新值
       t.owner = afterOwner;
       t.planStartDate = afterPlanStart;
@@ -466,7 +486,8 @@ app.registerModule("workspace.taskActions", {
         remark: changeReason,
         user
       });
-      return !saved;
+      if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
+      return false;
     }, "确认", { className: "temp-change-modal", headerHint: `任务：${Utils.esc(t.testItem || "-")}` });
     setTimeout(() => {
       this.initTaskSamplePicker("tempSamplePick");
@@ -492,6 +513,7 @@ app.registerModule("workspace.taskActions", {
       const userCheck = this.validatePersonForScope(user, "tester", "状态变更人");
       if (!userCheck.ok) { this.markFieldInvalid(document.getElementById("user"), userCheck.msg); return true; }
       if (!reason) { this.markFieldInvalid(document.getElementById("reason"), "必须填写阻塞原因"); return true; }
+      const mutationSnapshot = this.taskActionMutationSnapshot();
       const transition = this.transitionTaskStatus(s, t, "阻塞中", { reason, issue: reason });
       (t.sampleIds || []).forEach(id => this.changeSampleStatus(id, "在位等待", { user, source: "任务阻塞", reason, projectId: p.id, stageId: s.id, taskId: t.id, testItem: t.testItem }));
       this.addTaskLog(t, "阻塞任务", { user, reason, fromStatus: transition.fromStatus, toStatus: transition.toStatus });
@@ -500,7 +522,8 @@ app.registerModule("workspace.taskActions", {
         remark: reason,
         user
       });
-      return !saved;
+      if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
+      return false;
     }, "确认", { className: "task-block-modal" });
   },
 

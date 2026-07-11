@@ -1009,6 +1009,7 @@ app.registerModule("workspace.taskResult", {
       }
 
       if (!this.isTaskCompleted(t)) {
+        const mutationSnapshot = this.taskMutationSnapshot();
         this.saveTaskResultDraft(p, s, t, payload);
         const saved = await this.commitTaskMutation(p, s, t, {
           action: "save_task_result_draft",
@@ -1016,10 +1017,14 @@ app.registerModule("workspace.taskResult", {
           user: payload.user,
           sampleIdsForMutation: []
         });
-        if (!saved) return true;
+        if (!saved) {
+          this.restoreFailedTaskMutation(mutationSnapshot, { render: false });
+          return this._lastTaskMutationError?._refreshSucceeded !== true;
+        }
         Utils.toast("结果草稿已保存；点击结束任务时会同步到样机档案。");
         return false;
       }
+      const mutationSnapshot = this.taskMutationSnapshot();
       const sampleIdsForMutation = this.applyTaskResult(p, s, t, payload, false);
       const saved = await this.commitTaskMutation(p, s, t, {
         action: "upload_task_result",
@@ -1027,7 +1032,10 @@ app.registerModule("workspace.taskResult", {
         user: payload.user,
         sampleIdsForMutation
       });
-      if (!saved) return true;
+      if (!saved) {
+        this.restoreFailedTaskMutation(mutationSnapshot, { render: false });
+        return this._lastTaskMutationError?._refreshSucceeded !== true;
+      }
       Utils.toast("本次结果已保存，样机档案已同步。");
       return false;
     }
@@ -1043,10 +1051,7 @@ app.registerModule("workspace.taskResult", {
       if (this._taskFinishInFlight[finishKey]) return true;
       this._taskFinishInFlight[finishKey] = true;
     }
-    const snapshot = finishTask ? {
-      data: this.dataSnapshot(),
-      baseData: this.cloneData(this._baseData || this.dataSnapshot())
-    } : null;
+    const snapshot = finishTask ? this.taskMutationSnapshot() : null;
     try {
       const sampleIdsForMutation = this.applyTaskResult(p, s, t, payload, finishTask);
       if (finishTask) delete t.resultDraft;
@@ -1058,12 +1063,14 @@ app.registerModule("workspace.taskResult", {
       });
       if (!saved) {
         const mutationError = this._lastTaskMutationError;
-        if (finishTask) this.restoreTaskResultSaveSnapshot(snapshot);
+        const restored = finishTask
+          ? this.restoreFailedTaskMutation(snapshot, { render: false })
+          : false;
         if (finishTask && mutationError?.error_code === "TASK_ALREADY_FINISHED") {
           await this.refreshTaskAfterAlreadyFinished(projectId, stageId);
           return false;
         }
-        return true;
+        return finishTask ? restored : true;
       }
       Utils.toast(finishTask ? "任务已结束，结果和样机档案已同步。" : "本次结果已保存，样机档案已同步。");
       return false;
