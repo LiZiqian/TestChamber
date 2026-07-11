@@ -45,6 +45,13 @@ button, input, select, textarea { font-family: inherit }
   cursor: inherit; border-radius: 10px;
 }
 .nav-item-main:hover { background: none }
+.nav-item-main:focus-visible,
+.nav-toggle:focus-visible,
+.nav-sub-item:focus-visible,
+.nav-tool-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
 .nav-toggle {
   flex: 0 0 auto; width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;

@@ -164,7 +164,11 @@ const app = {
     const action = target.dataset.appAction || "";
     if (!action) return;
     const supportedEvents = (target.dataset.appEvents || "click").split(/\s+/).filter(Boolean);
-    if (!supportedEvents.includes(eventType)) return;
+    const keyboardButton = eventType === "keydown" && target.getAttribute?.("role") === "button";
+    const keyboardActivation = keyboardButton && (event.key === "Enter" || event.key === " ");
+    if (keyboardButton && !keyboardActivation) return;
+    if (!supportedEvents.includes(eventType) && !keyboardActivation) return;
+    if (keyboardActivation) event.preventDefault();
     if (target.dataset.stopPropagation === "1") event.stopPropagation();
     if (eventType === "click" && target.closest("button,[role='button']")?.disabled) return;
     this.dispatchAppAction(action, target, event, eventType);

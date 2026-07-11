@@ -150,6 +150,12 @@ app.registerModule("app.render", {
 
     const main = document.createElement("span");
     main.className = "nav-item-main";
+    main.setAttribute("role", "button");
+    main.setAttribute("aria-label", item.label);
+    if (active) main.setAttribute("aria-current", "page");
+    main.tabIndex = 0;
+    main.dataset.appAction = "go";
+    main.dataset.module = item.id;
     main.append(this.textEl("span", item.icon, "nav-icon"), this.textEl("span", item.label, "nav-label"));
     node.append(main);
 
@@ -157,6 +163,10 @@ app.registerModule("app.render", {
       const toggle = document.createElement("span");
       toggle.className = `nav-toggle ${isExpanded ? "expanded" : ""}`.trim();
       toggle.title = `${isExpanded ? "折叠" : "展开"}子目录`;
+      toggle.setAttribute("role", "button");
+      toggle.setAttribute("aria-label", toggle.title);
+      toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+      toggle.tabIndex = 0;
       toggle.dataset.appAction = "nav-toggle";
       toggle.dataset.id = item.id;
       toggle.dataset.stopPropagation = "1";
@@ -175,6 +185,10 @@ app.registerModule("app.render", {
       node.dataset.appAction = "nav-go-sub";
       node.dataset.id = item.id;
       node.dataset.stopPropagation = "1";
+      node.setAttribute("role", "button");
+      node.setAttribute("aria-label", item.label);
+      if (item.active) node.setAttribute("aria-current", "page");
+      node.tabIndex = 0;
       node.textContent = item.label;
       sub.append(node);
     });
@@ -186,6 +200,9 @@ app.registerModule("app.render", {
     node.className = "nav-tool-item";
     node.dataset.appAction = action;
     node.title = label;
+    node.setAttribute("role", "button");
+    node.setAttribute("aria-label", label);
+    node.tabIndex = 0;
     node.append(this.textEl("span", icon, "nav-tool-icon"), this.textEl("span", label, "nav-tool-label"));
     return node;
   },
