@@ -832,6 +832,56 @@ app.registerModule("app.server", {
     return Promise.all(missing.map(id => this.ensureSampleLoaded(id, { snapshot: task.sampleSnapshots?.[id] || null })));
   },
 
+  async requireTaskMutationSamplesLoaded(task, sampleIds = [], actionLabel = "任务操作") {
+    const ids = [...new Set((sampleIds || []).map(id => String(id || "").trim()).filter(Boolean))];
+    if (!ids.length) return true;
+    const missing = ids.filter(id => !this.findSample?.(id)?.sample);
+    if (!missing.length) return true;
+
+    this.updateServerStatus?.("加载任务样机");
+    if (typeof this.ensureSampleLoaded === "function") {
+      await Promise.all(missing.map(id => this.ensureSampleLoaded(id, {
+        snapshot: task?.sampleSnapshots?.[id] || null
+      })));
+    }
+
+    // 任务写入和样机状态变更都按 sampleId 精确寻址。即使历史快照中的
+    // SN/IMEI 能命中另一条档案，也不能用它替代当前任务真正引用的样机。
+    const unresolved = ids.filter(id => !this.findSample?.(id)?.sample);
+    if (!unresolved.length) {
+      this.updateServerStatus?.("已加载");
+      return true;
+    }
+
+    const labels = unresolved.slice(0, 5).map(id => {
+      const snapshot = task?.sampleSnapshots?.[id] || {};
+      return snapshot.code || snapshot.sampleNo || snapshot.sn || snapshot.imei || snapshot.boardSn || id;
+    });
+    const remaining = unresolved.length > labels.length ? ` 等 ${unresolved.length} 台` : "";
+    const reason = this._lastSampleLookupError
+      ? "样机档案加载失败，请检查服务连接后重试。"
+      : "样机档案可能已被销毁、迁移或尚未同步，请刷新后核对任务与样机池。";
+    this.updateServerStatus?.("任务样机未就绪");
+    alert(`${actionLabel}未执行：无法取得样机 ${labels.join("、")}${remaining} 的完整档案。\n${reason}`);
+    return false;
+  },
+
+  prepareTaskActionSamples(task, sampleIds = [], actionLabel = "任务操作") {
+    const ids = [...new Set((sampleIds || []).map(id => String(id || "").trim()).filter(Boolean))];
+    if (!ids.length) return true;
+    if (ids.every(id => this.findSample?.(id)?.sample)) return true;
+    if (!this._taskActionPreparationInFlight) this._taskActionPreparationInFlight = {};
+    const key = `${String(task?.id || "task")}:${actionLabel}:${ids.slice().sort().join(",")}`;
+    if (this._taskActionPreparationInFlight[key]) {
+      Utils.toast(`${actionLabel}正在加载样机，请稍候`);
+      return false;
+    }
+    this._taskActionPreparationInFlight[key] = true;
+    return this.requireTaskMutationSamplesLoaded(task, ids, actionLabel).finally(() => {
+      delete this._taskActionPreparationInFlight[key];
+    });
+  },
+
   async fetchSampleDestroyImpactScope(params = {}) {
     const query = new URLSearchParams();
     ["sampleId", "categoryId"].forEach(key => {

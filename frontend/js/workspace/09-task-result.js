@@ -1086,8 +1086,14 @@ app.registerModule("workspace.taskResult", {
     if (!t) return;
     if (this.taskFlowStatus(t) === "待下发") { alert("任务尚未启动。"); return; }
     const entries = this.taskResultSampleEntries(t);
-    const loadingSamples = this.ensureTaskReferenceSamplesLoaded?.(t);
-    if (loadingSamples?.then) await loadingSamples;
+    const resultSampleIds = entries.map(item => item.sampleId || item.sid).filter(Boolean);
+    if (typeof this.prepareTaskActionSamples === "function") {
+      const preparation = this.prepareTaskActionSamples(t, resultSampleIds, "打开结果录入");
+      if (preparation?.then ? !await preparation : preparation === false) return;
+    } else {
+      const loadingSamples = this.ensureTaskReferenceSamplesLoaded?.(t);
+      if (loadingSamples?.then) await loadingSamples;
+    }
     const addOnly = this.isTaskCompleted(t);
     const draft = addOnly ? null : (t.resultDraft || {});
     const resultValue = this.normalizeTaskResultValue(draft?.result || "");

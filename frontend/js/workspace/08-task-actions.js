@@ -22,12 +22,17 @@ app.registerModule("workspace.taskActions", {
     return true;
   },
 
-  deleteTask(taskId) {
+  async deleteTask(taskId) {
     const p = this.currentProject();
     const s = this.currentStage();
     const t = s?.tasks.find(x => x.id === taskId);
     if (!p || !s || !t) return;
     const executed = this.isTaskExecuted(t);
+    const sampleIdsToRelease = this.isTaskCompleted(t) ? [] : [...(t.sampleIds || [])];
+    if (typeof this.prepareTaskActionSamples === "function") {
+      const preparation = this.prepareTaskActionSamples(t, sampleIdsToRelease, "删除任务");
+      if (preparation?.then ? !await preparation : preparation === false) return;
+    }
     const detailsHtml = this.taskDeleteImpactHtml(p, s, t);
     this.confirmTaskDeleteKeyword(
       "删除任务",
@@ -87,7 +92,7 @@ app.registerModule("workspace.taskActions", {
   },
 
   // 启动任务
-  startTask(projectId, stageId, taskId) {
+  async startTask(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!t) return;
     if (this.isTaskCompleted(t)) { alert("任务已完成。"); return; }
@@ -106,6 +111,10 @@ app.registerModule("workspace.taskActions", {
     if (t.planStartDate > t.planEndDate) {
       alert("计划终止时间不能早于计划开始时间。请先修改计划。");
       return;
+    }
+    if (typeof this.prepareTaskActionSamples === "function") {
+      const preparation = this.prepareTaskActionSamples(t, t.sampleIds || [], isRestart ? "恢复任务" : "启动任务");
+      if (preparation?.then ? !await preparation : preparation === false) return;
     }
     this.showConfirm("开始测试？", async () => {
       const mutationSnapshot = this.taskActionMutationSnapshot();
@@ -329,9 +338,13 @@ app.registerModule("workspace.taskActions", {
     </div>`;
   },
 
-  tempChangeTask(projectId, stageId, taskId) {
+  async tempChangeTask(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!p || !s || !t || this.isTaskCompleted(t)) return;
+    if (typeof this.prepareTaskActionSamples === "function") {
+      const preparation = this.prepareTaskActionSamples(t, t.sampleIds || [], "打开临时变更");
+      if (preparation?.then ? !await preparation : preparation === false) return;
+    }
     const { progress } = this.resolveTaskProgress(s, t, t.progressId);
     const requiredSampleCount = this.getProgressRequiredSampleCount(s, progress);
     const sampleCards = this.buildTaskSamplePickerHtml(
@@ -411,6 +424,9 @@ app.registerModule("workspace.taskActions", {
         this.closeModal();
         return;
       }
+
+      if (typeof this.prepareTaskActionSamples === "function"
+        && !await this.prepareTaskActionSamples(t, [...new Set([...beforeSampleIds, ...afterSampleIds])], "保存临时变更")) return true;
 
       const mutationSnapshot = this.taskActionMutationSnapshot();
       // 写入新值
@@ -496,10 +512,14 @@ app.registerModule("workspace.taskActions", {
   },
 
   // 阻塞任务
-  blockTask(projectId, stageId, taskId) {
+  async blockTask(projectId, stageId, taskId) {
     const { p, s, t } = this.getProjectStageTask(projectId, stageId, taskId);
     if (!t || this.isTaskCompleted(t)) return;
     if (this.taskFlowStatus(t) === "阻塞中") { alert("任务已是阻塞状态。"); return; }
+    if (typeof this.prepareTaskActionSamples === "function") {
+      const preparation = this.prepareTaskActionSamples(t, t.sampleIds || [], "阻塞任务");
+      if (preparation?.then ? !await preparation : preparation === false) return;
+    }
 
     this.showModal("阻塞暂停", `
       <div class="task-block-task-title">任务：${Utils.esc(t.testItem || "-")}</div>

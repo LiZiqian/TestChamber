@@ -213,6 +213,8 @@ app.registerModule("workspace.taskConfig", {
         Utils.toast("未检测到变更");
         return false;
       }
+      if (typeof this.prepareTaskActionSamples === "function"
+        && !await this.prepareTaskActionSamples(t || { id: `plan:${progress.id}`, sampleSnapshots: {} }, [...new Set([...oldSampleIds, ...sampleIds])], "保存样机分配")) return true;
       const mutationSnapshot = this.taskMutationSnapshot();
       const wasNew = !t;
       t = t || this.ensurePlanTask(s, progress);
@@ -513,6 +515,9 @@ app.registerModule("workspace.taskConfig", {
       Utils.toast("未检测到变更");
       return false;
     }
+    const samplesBeforeSave = [...(t?.sampleIds || [])];
+    if (typeof this.prepareTaskActionSamples === "function"
+      && !await this.prepareTaskActionSamples(t || { id: `plan:${progress.id}`, sampleSnapshots: {} }, [...new Set([...samplesBeforeSave, ...sampleIds])], "保存任务配置")) return true;
     const mutationSnapshot = this.taskMutationSnapshot();
     // ensure（task 已存在，仅防御）
     const wasNew = !t;
