@@ -502,25 +502,27 @@ app.registerModule("workspace.taskTable", {
   },
 
   taskSampleTaskFlowStatus(task, sampleId, entry) {
-    // 1. 优先读取未结束前的草稿结果
-    const draftItem = (task.resultDraft?.samples || []).find(x => (x.sampleId || x.sid) === sampleId);
-    if (draftItem?.destination) return draftItem.destination;
+    const flow = this.taskFlowStatus(task);
 
-    // 2. 再读取本任务 resultUploads 中最后一次保存的该样机 destination
+    // 未结束任务的 resultDraft.destination 只是“结束后的计划去向”，不能冒充
+    // 样机当前状态。当前状态必须继续跟随任务状态，否则任务样机清单会显示
+    // “闲置/取走分析”，而打开同一档案又显示“测试中”。
+    if (!this.isTaskCompleted(task)) {
+      if (entry?.state === "removed") return "退出测试";
+      if (flow === "进行中") return "测试中";
+      if (flow === "阻塞中" || flow === "待下发") return "在位等待";
+      return "待确认";
+    }
+
+    // 已结束任务读取最终保存的样机去向。
     const uploads = Array.isArray(task.resultUploads) ? task.resultUploads : [];
     for (let i = uploads.length - 1; i >= 0; i--) {
       const item = (uploads[i].samples || []).find(x => (x.sampleId || x.sid) === sampleId);
       if (item?.destination) return item.destination;
     }
 
-    // 3. 如果是已经被临时变更退出的样机，但没有结果上传记录
+    // 已退出样机在没有最终结果记录时仍保留明确关系状态。
     if (entry?.state === "removed") return "退出测试";
-
-    // 4. 根据任务当前流程状态推断（不读样机档案 status）
-    const flow = this.taskFlowStatus(task);
-    if (flow === "进行中") return "测试中";
-    if (flow === "阻塞中") return "在位等待";
-    if (flow === "待下发") return "在位等待";
 
     return "待确认";
   },
