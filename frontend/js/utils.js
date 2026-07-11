@@ -317,8 +317,13 @@ const Utils = {
       const ownerParsed = Utils.parsePersonField(ownerField);
       const ownerText = ownerParsed.ok ? Utils.personText(ownerParsed.name, ownerParsed.employeeNo) : "";
       if (ownerField && !ownerParsed.ok) invalidPersonCount++;
+      const borrowerField = get('持有人');
+      const borrowerParsed = Utils.parsePersonField(borrowerField);
+      const borrowerText = borrowerParsed.ok ? Utils.personText(borrowerParsed.name, borrowerParsed.employeeNo) : "";
+      if (borrowerField && !borrowerParsed.ok) invalidPersonCount++;
 
       rows.push({
+        importDate: Utils.parseSampleDateField(get('带入时间')),
         stage: get('阶段') || 'Unknown',
         standard: get('方案') || '',
         platform: '',
@@ -332,6 +337,7 @@ const Utils = {
         location: get('带入位置') || '',
         tag: get('标签') || '',
         owner: ownerText,
+        borrower: borrowerText,
         notes: get('备注') || ''
       });
     }

@@ -201,7 +201,7 @@ def diff_import_bundle(current: dict, incoming: dict, manifest: dict, tmp_path: 
 
         if project_id and project_id in curr_projects:
             current_project = curr_projects[project_id]
-            field_diffs = diff_fields(current_project, project, skip_keys={"stages", "tasks", "members", "locations"})
+            field_diffs = diff_fields(current_project, project, skip_keys={"stages", "tasks"})
             if field_diffs:
                 conflicts.append({
                     "conflictId": next_conflict_id(),

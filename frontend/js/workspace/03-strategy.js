@@ -428,13 +428,18 @@ app.registerModule("workspace.strategy", {
         }
         const p = this.currentProject();
         if (!p) { alert("请先选择一个项目。"); return; }
+        const snapshot = this.dataSnapshot();
         p.testCaseMaster = rows;
-        await this.commitProjectMutation(p, {
+        const saved = await this.commitProjectMutation(p, {
           action: "import_test_cases",
           remark: "导入测试用例集",
           user: "管理员",
           render: false
         });
+        if (!saved) {
+          this.restoreDataSnapshot(snapshot);
+          return;
+        }
         Utils.toast(`已导入 ${rows.length} 条测试用例。`);
         this.render();
       } catch (e) {

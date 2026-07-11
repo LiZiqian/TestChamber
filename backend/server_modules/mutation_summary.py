@@ -133,14 +133,19 @@ def build_import_mutation_summary(current_data: dict,
                                   stage_id_map: dict,
                                   task_id_map: dict,
                                   sample_id_map: dict,
-                                  touched_structure_project_ids: set[str]) -> dict:
+                                  touched_structure_project_ids: set[str],
+                                  sample_category_id_map: dict | None = None) -> dict:
     """Return the smallest frontend sync scope after a successful bundle import."""
     project_ids = {str(value) for value in project_id_map.values() if value}
     project_ids.update(str(value) for value in touched_structure_project_ids if value)
     stage_ids = {str(value) for value in stage_id_map.values() if value}
     task_ids = {str(value) for value in task_id_map.values() if value}
     sample_ids = {str(value) for value in sample_id_map.values() if value}
-    sample_category_ids: set[str] = set()
+    sample_category_ids: set[str] = {
+        str(value)
+        for value in (sample_category_id_map or {}).values()
+        if str(value or "").strip()
+    }
 
     for project in current_data.get("projects") or []:
         if not isinstance(project, dict):

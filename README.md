@@ -13,6 +13,10 @@ TestChamber 是给硬件测试实验室使用的本地内网 Web 台账，用来
 
 它的部署方式很轻：不需要云服务，不需要单独安装数据库，不需要 `pip install` 或 `npm install`。下载源码后，用 Python 启动服务，在浏览器打开即可使用。
 
+## 贡献者与 AI 协作
+
+本项目的 GitHub 协作归因以 `liziqian`、`Claude Code` 和 `Codex` 为核心。GitHub Contributors 页面主要根据提交作者和共同作者元数据生成；由 Codex 完成并提交的后续变更，应在提交信息中保留 Codex 归因。
+
 > [!NOTE]
 > - 当前版本由系统内置版本模块统一维护
 > - 默认端口：`9398`

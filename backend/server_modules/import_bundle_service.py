@@ -253,6 +253,7 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
     stage_id_map: dict[str, str] = {}    # incomingSID → targetSID
     task_id_map: dict[str, str] = {}     # incomingTID → targetTID
     sample_id_map: dict[str, str] = {}   # incomingSampleID → targetSampleID
+    sample_category_id_map: dict[str, str] = {}
     skipped_sample_ids: set[str] = set()
     fully_imported_project_ids: set[str] = set()
     fully_imported_stage_ids: set[str] = set()
@@ -547,9 +548,45 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
 
     # 处理样机
     curr_categories = {c["id"]: c for c in (current_data.setdefault("sampleLibrary", {})).setdefault("categories", [])}
+    curr_category_names = {
+        str(c.get("name") or "").strip().lower(): c
+        for c in curr_categories.values()
+        if str(c.get("name") or "").strip()
+    }
+
+    def ensure_target_sample_category(incoming_category: dict) -> dict:
+        inc_id = str((incoming_category or {}).get("id") or "")
+        inc_name = str((incoming_category or {}).get("name") or "")
+        inc_name_key = inc_name.strip().lower()
+        if inc_id and inc_id in curr_categories:
+            sample_category_id_map[inc_id] = inc_id
+            return curr_categories[inc_id]
+        if inc_name_key and inc_name_key in curr_category_names:
+            target = curr_category_names[inc_name_key]
+            target_id = str(target.get("id") or "")
+            if inc_id and target_id:
+                sample_category_id_map[inc_id] = target_id
+            return target
+
+        target_id = inc_id or f"cat_{uuid.uuid4().hex[:12]}"
+        while target_id in curr_categories:
+            target_id = f"cat_{uuid.uuid4().hex[:12]}"
+        target = copy.deepcopy(incoming_category or {})
+        target["id"] = target_id
+        target["name"] = str(target.get("name") or inc_name or "未命名样机池")
+        target["description"] = str(target.get("description") or "")
+        target["samples"] = []
+        curr_categories[target_id] = target
+        if inc_name_key:
+            curr_category_names[inc_name_key] = target
+        if inc_id:
+            sample_category_id_map[inc_id] = target_id
+        return target
+
     incoming_cats_by_id = {}
     for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
         incoming_cats_by_id[cat["id"]] = cat
+        ensure_target_sample_category(cat)
         for s in cat.get("samples") or []:
             incoming_cats_by_id[s["id"]] = s  # 也索引样机
 
@@ -561,18 +598,10 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
             for inc_cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
                 for inc_s in inc_cat.get("samples") or []:
                     if inc_s.get("id") == sid:
-                        cat_name = inc_cat.get("name", "")
-                        # 找到或创建主库类别
-                        target_cat = None
-                        for cid, c in curr_categories.items():
-                            if c.get("name") == cat_name:
-                                target_cat = c
-                                break
-                        if not target_cat:
-                            new_cat_id = f"cat_{uuid.uuid4().hex[:12]}"
-                            target_cat = {"id": new_cat_id, "name": cat_name, "description": "", "samples": []}
-                            curr_categories[new_cat_id] = target_cat
-                        target_cat.setdefault("samples", []).append(copy.deepcopy(inc_s))
+                        target_cat = ensure_target_sample_category(inc_cat)
+                        target_sample = copy.deepcopy(inc_s)
+                        target_sample["categoryId"] = str(target_cat.get("id") or "")
+                        target_cat.setdefault("samples", []).append(target_sample)
                         stats["samplesAdded"] += 1
                         sample_id_map[sid] = sid
                         break
@@ -631,12 +660,12 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
                 new_sample_no = d.get("newSampleNo", "").strip()
                 # 找到导入样机
                 inc_sample = None
-                inc_cat_name = ""
+                inc_cat = None
                 for cat in (incoming.get("sampleLibrary") or {}).get("categories") or []:
                     for s in cat.get("samples") or []:
                         if s.get("id") == inc_id:
                             inc_sample = s
-                            inc_cat_name = cat.get("name", "")
+                            inc_cat = cat
                             break
                 if inc_sample:
                     if new_sn:
@@ -647,17 +676,10 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
                         inc_sample["boardSn"] = new_board_sn
                     if new_sample_no:
                         inc_sample["sampleNo"] = new_sample_no
-                    # 添加到类别
-                    target_cat = None
-                    for cid, cat in curr_categories.items():
-                        if cat.get("name") == inc_cat_name:
-                            target_cat = cat
-                            break
-                    if not target_cat:
-                        new_cat_id = f"cat_{uuid.uuid4().hex[:12]}"
-                        target_cat = {"id": new_cat_id, "name": inc_cat_name, "description": "", "samples": []}
-                        curr_categories[new_cat_id] = target_cat
-                    target_cat.setdefault("samples", []).append(copy.deepcopy(inc_sample))
+                    target_cat = ensure_target_sample_category(inc_cat or {})
+                    target_sample = copy.deepcopy(inc_sample)
+                    target_sample["categoryId"] = str(target_cat.get("id") or "")
+                    target_cat.setdefault("samples", []).append(target_sample)
                     stats["samplesAdded"] += 1
                     sample_id_map[inc_id] = inc_id
             elif action == "skip":
@@ -762,6 +784,11 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
     current_data["sampleLibrary"]["categories"] = list(curr_categories.values())
     current_data["projects"] = list(curr_projects.values())
 
+    for project in current_data.get("projects") or []:
+        default_category_id = str(project.get("defaultSampleCategoryId") or "")
+        if default_category_id in sample_category_id_map:
+            project["defaultSampleCategoryId"] = sample_category_id_map[default_category_id]
+
     # ── 统一 ID 重映射：所有交叉引用经映射表重写 ──
     _apply_id_maps(current_data, project_id_map, stage_id_map, task_id_map, sample_id_map)
     stats["sampleEventsAdded"] = _merge_import_sample_events(
@@ -805,6 +832,7 @@ def commit_import_bundle(ctx: ImportBundleCommitContext, payload: dict) -> dict:
         task_id_map,
         sample_id_map,
         touched_structure_project_ids,
+        sample_category_id_map,
     )
     return {
         "ok": True,

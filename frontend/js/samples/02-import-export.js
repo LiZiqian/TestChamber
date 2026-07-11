@@ -275,7 +275,7 @@ app.registerModule("samples.importExport", {
   exportSampleCsv() {
     const rows = [["类别", "显示编号", "SN", "IMEI", "主板SN", "是否重组样机", "型号/方案", "配置/制式", "方案编号", "样机问题表", "阶段", "SKU/版本", "状态", "位置", "挂账人", "持有人", "标签", "备注"]];
     this.sampleCategoryRecords().forEach(c => (c.samples || []).forEach(s =>
-      rows.push([c.name, this.sampleDisplayCode(s), s.sn, s.imei || "", s.boardSn || "", this.sampleIsReassembled(s) ? "是" : "否", s.model, s.config, s.schemeNo || "", this.sampleInitialResultsValue(s).join("\n"), s.sourceStageName, s.sourceSkuName, this.sampleEffectiveStatus(s), s.location, s.owner, "", s.tag || "", s.notes])
+      rows.push([c.name, this.sampleDisplayCode(s), s.sn, s.imei || "", s.boardSn || "", this.sampleIsReassembled(s) ? "是" : "否", s.model, s.config, s.schemeNo || "", this.sampleInitialResultsValue(s).join("\n"), s.sourceStageName, s.sourceSkuName, this.sampleEffectiveStatus(s), s.location, s.owner, s.borrower || "", s.tag || "", s.notes])
     ));
     Utils.downloadCsv(rows, `样机档案池_${Utils.exportTimestamp()}.csv`);
   },

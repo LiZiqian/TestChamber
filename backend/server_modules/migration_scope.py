@@ -117,6 +117,9 @@ def filter_state_by_selection(state: dict, selection: object | None) -> dict:
         if include_project_all or next_project["stages"]:
             clean["projects"].append(next_project)
             included_project_ids.add(project_id)
+            default_category_id = str(project.get("defaultSampleCategoryId") or "").strip()
+            if default_category_id:
+                selected_category_ids.add(default_category_id)
 
     selected_sample_ids.update(referenced_sample_ids)
     library = copy.deepcopy(state.get("sampleLibrary") or {})
