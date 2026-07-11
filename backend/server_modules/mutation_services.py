@@ -622,13 +622,13 @@ TASK_SAMPLE_MUTABLE_FIELDS = (
 )
 
 
-def _task_sample_write_payloads(conn: sqlite3.Connection, sample_payloads: list[dict]) -> list[dict]:
-    """Merge task-controlled fields into current sample records.
+def _operational_sample_write_payloads(conn: sqlite3.Connection, sample_payloads: list[dict]) -> list[dict]:
+    """Merge workflow-controlled fields into current sample records.
 
-    Task requests originate from project pages that may hold stale copies of a
-    sample.  They must never become an alternate sample-archive editor: sample
-    identity, category, source metadata and unrelated archive fields remain
-    authoritative in SQLite.
+    Task, project and stage requests originate from pages that may hold stale
+    copies of a sample. They must never become alternate sample-archive editors:
+    sample identity, category, source metadata and unrelated archive fields
+    remain authoritative in SQLite.
     """
     sample_ids = [str(sample.get("id") or "") for sample in sample_payloads]
     if not sample_ids:
@@ -854,7 +854,7 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
         if sample_failure:
             return False, {**sample_failure, "server_revision": current_revision}
 
-        sample_write_payloads = _task_sample_write_payloads(conn, sample_payloads)
+        sample_write_payloads = _operational_sample_write_payloads(conn, sample_payloads)
         for sample in sample_write_payloads:
             record_writers.update_sample_record(conn, sample)
         record_writers.upsert_sample_events(conn, sample_events)
@@ -1214,9 +1214,9 @@ def commit_project_mutation(ctx: MutationServiceContext, payload: dict, client_i
                 scope_failure["server_revision"] = current_revision
                 return False, scope_failure
 
-        for sample in payload.get("samples") or []:
-            if isinstance(sample, dict):
-                record_writers.update_sample_record(conn, sample)
+        sample_payloads = [sample for sample in (payload.get("samples") or []) if isinstance(sample, dict)]
+        for sample in _operational_sample_write_payloads(conn, sample_payloads):
+            record_writers.update_sample_record(conn, sample)
         record_writers.upsert_sample_events(conn, payload.get("sampleEvents") or [])
 
         if delete_project:
@@ -1275,9 +1275,9 @@ def commit_stage_mutation(ctx: MutationServiceContext, payload: dict, client_ip:
             project["id"] = project_id
             record_writers.update_project_record(conn, project)
 
-        for sample in payload.get("samples") or []:
-            if isinstance(sample, dict):
-                record_writers.update_sample_record(conn, sample)
+        sample_payloads = [sample for sample in (payload.get("samples") or []) if isinstance(sample, dict)]
+        for sample in _operational_sample_write_payloads(conn, sample_payloads):
+            record_writers.update_sample_record(conn, sample)
         record_writers.upsert_sample_events(conn, payload.get("sampleEvents") or [])
 
         if delete_stage:
