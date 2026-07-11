@@ -627,7 +627,7 @@ app.registerModule("workspace.taskTable", {
       // 身份标识（可点击 / 已销毁不可点）
       const isDestroyedSnapshot = !found && !!snapshot?.destroyedAt;
       const identityEl = id && !isDestroyedSnapshot
-        ? `<span class="task-sample-row-id" data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情">${identity}</span>`
+        ? `<button type="button" class="task-sample-row-id" data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情" aria-label="查看样机详情 ${Utils.esc(displayName)}">${identity}</button>`
         : `<span class="task-sample-row-id disabled" title="样机档案已销毁">${identity}</span>`;
       return `<div class="task-sample-row ${entry.state === "removed" ? "is-removed" : ""}">
         <div class="task-sample-row-info">

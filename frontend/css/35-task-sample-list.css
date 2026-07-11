@@ -38,6 +38,12 @@
   gap: 2px;
 }
 .task-sample-row-id {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  text-align: left;
   font-weight: 700;
   color: var(--primary);
   cursor: pointer;
@@ -46,6 +52,11 @@
 }
 .task-sample-row-id:hover {
   text-decoration: underline;
+}
+.task-sample-row-id:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 .task-sample-row-id.disabled {
   color: #9ca3af;
