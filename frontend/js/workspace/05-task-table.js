@@ -319,7 +319,10 @@ app.registerModule("workspace.taskTable", {
           ${this.sectionToggleTriangle('taskFlow')}
           <h2 style="margin:0">任务管理工作台 <span>阶段 - ${Utils.esc(stage.name || "-")}</span></h2>
         </div>
-        <div></div>
+        <button type="button" class="task-add-main task-add-header" data-app-action="task-add">
+          <span class="row-action-btn row-add-btn" aria-hidden="true"></span>
+          <span>新增任务</span>
+        </button>
       </div>
       <div class="section-body">
         <div class="task-flow-summary">
@@ -412,8 +415,8 @@ app.registerModule("workspace.taskTable", {
         </table></div>
         ${total > pageSize ? pagerHtml : ""}
         <div class="task-add-footer">
-          <button class="task-add-main" data-app-action="task-add">
-            <span class="row-action-btn row-add-btn"></span>
+          <button type="button" class="task-add-main" data-app-action="task-add">
+            <span class="row-action-btn row-add-btn" aria-hidden="true"></span>
             <span>新增任务</span>
           </button>
         </div>

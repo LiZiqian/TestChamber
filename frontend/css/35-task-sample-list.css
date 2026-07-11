@@ -171,6 +171,15 @@
   box-shadow: 0 8px 18px rgba(22, 101, 52, .10);
 }
 .task-add-main .row-action-btn { width: 28px; height: 28px; flex: 0 0 auto }
+.task-add-header {
+  min-width: 118px;
+  padding: 5px 12px;
+  flex: 0 0 auto;
+}
+.task-add-header .row-action-btn {
+  width: 24px;
+  height: 24px;
+}
 .task-pool-toolbar {
   display: flex;
   align-items: center;
