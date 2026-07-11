@@ -117,7 +117,7 @@ app.registerModule("workspace.taskActions", {
       const preparation = this.prepareTaskActionSamples(t, t.sampleIds || [], isRestart ? "恢复任务" : "启动任务");
       if (preparation?.then ? !await preparation : preparation === false) return;
     }
-    this.showConfirm("开始测试？", async () => {
+    this.showConfirm(isRestart ? "恢复测试？" : "开始测试？", async () => {
       const mutationSnapshot = this.taskActionMutationSnapshot();
       const user = t.owner;
       const reason = isRestart ? "恢复测试" : "开始测试";
@@ -135,7 +135,11 @@ app.registerModule("workspace.taskActions", {
         sampleIdsForMutation: [...(t.sampleIds || [])]
       });
       if (!saved) this.restoreFailedTaskActionMutation(mutationSnapshot);
-    }, { title: "启动任务", okText: "开始测试", okClass: "btn btn-pass" });
+    }, {
+      title: isRestart ? "恢复任务" : "启动任务",
+      okText: isRestart ? "恢复测试" : "开始测试",
+      okClass: "btn btn-pass"
+    });
   },
 
   /**
