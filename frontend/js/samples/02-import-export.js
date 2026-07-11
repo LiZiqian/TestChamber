@@ -109,7 +109,7 @@ app.registerModule("samples.importExport", {
           }
         }
         const warn = result.invalidPersonCount
-          ? `；其中 ${result.invalidPersonCount} 条挂账人字段格式不合法，已按空处理`
+          ? `；其中 ${result.invalidPersonCount} 个挂账人或持有人字段格式不合法，已按空处理`
           : "";
         const globalWarn = skippedGlobal ? `，跳过 ${skippedGlobal} 条因跨池标识冲突` : "";
         Utils.toast(`已从模板导入 ${imported} 台样机${skippedDup ? `，跳过 ${skippedDup} 条重复样机` : ""}${globalWarn}${warn}。`);
