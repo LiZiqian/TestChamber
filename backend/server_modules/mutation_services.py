@@ -597,6 +597,51 @@ def _task_scope_failure(
     return None
 
 
+def _stage_mutation_scope_failure(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    stage_id: str,
+    create_if_missing: bool,
+    delete_stage: bool,
+) -> dict | None:
+    project_row = conn.execute(
+        "SELECT 1 FROM project_records WHERE id = ? AND deleted_at IS NULL",
+        (project_id,),
+    ).fetchone()
+    if not project_row:
+        return {
+            "status": 404,
+            "error_code": "PROJECT_NOT_FOUND",
+            "error": f"项目不存在: {project_id}",
+            "projectId": project_id,
+        }
+    stage_row = conn.execute(
+        "SELECT project_id FROM project_stages WHERE id = ? AND deleted_at IS NULL",
+        (stage_id,),
+    ).fetchone()
+    if not stage_row:
+        if create_if_missing and not delete_stage:
+            return None
+        return {
+            "status": 404,
+            "error_code": "STAGE_NOT_FOUND",
+            "error": f"阶段不存在: {stage_id}",
+            "stageId": stage_id,
+        }
+    actual_project_id = str(stage_row["project_id"] or "")
+    if actual_project_id != project_id:
+        return {
+            "status": 409,
+            "error_code": "STAGE_SCOPE_CONFLICT",
+            "error": "阶段不属于请求中的项目，已拒绝跨项目修改。",
+            "stageId": stage_id,
+            "projectId": project_id,
+            "actualProjectId": actual_project_id,
+        }
+    return None
+
+
 def _task_related_sample_ids(task: dict) -> set[str]:
     ids = set(task_mutation_rules.task_sample_ids(task))
 
@@ -1440,6 +1485,15 @@ def commit_stage_mutation(ctx: MutationServiceContext, payload: dict, client_ip:
 
     with ctx.write_db_connection() as conn:
         current_revision = _current_revision(conn)
+        scope_failure = _stage_mutation_scope_failure(
+            conn,
+            project_id=project_id,
+            stage_id=stage_id,
+            create_if_missing=bool(payload.get("createIfMissing")),
+            delete_stage=delete_stage,
+        )
+        if scope_failure:
+            return False, {**scope_failure, "server_revision": current_revision}
         event_failure = _sample_event_conflict_failure(conn, payload.get("sampleEvents"))
         if event_failure:
             return False, {**event_failure, "server_revision": current_revision}
