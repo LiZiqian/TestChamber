@@ -4,10 +4,76 @@
 
 app.registerModule("app.modal", {
 
+  dialogFocusableElements(root) {
+    if (!root) return [];
+    return Array.from(root.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => !el.hidden && el.getAttribute("aria-hidden") !== "true" && el.getClientRects().length > 0);
+  },
+
+  focusDialog(root, preferred = null) {
+    if (!root) return;
+    const target = preferred && preferred.isConnected && !preferred.disabled
+      ? preferred
+      : root.querySelector("[autofocus]") || this.dialogFocusableElements(root)[0] || root;
+    if (!target.hasAttribute("tabindex") && target === root) target.setAttribute("tabindex", "-1");
+    setTimeout(() => target?.focus?.({ preventScroll: true }), 0);
+  },
+
+  trapDialogTab(event, root) {
+    if (event.key !== "Tab" || !root) return;
+    const focusable = this.dialogFocusableElements(root);
+    if (!focusable.length) {
+      event.preventDefault();
+      this.focusDialog(root);
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !root.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !root.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  },
+
+  bindDialogKeyboardEvents() {
+    if (this._dialogKeyboardEventsBound) return;
+    this._dialogKeyboardEventsBound = true;
+    document.addEventListener("keydown", event => {
+      const confirmMask = document.getElementById("confirmMask");
+      if (confirmMask?.style.display === "flex") {
+        const box = confirmMask.querySelector(".confirm-box");
+        if (event.key === "Escape") {
+          event.preventDefault();
+          this.closeConfirm();
+          return;
+        }
+        this.trapDialogTab(event, box);
+        return;
+      }
+      const modalMask = document.getElementById("modalMask");
+      if (modalMask?.style.display !== "flex") return;
+      const modal = modalMask.querySelector(".modal");
+      if (event.key === "Escape" && !this._modalBusy) {
+        event.preventDefault();
+        this.closeModal();
+        return;
+      }
+      this.trapDialogTab(event, modal);
+    });
+  },
+
   // ---- 模态框 ----
   showModal(title, bodyHtml, onOk, okText = "确认", options = {}) {
+    const modalMask = document.getElementById("modalMask");
+    const modalWasOpen = modalMask?.style.display === "flex";
+    if (!this._restoringModal && !modalWasOpen) this._modalReturnFocus = document.activeElement;
     // 模态框堆栈：当前已显示时，保存当前状态
-    if (!this._restoringModal && document.getElementById("modalMask").style.display === "flex") {
+    if (!this._restoringModal && modalWasOpen) {
       const modalEl = document.querySelector(".modal");
       const modalBody = document.getElementById("modalBody");
       const modalTitle = document.getElementById("modalTitle");
@@ -30,7 +96,8 @@ app.registerModule("app.modal", {
         hideCancel: document.getElementById("modalCancel").style.display === "none",
         cancelText: document.getElementById("modalCancel").innerText,
         headerHint: (document.getElementById("modalHeaderHint")?.innerText || ""),
-        className: modalEl ? modalEl.className.replace(/^modal\s*/, "") : ""
+        className: modalEl ? modalEl.className.replace(/^modal\s*/, "") : "",
+        focusedElement: document.activeElement
       });
     }
     this._restoringModal = false;
@@ -130,9 +197,12 @@ app.registerModule("app.modal", {
     } else if (footer && options.footerExtraNodes) {
       footer.prepend(...options.footerExtraNodes.filter(Boolean));
     }
-    document.getElementById("modalMask").style.display = "flex";
+    modalMask.style.display = "flex";
+    modalMask.setAttribute("aria-hidden", "false");
     modalBody.scrollTop = Number(options.bodyScrollTop || 0);
     this.updateSelectPlaceholderState(document.getElementById("modalBody"));
+    this.bindDialogKeyboardEvents();
+    this.focusDialog(modal);
     return modalId;
   },
 
@@ -166,6 +236,7 @@ app.registerModule("app.modal", {
       console.warn("Confirm dialog is not available:", message);
       return;
     }
+    this._confirmReturnFocus = document.activeElement;
     if (box) box.className = `confirm-box${options.className ? " " + options.className : ""}`;
     title.innerText = options.title || "确认操作";
     msg.innerText = message || "";
@@ -201,6 +272,9 @@ app.registerModule("app.modal", {
       }
     });
     mask.style.display = "flex";
+    mask.setAttribute("aria-hidden", "false");
+    this.bindDialogKeyboardEvents();
+    this.focusDialog(box, options.hideCancel ? boundOk : boundCancel);
   },
 
   showAlert(message, options = {}) {
@@ -215,9 +289,15 @@ app.registerModule("app.modal", {
 
   closeConfirm() {
     const mask = document.getElementById("confirmMask");
-    if (mask) mask.style.display = "none";
+    if (mask) {
+      mask.style.display = "none";
+      mask.setAttribute("aria-hidden", "true");
+    }
     const box = mask?.querySelector(".confirm-box");
     if (box) box.className = "confirm-box";
+    const returnFocus = this._confirmReturnFocus;
+    this._confirmReturnFocus = null;
+    if (returnFocus?.isConnected) setTimeout(() => returnFocus.focus?.({ preventScroll: true }), 0);
   },
 
   closeModal(expectedModalId = null) {
@@ -240,9 +320,12 @@ app.registerModule("app.modal", {
         bodyScrollTop: prev.bodyScrollTop || 0,
         footerOrder: prev.footerOrder || []
       });
+      this.focusDialog(document.querySelector(".modal"), prev.focusedElement || null);
       return true;
     }
-    document.getElementById("modalMask").style.display = "none";
+    const modalMask = document.getElementById("modalMask");
+    modalMask.style.display = "none";
+    modalMask.setAttribute("aria-hidden", "true");
     const modal = document.querySelector(".modal");
     if (modal) modal.className = "modal";
     const hint = document.getElementById("modalHeaderHint");
@@ -254,6 +337,9 @@ app.registerModule("app.modal", {
     this._currentModalOnOk = null;
     this._currentModalOnCancel = null;
     this._modalBusy = false;
+    const returnFocus = this._modalReturnFocus;
+    this._modalReturnFocus = null;
+    if (returnFocus?.isConnected) setTimeout(() => returnFocus.focus?.({ preventScroll: true }), 0);
     return true;
   },
 
