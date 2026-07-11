@@ -130,7 +130,8 @@
 .task-result-modal .task-result-sample-code {
   padding-bottom: 0;
 }
-.task-result-modal .task-result-sample-code b {
+.task-result-modal .task-result-sample-code b,
+.task-result-modal .task-result-sample-code .task-result-sample-link {
   font-size: 16px;
 }
 .task-result-modal .task-result-sample-code span {

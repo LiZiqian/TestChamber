@@ -404,7 +404,7 @@ app.registerModule("workspace.samplePicker", {
       <div class="dispatch-sample-row ${selectable ? "" : "is-disabled"} ${sample?._missing ? "task-sample-missing-row" : ""}" data-app-action="task-sample-picker-row" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}" title="${Utils.esc(disabledReason || missingReason)}">
         <div class="dispatch-sample-info">
           <div class="dispatch-sample-title-line">
-            <span class="dispatch-sample-id" data-app-action="sample-readonly" data-id="${Utils.esc(sid)}" data-stop-propagation="1">${Utils.esc(identity)}</span>
+            <button type="button" class="dispatch-sample-id" data-app-action="sample-readonly" data-id="${Utils.esc(sid)}" data-stop-propagation="1" title="查看样机详情" aria-label="查看样机详情 ${Utils.esc(identity)}">${Utils.esc(identity)}</button>
             <label class="dispatch-sample-check" for="${Utils.esc(checkboxId)}"><input id="${Utils.esc(checkboxId)}" type="checkbox" name="${state.inputName}" value="${Utils.esc(sid)}" data-sample-pick="${state.inputName}" aria-label="${Utils.esc(checkboxLabel)}" ${disabledReason || missingReason ? `aria-describedby="${Utils.esc(reasonId)}"` : ""} ${isSelected ? "checked" : ""} ${selectable ? "" : "disabled"} ${selectable ? `data-app-action="task-sample-picker-checkbox" data-app-events="change" data-id="${Utils.esc(state.inputName)}" data-progress-id="${Utils.esc(state.progressSelectId || "")}" data-hint-id="${Utils.esc(state.hintId || "")}"` : ""}></label>
           </div>
           <span class="dispatch-sample-stage">${stageSku}</span>

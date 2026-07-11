@@ -417,7 +417,7 @@ app.registerModule("workspace.taskResult", {
         : `<span class="task-result-sample-state active">当前测试样机</span>`;
       const archiveName = this.taskSampleArchiveName(id, snapshot);
       const sampleCodeHtml = id && !snapshot?.destroyedAt
-        ? `<b data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情">${Utils.esc(archiveName)}</b>`
+        ? `<button type="button" class="task-result-sample-link" data-app-action="sample-readonly" data-id="${Utils.esc(id)}" data-stop-propagation="1" title="查看样机详情" aria-label="查看样机详情 ${Utils.esc(archiveName)}">${Utils.esc(archiveName)}</button>`
         : `<b>${Utils.esc(archiveName)}</b>`;
       // 项目位置列表（供去向位置自定义下拉使用）
       const p = this.currentProject();
