@@ -261,7 +261,7 @@ app.registerModule("workspace.taskConfig", {
     const activeMembers = this.projectActiveMembers(p, "tester");
     const memberMissingHint = activeMembers.length
       ? ""
-      : `<div class="field-error" style="display:block;margin-top:6px">
+      : `<div class="field-error" data-task-member-missing="1" style="display:block;margin-top:6px">
           ⚠ 项目测试人员名单为空，无法选择执行人。
           <button type="button" class="btn btn-sm" style="margin-left:8px"
             data-app-action="task-config-member-add">立即新增人员</button>
@@ -414,7 +414,7 @@ app.registerModule("workspace.taskConfig", {
     const activeMembers = this.projectActiveMembers(project, "tester");
     const memberMissingHint = activeMembers.length
       ? ""
-      : `<div class="field-error" style="display:block;margin-top:6px">
+      : `<div class="field-error" data-task-member-missing="1" style="display:block;margin-top:6px">
           ⚠ 项目测试人员名单为空，无法选择执行人。
           <button type="button" class="btn btn-sm" style="margin-left:8px"
             data-app-action="task-config-member-add">立即新增人员</button>
@@ -446,6 +446,24 @@ app.registerModule("workspace.taskConfig", {
         <div class="dispatch-sample-select task-config-sample-scroll">${sampleCards}</div>
       </div>
 `;
+  },
+
+  refreshTaskConfigMemberPickers(selectedIdentity = "") {
+    ["planOwner", "tcPlanOwner"].forEach(id => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      const scope = input.dataset.memberScope || "tester";
+      const projectId = input.dataset.memberProjectId || this.currentProject()?.id || "";
+      const placeholder = input.getAttribute("placeholder") || "请选择执行人";
+      const fragment = this.htmlFragment(this.projectMemberSelectHtml(id, selectedIdentity, placeholder, {
+        scope,
+        projectId
+      }));
+      if (!fragment) return;
+      input.replaceWith(...Array.from(fragment.childNodes || []));
+      document.querySelector(`#modalBody [data-task-member-missing="1"]`)?.remove();
+      document.getElementById(id)?.focus();
+    });
   },
 
 

@@ -580,7 +580,7 @@ app.registerModule("workspace.home", {
     ).join("")}</select>`;
   },
 
-  addProjectMember(defaultRole = "tester") {
+  addProjectMember(defaultRole = "tester", { afterSave = null } = {}) {
     const role = this.memberRoleValue(defaultRole);
     this.showModal("新增项目人员", `
       <div class="form-group"><label class="req modal-field-title">人员</label><input id="memberText" placeholder="姓名/工号，如：张三/00609513"></div>
@@ -602,17 +602,23 @@ app.registerModule("workspace.home", {
       }
       const existing = this.findProjectMemberByIdentity(p, check.name, check.employeeNo);
       if (existing && existing.active !== false) { this.markFieldInvalid(memberEl, "该人员已在项目人员名单中，不能重复新增。"); return true; }
+      let savedMember = existing;
       if (existing) {
         existing.name = check.name;
         existing.employeeNo = check.employeeNo;
         existing.active = true;
         existing.role = nextRole;
       } else {
-        p.members.push({ id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, role: nextRole, active: true });
+        savedMember = { id: Utils.id("member_"), name: check.name, employeeNo: check.employeeNo, role: nextRole, active: true };
+        p.members.push(savedMember);
       }
       const saved = await this.commitProjectMutation(p, { action: "add_project_member", remark: "新增项目人员", user: Utils.personText(check.name, check.employeeNo) });
       if (!saved) { this.restoreDataSnapshot(snapshot); return true; }
       Utils.toast("人员已新增");
+      if (typeof afterSave === "function") {
+        const identity = Utils.personText(savedMember.name, savedMember.employeeNo);
+        setTimeout(() => afterSave({ member: savedMember, identity }), 0);
+      }
       return false;
     }, "确认", { className: "modal-sm" });
   },

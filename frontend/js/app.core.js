@@ -346,8 +346,9 @@ const app = {
         this.setTaskPoolChecked(value === "1" || value === "true");
         break;
       case "task-config-member-add":
-        this.closeModal();
-        this.addProjectMember("tester");
+        this.addProjectMember("tester", {
+          afterSave: ({ identity }) => this.refreshTaskConfigMemberPickers(identity)
+        });
         break;
       case "task-config-tab":
         this.switchTaskConfigTab(value || target.dataset.tab || "plan");
