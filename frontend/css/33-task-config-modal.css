@@ -448,18 +448,17 @@
 /* ---- Responsive ---- */
 @media (max-width: 900px) {
   .task-config-modal.modal {
-    width: min(1320px, calc(100vw - 48px));
-    height: min(920px, calc(100vh - 48px));
-    max-height: calc(100vh - 48px);
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
   }
   .task-config-modal .modal-body {
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: hidden;
     padding: 12px 14px;
-    scrollbar-gutter: stable;
   }
   .task-config-titlebar {
     gap: 12px;
+    flex-wrap: wrap;
   }
   .task-config-titlebar > span:first-child {
     font-size: 17px;
@@ -468,19 +467,21 @@
     min-width: 0;
     max-width: 100%;
     font-size: 16px;
+    white-space: normal;
   }
   .task-config-shell {
-    grid-template-columns: 96px minmax(1040px, 1fr);
-    min-width: 1136px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    min-width: 0;
   }
   .task-config-nav {
-    flex-direction: column;
-    border-right: 1px solid #e5e7eb;
-    border-bottom: 0;
-    padding: 10px 8px;
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 8px 6px;
   }
   .task-config-nav-card {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     padding: 9px 8px;
   }
   .task-config-nav-card.active {
@@ -488,14 +489,24 @@
     border-bottom: none;
   }
   .task-config-main {
-    min-width: 1040px;
+    min-width: 0;
     min-height: 0;
+    overflow: auto;
     padding: 10px;
   }
   .task-config-modal .dispatch-sample-select.task-config-sample-scroll {
     padding-right: 22px;
   }
   .task-config-modal #tcPanelSample .dispatch-sample-body.open {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .task-config-modal #tcPanelSample .dispatch-sample-body.open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .task-config-modal #tcPanelPlan .form-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
