@@ -336,10 +336,15 @@ app.registerModule("app.render", {
   },
 
   // ---- 任务操作菜单统一管理 ----
-  closeTaskOpMenus(exceptEl = null) {
+  closeTaskOpMenus(exceptEl = null, { restoreFocus = false } = {}) {
     document.querySelectorAll(".task-op-menu.open, .task-more-menu.open").forEach(menu => {
       if (exceptEl && menu === exceptEl) return;
       menu.classList.remove("open", "open-up");
+      const trigger = menu.querySelector?.(".task-more-trigger");
+      const panel = menu.querySelector?.(".task-more-panel");
+      trigger?.setAttribute?.("aria-expanded", "false");
+      panel?.setAttribute?.("aria-hidden", "true");
+      if (restoreFocus) trigger?.focus?.();
     });
   },
 
@@ -348,6 +353,8 @@ app.registerModule("app.render", {
     this.closeTaskOpMenus();
     if (!wasOpen) {
       menu.classList.add("open");
+      menu.querySelector?.(".task-more-trigger")?.setAttribute?.("aria-expanded", "true");
+      menu.querySelector?.(".task-more-panel")?.setAttribute?.("aria-hidden", "false");
       this.positionTaskMoreMenu(menu);
     }
   },

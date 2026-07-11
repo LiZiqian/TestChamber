@@ -423,12 +423,13 @@ app.registerModule("workspace.taskTable", {
   taskMoreMenuHtml(projectId, stageId, taskId, logs) {
     if (!taskId) return "";
     const logText = `日志${(logs || []).length ? `(${logs.length})` : ""}`;
+    const panelId = `taskMorePanel_${String(taskId).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
     return `
       <div class="task-more-menu">
-        <button type="button" class="btn btn-sm btn-outline task-more-trigger" data-app-action="task-more-toggle" data-stop-propagation="1" title="更多">...</button>
-        <div class="task-more-panel">
-          <button type="button" class="task-more-item" data-app-action="task-show-logs" data-project-id="${Utils.esc(projectId)}" data-stage-id="${Utils.esc(stageId)}" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">${logText}</button>
-          <button type="button" class="task-more-item danger" data-app-action="task-delete" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">🗑 删除</button>
+        <button type="button" class="btn btn-sm btn-outline task-more-trigger" data-app-action="task-more-toggle" data-stop-propagation="1" title="更多操作" aria-label="更多任务操作" aria-haspopup="menu" aria-expanded="false" aria-controls="${Utils.esc(panelId)}">...</button>
+        <div id="${Utils.esc(panelId)}" class="task-more-panel" role="menu" aria-hidden="true">
+          <button type="button" class="task-more-item" role="menuitem" data-app-action="task-show-logs" data-project-id="${Utils.esc(projectId)}" data-stage-id="${Utils.esc(stageId)}" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">${logText}</button>
+          <button type="button" class="task-more-item danger" role="menuitem" data-app-action="task-delete" data-task-id="${Utils.esc(taskId)}" data-stop-propagation="1">🗑 删除</button>
         </div>
       </div>`;
   },

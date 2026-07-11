@@ -649,7 +649,7 @@ const app = {
       });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
-          this.closeTaskOpMenus();
+          this.closeTaskOpMenus(null, { restoreFocus: true });
           this.closeCaseDropdown?.();
         }
       });
