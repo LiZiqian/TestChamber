@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Callable
 
-from server_modules import mutation_summary, record_writers, sample_assets, status_normalization, task_mutation_rules
+from server_modules import mutation_summary, record_writers, sample_assets, sample_queries, status_normalization, task_mutation_rules
 
 
 @dataclass(frozen=True)
@@ -534,6 +534,57 @@ def _task_sample_payload_failure(
     return None
 
 
+TASK_SAMPLE_MUTABLE_FIELDS = (
+    "status",
+    "updatedAt",
+    "problemRecords",
+    "initialResults",
+    "initialResult",
+    "location",
+    "owner",
+    "borrower",
+    "borrowDate",
+    "currentProjectId",
+    "currentStageId",
+    "currentTaskId",
+    "currentTestItem",
+)
+
+
+def _task_sample_write_payloads(conn: sqlite3.Connection, sample_payloads: list[dict]) -> list[dict]:
+    """Merge task-controlled fields into current sample records.
+
+    Task requests originate from project pages that may hold stale copies of a
+    sample.  They must never become an alternate sample-archive editor: sample
+    identity, category, source metadata and unrelated archive fields remain
+    authoritative in SQLite.
+    """
+    sample_ids = [str(sample.get("id") or "") for sample in sample_payloads]
+    if not sample_ids:
+        return []
+    placeholders = ",".join("?" for _ in sample_ids)
+    rows = conn.execute(
+        f"SELECT * FROM sample_records WHERE deleted_at IS NULL AND id IN ({placeholders})",
+        tuple(sample_ids),
+    ).fetchall()
+    current_by_id = {
+        str(row["id"] or ""): sample_queries.sample_from_db_row(row)
+        for row in rows
+        if str(row["id"] or "")
+    }
+    merged_payloads: list[dict] = []
+    for incoming in sample_payloads:
+        sample_id = str(incoming.get("id") or "")
+        current = current_by_id[sample_id]
+        for field in TASK_SAMPLE_MUTABLE_FIELDS:
+            if field in incoming:
+                current[field] = incoming[field]
+        current["id"] = sample_id
+        current["categoryId"] = str(current.get("categoryId") or "")
+        merged_payloads.append(current)
+    return merged_payloads
+
+
 def _bump_revision_and_audit(
     ctx: MutationServiceContext,
     conn: sqlite3.Connection,
@@ -720,7 +771,8 @@ def commit_task_mutation(ctx: MutationServiceContext, payload: dict, client_ip: 
         if sample_failure:
             return False, {**sample_failure, "server_revision": current_revision}
 
-        for sample in sample_payloads:
+        sample_write_payloads = _task_sample_write_payloads(conn, sample_payloads)
+        for sample in sample_write_payloads:
             record_writers.update_sample_record(conn, sample)
         record_writers.upsert_sample_events(conn, sample_events)
         if is_delete:
